@@ -13,19 +13,18 @@ ignore = []
 
 [licenses]
 confidence-threshold = 0.8
-# GPL-2.0-or-later project; dependencies must be permissive.
+# GPL-2.0-or-later project; dependencies must be permissive. Extend this
+# list as new crates are added — the check fails loudly on anything else.
 allow = [
     "MIT",
     "Apache-2.0",
-    "Apache-2.0 WITH LLVM-exception",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "ISC",
-    "Unicode-3.0",
-    "Unicode-DFS-2016",
-    "Zlib",
 ]
 exceptions = []
+
+# The crate itself is GPL and unpublished (publish = false); skip license
+# checks on workspace-private crates.
+[licenses.private]
+ignore = true
 
 [bans]
 multiple-versions = "warn"

@@ -161,7 +161,7 @@ fn build_loader(manifest_dir: &Path, out_dir: &Path) {
 
     let status = Command::new(&rustc)
         .args([
-            "--edition=2021",
+            "--edition=2024",
             "--crate-type=bin",
             "-C",
             "panic=abort",

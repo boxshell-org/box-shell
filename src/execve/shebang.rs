@@ -3,12 +3,12 @@
 use std::os::unix::ffi::OsStrExt;
 
 use crate::execve::aoxp::{
-    fetch_array_of_xpointers, push_array_of_xpointers, resize_array_of_xpointers, write_xpointees,
-    XPointerArray,
+    XPointerArray, fetch_array_of_xpointers, push_array_of_xpointers, resize_array_of_xpointers,
+    write_xpointees,
 };
 use crate::fpath::FixedPath;
-use crate::tracee::reg::{sysarg, Reg};
 use crate::tracee::Tracee;
+use crate::tracee::reg::{Reg, sysarg};
 
 /// `BINPRM_BUF_SIZE` (linux/binfmts.h).
 const BINPRM_BUF_SIZE: usize = 256;

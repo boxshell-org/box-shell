@@ -12,18 +12,18 @@ use crate::execve::aoxp::{
     resize_array_of_xpointers, write_xpointee_string, write_xpointees,
 };
 use crate::execve::elf::{
-    is_host_elf, iterate_program_headers, open_elf, ElfHeader, ProgramHeader, ET_DYN, ET_EXEC,
-    PF_R, PF_W, PF_X, PT_GNU_STACK, PT_INTERP, PT_LOAD,
+    ET_DYN, ET_EXEC, ElfHeader, PF_R, PF_W, PF_X, PT_GNU_STACK, PT_INTERP, PT_LOAD, ProgramHeader,
+    is_host_elf, iterate_program_headers, open_elf,
 };
 use crate::execve::ldso::{ldso_env_passthru, rebuild_host_ldso_paths};
 use crate::execve::shebang::expand_shebang;
-use crate::execve::{is_notification_ptraced_load_done, ExecveProcExeState, LoadInfo, Mapping};
+use crate::execve::{ExecveProcExeState, LoadInfo, Mapping, is_notification_ptraced_load_done};
 use crate::fpath::FixedPath;
 use crate::syscall::{get_sysarg_path, set_sysarg_path};
 use crate::sysnum::Sysnum;
-use crate::tracee::reg::{set_sysnum, sysarg, Reg};
 use crate::tracee::Tracee;
-use crate::{Word, HOST_ROOTFS};
+use crate::tracee::reg::{Reg, set_sysnum, sysarg};
+use crate::{HOST_ROOTFS, Word};
 
 /// Loader ELF embedded at build time (see build.rs).
 const LOADER_EXE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/loader.exe"));
@@ -190,11 +190,7 @@ fn extract_load_info(tracee: &mut Tracee, load_info: &mut LoadInfo) -> i32 {
                 }
                 _ => {}
             }
-            if error < 0 {
-                error
-            } else {
-                0
-            }
+            if error < 0 { error } else { 0 }
         });
         if status == 0 && error < 0 {
             status = error;
@@ -347,9 +343,13 @@ fn extract_loader(tracee: &Tracee) -> Option<String> {
     }
     let c = std::ffi::CString::new(path.as_bytes()).ok()?;
     if unsafe { libc::access(c.as_ptr(), libc::X_OK) } < 0 {
-        crate::note!(Some(tracee), crate::note::Severity::Error, crate::note::Origin::Internal,
-                     "it seems the current temporary directory ({}) is mounted with no execution permission.",
-                     crate::path::temp::get_temp_directory());
+        crate::note!(
+            Some(tracee),
+            crate::note::Severity::Error,
+            crate::note::Origin::Internal,
+            "it seems the current temporary directory ({}) is mounted with no execution permission.",
+            crate::path::temp::get_temp_directory()
+        );
         return None;
     }
     if tracee.verbose >= 2 {

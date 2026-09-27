@@ -1,9 +1,9 @@
 //! Message queues — port of extension/sysvipc/sysvipc_msg.c.
 
 use super::*;
-use crate::tracee::mem::{read_data, write_data};
-use crate::tracee::reg::{peek_reg, Reg, RegVersion};
 use crate::tracee::Tracee;
+use crate::tracee::mem::{read_data, write_data};
+use crate::tracee::reg::{Reg, RegVersion, peek_reg};
 
 const SYSVIPC_MAX_MSG_SIZE: usize = 0xFFFF;
 

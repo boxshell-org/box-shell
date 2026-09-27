@@ -64,14 +64,14 @@ pub fn note(severity: Severity, origin: Origin, args: std::fmt::Arguments) {
 macro_rules! note {
     // The tracee-prefixed form is matched on the literal `Some(...)` token —
     // otherwise the two forms are ambiguous at the syntax level.
-    (Some($tracee:expr), $severity:expr, $origin:expr, $($arg:tt)*) => {{
+    (Some($tracee:expr_2021), $severity:expr_2021, $origin:expr_2021, $($arg:tt)*) => {{
         let _ = $tracee;
         $crate::note::note($severity, $origin, format_args!($($arg)*))
     }};
-    (None, $severity:expr, $origin:expr, $($arg:tt)*) => {{
+    (None, $severity:expr_2021, $origin:expr_2021, $($arg:tt)*) => {{
         $crate::note::note($severity, $origin, format_args!($($arg)*))
     }};
-    ($severity:expr, $origin:expr, $($arg:tt)*) => {{
+    ($severity:expr_2021, $origin:expr_2021, $($arg:tt)*) => {{
         $crate::note::note($severity, $origin, format_args!($($arg)*))
     }};
 }
@@ -80,7 +80,7 @@ macro_rules! note {
 /// the global) verbose level reaches `level`.
 #[macro_export]
 macro_rules! verbose {
-    ($tracee:expr, $level:expr, $($arg:tt)*) => {{
+    ($tracee:expr_2021, $level:expr_2021, $($arg:tt)*) => {{
         let v = $crate::tracee::verbose_of($tracee);
         if v >= $level {
             $crate::note::note($crate::note::Severity::Info,

@@ -7,13 +7,13 @@
 
 use std::io::{BufRead, BufReader, Write};
 
+use crate::Word;
 use crate::extension::Event;
 use crate::fpath::FixedPath;
-use crate::path::{compare_paths, Comparison};
+use crate::path::{Comparison, compare_paths};
 use crate::sysnum::Sysnum;
-use crate::tracee::reg::{get_sysnum, RegVersion};
 use crate::tracee::Tracee;
-use crate::Word;
+use crate::tracee::reg::{RegVersion, get_sysnum};
 
 #[derive(Default)]
 pub struct Mountinfo;

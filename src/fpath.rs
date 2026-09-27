@@ -250,3 +250,84 @@ impl AsRef<[u8]> for FixedPath {
         self.as_bytes()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_truncates_at_nul() {
+        let mut p = FixedPath::new();
+        p.set(b"/abc\0def");
+        assert_eq!(p.as_bytes(), b"/abc");
+        assert_eq!(p.as_c_bytes(), b"/abc\0");
+    }
+
+    #[test]
+    fn try_set_reports_overflow() {
+        let mut p = FixedPath::new();
+        assert_eq!(p.try_set(&vec![b'x'; PATH_MAX]), Err(-libc::ENAMETOOLONG));
+        assert!(p.try_set(&vec![b'x'; PATH_MAX - 1]).is_ok());
+    }
+
+    #[test]
+    fn push_component_manages_separator() {
+        let mut p = FixedPath::from_bytes(b"/a");
+        p.push_component(b"b").unwrap();
+        assert_eq!(p.as_bytes(), b"/a/b");
+        // Double slash collapses.
+        p.push_component(b"/c").unwrap();
+        assert_eq!(p.as_bytes(), b"/a/b/c");
+        // No separator added after a trailing '/'.
+        let mut p = FixedPath::from_bytes(b"/a/");
+        p.push_component(b"b").unwrap();
+        assert_eq!(p.as_bytes(), b"/a/b");
+    }
+
+    #[test]
+    fn pop_component_drops_last() {
+        let mut p = FixedPath::from_bytes(b"/a/b/c");
+        p.pop_component();
+        assert_eq!(p.as_bytes(), b"/a/b");
+        p.pop_component();
+        assert_eq!(p.as_bytes(), b"/a");
+        p.pop_component();
+        assert_eq!(p.as_bytes(), b"/");
+        // Root has no component to pop.
+        p.pop_component();
+        assert_eq!(p.as_bytes(), b"/");
+    }
+
+    #[test]
+    fn chop_finality_strips_dot_and_slash() {
+        let mut p = FixedPath::from_bytes(b"/a/b/.");
+        p.chop_finality();
+        assert_eq!(p.as_bytes(), b"/a/b");
+        let mut p = FixedPath::from_bytes(b"/a/b/");
+        p.chop_finality();
+        assert_eq!(p.as_bytes(), b"/a/b");
+        let mut p = FixedPath::from_bytes(b"/a/b");
+        p.chop_finality();
+        assert_eq!(p.as_bytes(), b"/a/b");
+    }
+
+    #[test]
+    fn substitute_prefix_variants() {
+        // Non-root old prefix, longer new prefix.
+        let mut p = FixedPath::from_bytes(b"/old/dir/file");
+        p.substitute_prefix(4, b"/new").unwrap();
+        assert_eq!(p.as_bytes(), b"/new/dir/file");
+        // Old prefix "/" -> insert.
+        let mut p = FixedPath::from_bytes(b"/bin");
+        p.substitute_prefix(1, b"/pre").unwrap();
+        assert_eq!(p.as_bytes(), b"/pre/bin");
+        // New prefix "/" -> strip.
+        let mut p = FixedPath::from_bytes(b"/old/dir");
+        p.substitute_prefix(4, b"/").unwrap();
+        assert_eq!(p.as_bytes(), b"/dir");
+        // Strip everything -> root.
+        let mut p = FixedPath::from_bytes(b"/old");
+        p.substitute_prefix(4, b"/").unwrap();
+        assert_eq!(p.as_bytes(), b"/");
+    }
+}

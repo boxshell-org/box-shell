@@ -4,11 +4,11 @@
 //! `from_sigsys = true`) and at the statx sysexit stage when the kernel
 //! call failed but PRoot can still answer it (e.g. old kernels).
 
-use crate::fpath::FixedPath;
-use crate::tracee::mem::{read_data, read_string, write_data};
-use crate::tracee::reg::{peek_reg, Reg, RegVersion};
-use crate::tracee::Tracee;
 use crate::Word;
+use crate::fpath::FixedPath;
+use crate::tracee::Tracee;
+use crate::tracee::mem::{read_data, read_string, write_data};
+use crate::tracee::reg::{Reg, RegVersion, peek_reg};
 
 /// `struct statx_timestamp`.
 #[repr(C)]

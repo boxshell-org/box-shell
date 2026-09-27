@@ -1,21 +1,17 @@
 //! Virtual heap — port of syscall/heap.c.  brk() is rewritten in place into
 //! mmap/mremap against a private anonymous mapping at a controlled address.
 
-use crate::arch::SYSCALL_AVOIDER;
-use crate::sysnum::{detranslate_sysnum, Sysnum};
-use crate::tracee::reg::{get_abi, get_sysnum, peek_reg, poke_reg, set_sysnum, Reg, RegVersion};
-use crate::tracee::Tracee;
 use crate::Word;
+use crate::arch::SYSCALL_AVOIDER;
+use crate::sysnum::{Sysnum, detranslate_sysnum};
+use crate::tracee::Tracee;
+use crate::tracee::reg::{Reg, RegVersion, get_abi, get_sysnum, peek_reg, poke_reg, set_sysnum};
 
 /// The size of the heap can be zero, unlike a memory mapping: the first page
 /// of the heap mapping is discarded so an empty heap is representable.
 fn heap_offset() -> Word {
     let page = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) };
-    if page <= 0 {
-        0x1000
-    } else {
-        page as Word
-    }
+    if page <= 0 { 0x1000 } else { page as Word }
 }
 
 #[derive(Default)]

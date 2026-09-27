@@ -3,8 +3,8 @@
 //! The filter tells the kernel to stop (SECCOMP_RET_TRACE) only on syscalls
 //! PRoot actually translates, letting everything else run untraced.
 
-use crate::sysnum::{detranslate_sysnum, Abi, Sysnum};
 use crate::Word;
+use crate::sysnum::{Abi, Sysnum, detranslate_sysnum};
 
 /// Flags attached to filtered syscalls (readable via PTRACE_GETEVENTMSG).
 pub const FILTER_SYSEXIT: Word = 0x1;

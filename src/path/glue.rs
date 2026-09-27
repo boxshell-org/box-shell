@@ -4,10 +4,10 @@
 
 use std::rc::Rc;
 
-use crate::fpath::FixedPath;
-use crate::path::{binding, compare_paths, Comparison, Finality};
-use crate::tracee::Tracee;
 use crate::PATH_MAX;
+use crate::fpath::FixedPath;
+use crate::path::{Comparison, Finality, binding, compare_paths};
+use crate::tracee::Tracee;
 
 /// `build_glue()` — returns the type (mode & S_IFMT) of the component, 0 on
 /// error.

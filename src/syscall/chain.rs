@@ -2,10 +2,10 @@
 
 use std::collections::VecDeque;
 
-use crate::sysnum::Sysnum;
-use crate::tracee::reg::{get_sysnum, peek_reg, poke_reg, Reg, RegVersion};
-use crate::tracee::Tracee;
 use crate::Word;
+use crate::sysnum::Sysnum;
+use crate::tracee::Tracee;
+use crate::tracee::reg::{Reg, RegVersion, get_sysnum, peek_reg, poke_reg};
 
 #[derive(Copy, Clone)]
 pub struct ChainedSyscall {

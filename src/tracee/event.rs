@@ -5,10 +5,10 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use crate::sysnum::Sysnum;
-use crate::tracee::reg::{fetch_regs, get_sysnum, peek_reg, Reg, RegVersion};
-use crate::tracee::{get_tracee, is_in_sysenter, Seccomp, Sigstop, Tracee};
 use crate::Word;
+use crate::sysnum::Sysnum;
+use crate::tracee::reg::{Reg, RegVersion, fetch_regs, get_sysnum, peek_reg};
+use crate::tracee::{Seccomp, Sigstop, Tracee, get_tracee, is_in_sysenter};
 
 pub type TraceeRef = Rc<RefCell<Tracee>>;
 
@@ -245,7 +245,10 @@ fn drain_deferred_attaches() {
             Some(v) => v,
             None => return,
         };
-        if let Some(parent_rc) = get_tracee(parent_pid, false) {
+        // Bind the scrutinee explicitly: keeps the temporary's lifetime
+        // identical across edition drop-order rules.
+        let parent = get_tracee(parent_pid, false);
+        if let Some(parent_rc) = parent {
             let _ = attach_child(&parent_rc, clone_flags, child_pid);
         }
     }
@@ -1027,11 +1030,7 @@ pub fn new_child(parent_rc: &TraceeRef, clone_flags: Word) {
             std::ptr::null::<u8>(),
             &mut msg as *mut _ as usize,
         );
-        if status < 0 || msg == 0 {
-            0
-        } else {
-            msg
-        }
+        if status < 0 || msg == 0 { 0 } else { msg }
     };
 
     if pid == 0 {

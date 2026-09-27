@@ -8,20 +8,20 @@
 
 use std::ffi::CString;
 
+use crate::PATH_MAX;
+use crate::Word;
 use crate::extension::Event;
 use crate::fpath::FixedPath;
-use crate::path::{belongs_to_guestfs, compare_paths, Comparison};
+use crate::path::{Comparison, belongs_to_guestfs, compare_paths};
 use crate::syscall::chain::register_chained_syscall;
 use crate::syscall::set_sysarg_data;
 use crate::sysnum::Sysnum;
+use crate::tracee::Tracee;
 use crate::tracee::mem::{
     alloc_mem, peek_uint32, poke_uint32, read_data, read_path, read_string, write_data,
 };
+use crate::tracee::reg::{Reg, RegVersion, is_32on64_mode, peek_reg, poke_reg};
 use crate::tracee::reg::{get_sysnum, set_sysnum};
-use crate::tracee::reg::{is_32on64_mode, peek_reg, poke_reg, Reg, RegVersion};
-use crate::tracee::Tracee;
-use crate::Word;
-use crate::PATH_MAX;
 
 const META_TAG: &[u8] = b".proot-meta-file.";
 
@@ -177,7 +177,7 @@ fn read_meta_file(path: &[u8], config: &Config) -> (u32, u32, u32) {
         Ok(c) => c,
         Err(_) => return (0o755, config.euid, config.egid),
     };
-    let fp = unsafe { libc::fopen(c.as_ptr(), b"r\0".as_ptr() as *const _) };
+    let fp = unsafe { libc::fopen(c.as_ptr(), c"r".as_ptr()) };
     if fp.is_null() {
         return (0o755, config.euid, config.egid);
     }
@@ -187,7 +187,7 @@ fn read_meta_file(path: &[u8], config: &Config) -> (u32, u32, u32) {
     unsafe {
         libc::fscanf(
             fp,
-            b"%d %d %d \0".as_ptr() as *const _,
+            c"%d %d %d ".as_ptr(),
             &mut mode as *mut i32,
             &mut owner as *mut u32,
             &mut group as *mut u32,
@@ -213,7 +213,7 @@ fn write_meta_file(
         mode
     };
     let c = CString::new(path).map_err(|_| -libc::EINVAL)?;
-    let fp = unsafe { libc::fopen(c.as_ptr(), b"w\0".as_ptr() as *const _) };
+    let fp = unsafe { libc::fopen(c.as_ptr(), c"w".as_ptr()) };
     if fp.is_null() {
         return Err(-crate::path::errno());
     }
@@ -1434,11 +1434,7 @@ fn handle_chroot_exit(tracee: &mut Tracee, config: &Config, from_sigsys: bool) -
         return 0;
     }
 
-    if from_sigsys {
-        -libc::ENOSYS
-    } else {
-        0
-    }
+    if from_sigsys { -libc::ENOSYS } else { 0 }
 }
 
 /* ================================================================== */

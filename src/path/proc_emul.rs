@@ -1,9 +1,9 @@
 //! /proc readlink emulation — port of path/proc.c.
 
-use crate::fpath::FixedPath;
-use crate::path::{compare_paths, Comparison};
-use crate::tracee::Tracee;
 use crate::PATH_MAX;
+use crate::fpath::FixedPath;
+use crate::path::{Comparison, compare_paths};
+use crate::tracee::Tracee;
 
 /// `Action` from proc.c.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -94,7 +94,7 @@ pub fn readlink_proc(
             }
 
             macro_rules! substitute {
-                ($name:expr, $string:expr) => {
+                ($name:expr_2021, $string:expr_2021) => {
                     if component == $name {
                         let s: &[u8] = $string;
                         if s.len() >= PATH_MAX {

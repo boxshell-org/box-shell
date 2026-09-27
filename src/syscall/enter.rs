@@ -5,14 +5,14 @@
 //! translation, mount/pivot_root/umount emulation as binding edits, and the
 //! AF_NETLINK substitution handled by `netlink.rs`.
 
+use crate::Word;
 use crate::fpath::FixedPath;
-use crate::path::{binding, compare_paths, join_paths2, Comparison, Side};
+use crate::path::{Comparison, Side, binding, compare_paths, join_paths2};
 use crate::syscall::{get_sysarg_path, netlink, set_sysarg_path};
 use crate::sysnum::Sysnum;
-use crate::tracee::mem::{peek_word, poke_word, read_data, read_string, write_data};
-use crate::tracee::reg::{get_sysnum, peek_reg, poke_reg, set_sysnum, Reg, RegVersion};
 use crate::tracee::Tracee;
-use crate::Word;
+use crate::tracee::mem::{peek_word, poke_word, read_data, read_string, write_data};
+use crate::tracee::reg::{Reg, RegVersion, get_sysnum, peek_reg, poke_reg, set_sysnum};
 
 pub const CLONE_NEWTIME: Word = 0x0000_0080;
 pub const CLONE_NEWCGROUP: Word = 0x0200_0000;
@@ -412,7 +412,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
 
     macro_rules! path_arg {
         // translate_sysarg(tracee, SYSARG_n, TYPE)
-        ($reg:expr, $ty:expr) => {{
+        ($reg:expr_2021, $ty:expr_2021) => {{
             status = translate_sysarg(tracee, $reg, $ty);
         }};
     }
@@ -1218,7 +1218,7 @@ fn socketcall_enter(tracee: &mut Tracee, mut special: bool) -> i32 {
     let arg = |n: Word| -> Word { args_addr + (n - 1) * w };
 
     macro_rules! peekw {
-        ($addr:expr, $forced:expr) => {{
+        ($addr:expr_2021, $forced:expr_2021) => {{
             unsafe { *libc::__errno_location() = 0 };
             let v = peek_word(tracee, $addr);
             let e = crate::path::errno();
@@ -1229,7 +1229,7 @@ fn socketcall_enter(tracee: &mut Tracee, mut special: bool) -> i32 {
         }};
     }
     macro_rules! pokew {
-        ($addr:expr, $val:expr) => {{
+        ($addr:expr_2021, $val:expr_2021) => {{
             unsafe { *libc::__errno_location() = 0 };
             poke_word(tracee, $addr, $val);
             let e = crate::path::errno();

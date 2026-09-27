@@ -3,8 +3,8 @@
 use crate::fpath::FixedPath;
 use crate::path::binding::substitute_binding;
 use crate::path::f2fs::should_skip_file_access_due_to_f2fs_bug;
-use crate::path::proc_emul::{readlink_proc, Action};
-use crate::path::{compare_paths, join_paths2, Comparison, Finality, Side};
+use crate::path::proc_emul::{Action, readlink_proc};
+use crate::path::{Comparison, Finality, Side, compare_paths, join_paths2};
 use crate::tracee::Tracee;
 use crate::{NAME_MAX, PATH_MAX};
 

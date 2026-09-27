@@ -1,9 +1,9 @@
 //! ELF auxiliary vectors — port of execve/auxv.c.
 
-use crate::tracee::mem::{peek_word, poke_word};
-use crate::tracee::reg::{peek_reg, sizeof_word, Reg, RegVersion};
-use crate::tracee::Tracee;
 use crate::Word;
+use crate::tracee::Tracee;
+use crate::tracee::mem::{peek_word, poke_word};
+use crate::tracee::reg::{Reg, RegVersion, peek_reg, sizeof_word};
 
 pub const AT_NULL: Word = 0;
 pub const AT_IGNORE: Word = 1;

@@ -3,9 +3,9 @@
 //! Fast path is `process_vm_readv`/`process_vm_writev` (single syscall,
 //! byte-granular); the fallback is word-wise PTRACE_PEEKDATA/POKEDATA.
 
-use crate::tracee::reg::{is_32on64_mode, peek_reg, poke_reg, sizeof_word, Reg, RegVersion};
-use crate::tracee::Tracee;
 use crate::Word;
+use crate::tracee::Tracee;
+use crate::tracee::reg::{Reg, RegVersion, is_32on64_mode, peek_reg, poke_reg, sizeof_word};
 
 fn ptrace_peekdata(pid: i32, addr: Word) -> Result<Word, i32> {
     unsafe {

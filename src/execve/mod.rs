@@ -12,9 +12,9 @@ pub use elf::{ElfHeader, ProgramHeader};
 pub use enter::translate_execve_enter;
 pub use exit::translate_execve_exit;
 
+use crate::Word;
 use crate::fpath::FixedPath;
 use crate::tracee::Tracee;
-use crate::Word;
 
 /// `struct mapping` — one file-backed or anonymous mapping the loader
 /// creates for the program/interpreter.
@@ -51,7 +51,7 @@ pub struct ExecveProcExeState {
 
 /// `IS_NOTIFICATION_PTRACED_LOAD_DONE`.
 pub fn is_notification_ptraced_load_done(tracee: &Tracee) -> bool {
-    use crate::tracee::reg::{peek_reg, Reg, RegVersion};
+    use crate::tracee::reg::{Reg, RegVersion, peek_reg};
     tracee.as_ptracee.ptracer != 0
         && peek_reg(tracee, RegVersion::Original, Reg::Sysarg1) == 1
         && peek_reg(tracee, RegVersion::Original, Reg::Sysarg4) == 2

@@ -8,16 +8,16 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Mutex;
 
+use crate::HOST_ROOTFS;
 use crate::execve::aoxp::{
-    find_xpointee_env, is_env_name, read_xpointee_as_string, resize_array_of_xpointers,
-    write_xpointee_string, write_xpointees, XPointerArray,
+    XPointerArray, find_xpointee_env, is_env_name, read_xpointee_as_string,
+    resize_array_of_xpointers, write_xpointee_string, write_xpointees,
 };
 use crate::execve::elf::{
-    iterate_program_headers, open_elf, DynamicEntry, ElfHeader, ProgramHeader, DT_RPATH,
-    DT_RUNPATH, DT_STRTAB, PT_DYNAMIC, PT_LOAD,
+    DT_RPATH, DT_RUNPATH, DT_STRTAB, DynamicEntry, ElfHeader, PT_DYNAMIC, PT_LOAD, ProgramHeader,
+    iterate_program_headers, open_elf,
 };
 use crate::tracee::Tracee;
-use crate::HOST_ROOTFS;
 
 /// `ARG_MAX`.
 const ARG_MAX: usize = 131072;
@@ -58,7 +58,7 @@ pub fn ldso_env_passthru(
         }
 
         macro_rules! passthru {
-            ($name:expr, $seen:expr) => {
+            ($name:expr_2021, $seen:expr_2021) => {
                 if is_env_name(&env, $name) {
                     $seen = true;
                     // Errors are not fatal here (per the C code).

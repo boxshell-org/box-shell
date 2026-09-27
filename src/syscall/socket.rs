@@ -2,10 +2,10 @@
 //!
 //! `sockaddr_un` has the same layout on every architecture.
 
-use crate::fpath::FixedPath;
-use crate::tracee::mem::{alloc_mem, peek_int32, poke_int32, read_data, write_data};
-use crate::tracee::Tracee;
 use crate::Word;
+use crate::fpath::FixedPath;
+use crate::tracee::Tracee;
+use crate::tracee::mem::{alloc_mem, peek_int32, poke_int32, read_data, write_data};
 
 const OFFSETOF_PATH: usize = std::mem::offset_of!(libc::sockaddr_un, sun_path);
 const SIZEOF_PATH: usize = 108; // sizeof(sun_path)

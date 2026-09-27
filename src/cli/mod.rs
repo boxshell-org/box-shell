@@ -5,13 +5,13 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::HOST_ROOTFS;
 use crate::extension::{self, AnyExtension};
 use crate::fpath::FixedPath;
-use crate::note::{note, Origin, Severity};
+use crate::note::{Origin, Severity, note};
 use crate::path::{self, binding, canon};
 use crate::tracee::event::TraceeRef;
 use crate::tracee::{self, Tracee};
-use crate::HOST_ROOTFS;
 
 /// `exit_failure` in C: toggled by -V/-h so the "-1 means exit" protocol
 /// still reports success.
@@ -36,8 +36,7 @@ pub static PROOT_CLI: Cli = Cli {
     name: "proot",
     subtitle: "chroot, mount --bind, and binfmt_misc without privilege/setup",
     synopsis: "proot [option] ... [command]",
-    colophon:
-        "Visit https://github.com/termux/proot for help, bug reports, suggestions, patches, ...\n\
+    colophon: "Visit https://github.com/termux/proot for help, bug reports, suggestions, patches, ...\n\
 Copyright (C) 2015 STMicroelectronics, licensed under GPL v2 or later.",
     logo: " _____ _____              ___\n\
 |  __ \\  __ \\_____  _____|   |_\n\
@@ -924,13 +923,7 @@ fn initialize_cwd(tracee: &mut Tracee) -> Result<(), i32> {
     path.chop_finality();
 
     tracee.fs.borrow_mut().cwd = path.clone();
-    unsafe {
-        libc::setenv(
-            b"PWD\0".as_ptr() as *const _,
-            path.as_c_bytes().as_ptr() as *const _,
-            1,
-        )
-    };
+    unsafe { libc::setenv(c"PWD".as_ptr(), path.as_c_bytes().as_ptr() as *const _, 1) };
     Ok(())
 }
 

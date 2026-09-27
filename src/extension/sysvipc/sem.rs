@@ -1,9 +1,9 @@
 //! Semaphores — port of extension/sysvipc/sysvipc_sem.c.
 
 use super::*;
-use crate::tracee::mem::{read_data, write_data};
-use crate::tracee::reg::{peek_reg, Reg, RegVersion};
 use crate::tracee::Tracee;
+use crate::tracee::mem::{read_data, write_data};
+use crate::tracee::reg::{Reg, RegVersion, peek_reg};
 
 const SYSVIPC_MAX_SEMS: usize = 512;
 const SYSVIPC_MAX_NSEMS: usize = 512;

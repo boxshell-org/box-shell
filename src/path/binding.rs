@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use crate::fpath::FixedPath;
 use crate::path::{
-    compare_paths, compare_paths2, getcwd2, join_paths2, realpath2, Comparison, Side,
+    Comparison, Side, compare_paths, compare_paths2, getcwd2, join_paths2, realpath2,
 };
 use crate::tracee::Tracee;
 

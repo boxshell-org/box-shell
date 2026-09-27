@@ -5,9 +5,9 @@
 //! `push_regs`.  Register *indices* are ABI-neutral ([`Reg`]); the offset
 //! table resolves the ABI currently in use.
 
-use crate::sysnum::{detranslate_sysnum, translate_sysnum, Abi, Sysnum};
-use crate::tracee::Tracee;
 use crate::Word;
+use crate::sysnum::{Abi, Sysnum, detranslate_sysnum, translate_sysnum};
+use crate::tracee::Tracee;
 
 /// Snapshot selector.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -136,11 +136,7 @@ pub fn is_32on64_mode(tracee: &Tracee) -> bool {
 
 /// Size of a guest word for the ABI currently in use.
 pub fn sizeof_word(tracee: &Tracee) -> usize {
-    if is_32on64_mode(tracee) {
-        4
-    } else {
-        8
-    }
+    if is_32on64_mode(tracee) { 4 } else { 8 }
 }
 
 #[inline]

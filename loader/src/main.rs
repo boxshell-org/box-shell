@@ -185,7 +185,7 @@ unsafe fn basename(s: word_t) -> word_t {
     cur
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start(cursor: word_t) -> ! {
     let mut cursor = cursor as *const byte_t;
     let mut traced = false;

@@ -1,10 +1,11 @@
 [package]
 name = "box-shell"
 version = "5.1.0"
-edition = "2021"
-rust-version = "1.74"
+edition = "2024"
+rust-version = "1.85"
 description = "User-space implementation of chroot, bind mounts and binfmt_misc (clean-room PRoot rewrite in Rust)"
 license = "GPL-2.0-or-later"
+publish = false
 
 [[bin]]
 name = "proot"

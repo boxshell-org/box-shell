@@ -11,15 +11,15 @@ use std::io::{Read, Write};
 use std::os::unix::io::FromRawFd;
 
 use super::*;
+use crate::Word;
 use crate::arch::SYSCALL_AVOIDER;
 use crate::syscall::chain::{force_chain_final_result, register_chained_syscall};
 use crate::sysnum::detranslate_sysnum;
+use crate::tracee::Tracee;
 use crate::tracee::mem::{read_data, write_data};
 use crate::tracee::reg::{
-    get_abi, is_32on64_mode, peek_reg, poke_reg, set_sysnum, Reg, RegVersion,
+    Reg, RegVersion, get_abi, is_32on64_mode, peek_reg, poke_reg, set_sysnum,
 };
-use crate::tracee::Tracee;
-use crate::Word;
 
 const IPC_PRIVATE: i32 = 0;
 const IPC_CREAT: i32 = 0o1000;
@@ -186,7 +186,7 @@ fn recvmsg_pointers(
     let msghdr_iovlen = msghdr_control - ptr_len;
     let msghdr_iov = msghdr_iovlen - ptr_len;
     let msghdr = msghdr_iov - ptr_len * 2; // name & namelen unused
-                                           // control data is at guest_buf
+    // control data is at guest_buf
 
     if do_write {
         let mut data = vec![0u8; sockaddr_un_len as usize];
@@ -776,7 +776,10 @@ pub fn remove_mappings_from_process(
 
 /// `sysvipc_shm_fill_proc()` — the "/proc/sysvipc/shm" listing.
 pub fn fill_proc(w: &mut dyn std::io::Write, ns: &SysVIpcNamespace) {
-    let _ = writeln!(w, "       key      shmid perms                  size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime                   rss                  swap");
+    let _ = writeln!(
+        w,
+        "       key      shmid perms                  size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime                   rss                  swap"
+    );
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
     for (shm_index, shm) in ns.shms.iter().enumerate() {
         if !shm.valid {

@@ -11,15 +11,15 @@ pub mod rlimit;
 pub mod seccomp;
 pub mod socket;
 
+use crate::Word;
 use crate::fpath::FixedPath;
 use crate::sysnum::Sysnum;
 use crate::tracee::mem::{alloc_mem, read_path, write_data};
 use crate::tracee::reg::{
-    fetch_regs, get_sysnum, peek_reg, poke_reg, push_specific_regs, save_current_regs, set_sysnum,
-    Reg, RegVersion,
+    Reg, RegVersion, fetch_regs, get_sysnum, peek_reg, poke_reg, push_specific_regs,
+    save_current_regs, set_sysnum,
 };
-use crate::tracee::{is_in_sysenter, Tracee};
-use crate::Word;
+use crate::tracee::{Tracee, is_in_sysenter};
 
 /// `readlink_proc_fd_state` — payload of the READLINK_PROC_FD extension
 /// event (syscall.h).

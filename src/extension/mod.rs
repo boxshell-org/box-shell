@@ -5,9 +5,9 @@
 //! [`AnyExtension`] and events are a typed enum; dispatch happens via
 //! [`Extension::notify`].
 
+use crate::Word;
 use crate::fpath::FixedPath;
 use crate::tracee::Tracee;
-use crate::Word;
 
 pub mod fake_id0;
 pub mod fix_symlink_size;

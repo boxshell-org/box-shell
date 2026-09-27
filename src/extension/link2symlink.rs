@@ -10,20 +10,20 @@ use std::cell::RefCell;
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 
+use crate::PATH_MAX;
+use crate::Word;
 use crate::extension::Event;
 use crate::fpath::FixedPath;
 use crate::path::f2fs::should_skip_file_access_due_to_f2fs_bug;
-use crate::path::{compare_paths, detranslate_path, readlink_proc_pid_fd, Comparison};
+use crate::path::{Comparison, compare_paths, detranslate_path, readlink_proc_pid_fd};
 use crate::syscall::seccomp::FILTER_SYSEXIT;
 use crate::sysnum::Sysnum;
+use crate::tracee::Tracee;
 use crate::tracee::mem::{read_path, write_data};
 use crate::tracee::reg::{
-    get_sysnum, is_32on64_mode, peek_reg, poke_reg, set_sysnum, Reg, RegVersion,
+    Reg, RegVersion, get_sysnum, is_32on64_mode, peek_reg, poke_reg, set_sysnum,
 };
-use crate::tracee::Tracee;
 use crate::verbose;
-use crate::Word;
-use crate::PATH_MAX;
 
 const PREFIX: &[u8] = b".l2s.";
 const DELETED_SUFFIX: &[u8] = b" (deleted)";
@@ -149,11 +149,7 @@ fn l2s_entry(path: &[u8]) -> Result<(i32, &[u8]), i32> {
 
 fn path_errno() -> i32 {
     let e = crate::path::errno();
-    if e > 0 {
-        e
-    } else {
-        libc::ENOENT
-    }
+    if e > 0 { e } else { libc::ENOENT }
 }
 
 /// `l2s_access()` — F_OK check, following symlinks (a dangling
@@ -171,11 +167,7 @@ fn l2s_access(path: &[u8]) -> i32 {
             libc::faccessat(dir_fd, c.as_ptr(), libc::F_OK, 0)
         }
     };
-    if r < 0 {
-        -path_errno()
-    } else {
-        0
-    }
+    if r < 0 { -path_errno() } else { 0 }
 }
 
 fn l2s_symlink(target: &[u8], path: &[u8]) -> i32 {
@@ -192,11 +184,7 @@ fn l2s_symlink(target: &[u8], path: &[u8]) -> i32 {
             libc::symlinkat(t.as_ptr(), dir_fd, n.as_ptr())
         }
     };
-    if r < 0 {
-        -path_errno()
-    } else {
-        0
-    }
+    if r < 0 { -path_errno() } else { 0 }
 }
 
 fn l2s_unlink(path: &[u8]) -> i32 {
@@ -212,11 +200,7 @@ fn l2s_unlink(path: &[u8]) -> i32 {
             libc::unlinkat(dir_fd, c.as_ptr(), 0)
         }
     };
-    if r < 0 {
-        -path_errno()
-    } else {
-        0
-    }
+    if r < 0 { -path_errno() } else { 0 }
 }
 
 fn l2s_rename(old_path: &[u8], new_path: &[u8]) -> i32 {
@@ -244,11 +228,7 @@ fn l2s_rename(old_path: &[u8], new_path: &[u8]) -> i32 {
             )
         }
     };
-    if r < 0 {
-        -path_errno()
-    } else {
-        0
-    }
+    if r < 0 { -path_errno() } else { 0 }
 }
 
 /// `my_readlink()` — copy the contents of `symlink` into `value`.

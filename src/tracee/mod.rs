@@ -11,11 +11,11 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::Word;
 use crate::extension::AnyExtension;
 use crate::syscall::chain::Chain;
 use crate::syscall::heap::Heap;
 use crate::sysnum::Sysnum;
-use crate::Word;
 
 pub use reg::{Reg, RegVersion, Regs};
 

@@ -5,15 +5,15 @@
 //! substitutions), AT_EXECFN auxv patching, the rename-cwd chase, the
 //! /dev/shm statfs lie, and netlink ack rewriting.
 
+use crate::Word;
 use crate::fpath::FixedPath;
-use crate::path::{compare_paths, Comparison};
-use crate::syscall::{is_voided_syscall, netlink, ReadlinkProcFdState};
+use crate::path::{Comparison, compare_paths};
+use crate::syscall::{ReadlinkProcFdState, is_voided_syscall, netlink};
 use crate::sysnum::Abi;
 use crate::sysnum::Sysnum;
-use crate::tracee::mem::{peek_word, poke_word, read_data, read_path, read_string, write_data};
-use crate::tracee::reg::{get_sysnum, peek_reg, poke_reg, Reg, RegVersion};
 use crate::tracee::Tracee;
-use crate::Word;
+use crate::tracee::mem::{peek_word, poke_word, read_data, read_path, read_string, write_data};
+use crate::tracee::reg::{Reg, RegVersion, get_sysnum, peek_reg, poke_reg};
 
 const PR_SET_NO_NEW_PRIVS: Word = 38;
 const PR_GET_AUXV: Word = 0x41555856;
@@ -389,7 +389,7 @@ fn socketcall_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
     let arg = |n: Word| -> Word { args_addr + (n - 1) * w };
 
     macro_rules! peekw {
-        ($addr:expr) => {{
+        ($addr:expr_2021) => {{
             unsafe { *libc::__errno_location() = 0 };
             let v = peek_word(tracee, $addr);
             let e = crate::path::errno();
@@ -400,7 +400,7 @@ fn socketcall_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
         }};
     }
     macro_rules! pokew {
-        ($addr:expr, $val:expr) => {{
+        ($addr:expr_2021, $val:expr_2021) => {{
             unsafe { *libc::__errno_location() = 0 };
             poke_word(tracee, $addr, $val);
             let e = crate::path::errno();

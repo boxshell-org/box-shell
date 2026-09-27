@@ -5,10 +5,10 @@
 //! point (kernel bug 91791).  Raising PRoot's soft limit to match keeps
 //! stack accesses working.
 
-use crate::tracee::mem::{peek_uint64, peek_word};
-use crate::tracee::reg::{is_32on64_mode, peek_reg, Reg, RegVersion};
-use crate::tracee::Tracee;
 use crate::Word;
+use crate::tracee::Tracee;
+use crate::tracee::mem::{peek_uint64, peek_word};
+use crate::tracee::reg::{Reg, RegVersion, is_32on64_mode, peek_reg};
 
 /// `translate_setrlimit_exit()` — mirror a tracee's RLIMIT_STACK raise.
 pub fn translate_setrlimit_exit(tracee: &Tracee, is_prlimit: bool) -> i32 {

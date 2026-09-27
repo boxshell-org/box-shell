@@ -4,23 +4,23 @@
 //! are rewritten to their older equivalents, unsupported flags are stripped,
 //! and `uname`/auxv/hostname values are virtualized.
 
+use crate::Word;
 use crate::arch::SYSCALL_AVOIDER;
 use crate::execve::auxv::{
-    fetch_elf_aux_vectors, get_elf_aux_vectors_address, push_elf_aux_vectors, ElfAuxVector,
-    AT_HWCAP, AT_IGNORE, AT_NULL, AT_RANDOM, AT_SYSINFO, AT_SYSINFO_EHDR,
+    AT_HWCAP, AT_IGNORE, AT_NULL, AT_RANDOM, AT_SYSINFO, AT_SYSINFO_EHDR, ElfAuxVector,
+    fetch_elf_aux_vectors, get_elf_aux_vectors_address, push_elf_aux_vectors,
 };
 use crate::extension::Event;
 use crate::note;
 use crate::note::{Origin, Severity};
 use crate::syscall::chain::{force_chain_final_result, register_chained_syscall};
 use crate::syscall::seccomp::FILTER_SYSEXIT;
-use crate::sysnum::{detranslate_sysnum, Abi, Sysnum};
+use crate::sysnum::{Abi, Sysnum, detranslate_sysnum};
+use crate::tracee::Tracee;
 use crate::tracee::mem::{read_data, write_data};
 use crate::tracee::reg::{
-    get_abi, get_sysnum, peek_reg, poke_reg, set_sysnum, sizeof_word, sysarg, Reg, RegVersion,
+    Reg, RegVersion, get_abi, get_sysnum, peek_reg, poke_reg, set_sysnum, sizeof_word, sysarg,
 };
-use crate::tracee::Tracee;
-use crate::Word;
 
 const MAX_ARG_SHIFT: usize = 2;
 

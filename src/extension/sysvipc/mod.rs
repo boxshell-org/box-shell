@@ -13,12 +13,12 @@ pub mod shm;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::Word;
 use crate::extension::Event;
 use crate::sysnum::Sysnum;
-use crate::tracee::reg::{get_sysnum, peek_reg, poke_reg, set_sysnum, Reg, RegVersion};
+use crate::tracee::reg::{Reg, RegVersion, get_sysnum, peek_reg, poke_reg, set_sysnum};
 use crate::tracee::seccomp::{restart_syscall_after_seccomp, set_result_after_seccomp};
 use crate::tracee::{Sigstop, Tracee};
-use crate::Word;
 
 pub const SYSVIPC_IPC_64: i32 = 0x100;
 

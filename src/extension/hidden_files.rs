@@ -5,16 +5,16 @@
 //! (`.proot`) are invisible to the guest — used to hide link2symlink's
 //! metadata sidecars and glue artifacts.
 
+use crate::Word;
 use crate::extension::Event;
 use crate::fpath::FixedPath;
 use crate::path::belongs_to_guestfs;
 use crate::syscall::chain::register_chained_syscall;
 use crate::syscall::seccomp::FILTER_SYSEXIT;
 use crate::sysnum::Sysnum;
-use crate::tracee::mem::{read_data, write_data};
-use crate::tracee::reg::{get_sysnum, peek_reg, poke_reg, Reg, RegVersion};
 use crate::tracee::Tracee;
-use crate::Word;
+use crate::tracee::mem::{read_data, write_data};
+use crate::tracee::reg::{Reg, RegVersion, get_sysnum, peek_reg, poke_reg};
 
 const HIDDEN_PREFIX: &[u8] = b".proot";
 

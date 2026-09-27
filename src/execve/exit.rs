@@ -7,17 +7,17 @@
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::execve::auxv::{fetch_elf_aux_vectors, get_elf_aux_vectors_address, ElfAuxVector};
-use crate::execve::{is_notification_ptraced_load_done, Mapping};
+use crate::Word;
+use crate::execve::auxv::{ElfAuxVector, fetch_elf_aux_vectors, get_elf_aux_vectors_address};
+use crate::execve::{Mapping, is_notification_ptraced_load_done};
 use crate::path::binding::{get_binding, insort_binding3, remove_binding_from_all_lists};
-use crate::path::{compare_paths, Comparison, Side};
+use crate::path::{Comparison, Side, compare_paths};
 use crate::sysnum::Sysnum;
+use crate::tracee::Tracee;
 use crate::tracee::mem::{peek_word, write_data};
 use crate::tracee::reg::{
-    is_32on64_mode, peek_reg, poke_reg, save_current_regs, set_sysnum, sizeof_word, Reg, RegVersion,
+    Reg, RegVersion, is_32on64_mode, peek_reg, poke_reg, save_current_regs, set_sysnum, sizeof_word,
 };
-use crate::tracee::Tracee;
-use crate::Word;
 
 /* Load actions (loader/script.h). */
 const LOAD_ACTION_OPEN_NEXT: u64 = 0;
@@ -32,11 +32,7 @@ fn page_size() -> Word {
     static ONCE: std::sync::OnceLock<Word> = std::sync::OnceLock::new();
     *ONCE.get_or_init(|| {
         let v = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-        if v > 0 {
-            v as Word
-        } else {
-            0x1000
-        }
+        if v > 0 { v as Word } else { 0x1000 }
     })
 }
 
@@ -208,7 +204,7 @@ fn transfer_load_script(tracee: &mut Tracee) -> i32 {
     buffer.extend_from_slice(string1.as_bytes());
     buffer.extend_from_slice(string2.as_bytes());
     buffer.extend_from_slice(string3.as_bytes());
-    buffer.extend(std::iter::repeat(0).take(padding_size as usize));
+    buffer.extend(std::iter::repeat_n(0, padding_size as usize));
 
     let buffer_size = buffer.len() as Word;
     poke_reg(tracee, Reg::StackPointer, stack_pointer - buffer_size);

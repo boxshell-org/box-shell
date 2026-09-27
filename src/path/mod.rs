@@ -8,8 +8,8 @@ pub mod glue;
 pub mod proc_emul;
 pub mod temp;
 
-use crate::fpath::FixedPath;
 use crate::PATH_MAX;
+use crate::fpath::FixedPath;
 
 /// Result of `compare_paths()` (path.h `Comparison`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -433,5 +433,36 @@ pub fn detranslate_path(
                 Ok(0)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compare_paths_basic() {
+        use Comparison::*;
+        assert_eq!(compare_paths(b"/a/b", b"/a/b"), PathsAreEqual);
+        assert_eq!(compare_paths(b"/a", b"/a/b"), Path1IsPrefix);
+        assert_eq!(compare_paths(b"/a/b", b"/a"), Path2IsPrefix);
+        assert_eq!(compare_paths(b"/a/b", b"/a/c"), PathsAreNotComparable);
+        // A name boundary is required: "/fo" vs "/foo" is not a prefix.
+        assert_eq!(compare_paths(b"/fo", b"/foo"), PathsAreNotComparable);
+        // Trailing slashes are normalized.
+        assert_eq!(compare_paths(b"/a/", b"/a"), PathsAreEqual);
+        assert_eq!(compare_paths(b"/a", b"/a/b/"), Path1IsPrefix);
+        // Empty strings are never comparable.
+        assert_eq!(compare_paths(b"", b"/"), PathsAreNotComparable);
+    }
+
+    #[test]
+    fn join_paths_joins() {
+        let mut p = FixedPath::new();
+        join_paths2(&mut p, b"/a", b"b").unwrap();
+        assert_eq!(p.as_bytes(), b"/a/b");
+        let mut p = FixedPath::new();
+        join_paths2(&mut p, b"", b"/abs").unwrap();
+        assert_eq!(p.as_bytes(), b"/abs");
     }
 }

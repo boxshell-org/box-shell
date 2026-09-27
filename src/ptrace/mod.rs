@@ -6,11 +6,11 @@
 pub mod user;
 pub mod wait;
 
+use crate::Word;
 use crate::sysnum::Sysnum;
 use crate::tracee::mem::{peek_word, poke_word, read_data, write_data};
-use crate::tracee::reg::{is_32on64_mode, peek_reg, set_sysnum, Reg, RegVersion};
-use crate::tracee::{get_tracee, Seccomp, Tracee, WaitsIn};
-use crate::Word;
+use crate::tracee::reg::{Reg, RegVersion, is_32on64_mode, peek_reg, set_sysnum};
+use crate::tracee::{Seccomp, Tracee, WaitsIn, get_tracee};
 
 /// PTrace request/option constants as `i32` (libc exposes them as `u32`
 /// on Linux/glibc, while all our bookkeeping is `i32`/`Word`), plus the
@@ -21,7 +21,7 @@ pub mod ptc {
         ($name:ident) => {
             pub const $name: i32 = libc::$name as i32;
         };
-        ($name:ident = $v:expr) => {
+        ($name:ident = $v:expr_2021) => {
             pub const $name: i32 = $v;
         };
     }

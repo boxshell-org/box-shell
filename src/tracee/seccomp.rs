@@ -6,17 +6,17 @@
 //! (open → openat, stat → newfstatat, ...) and restarts it, or answers the
 //! call itself (mount/umount/unshare emulation).
 
+use crate::Word;
 use crate::fpath::FixedPath;
-use crate::path::{compare_paths, Comparison};
+use crate::path::{Comparison, compare_paths};
 use crate::syscall::set_sysarg_data;
-use crate::sysnum::{detranslate_sysnum, Sysnum};
+use crate::sysnum::{Sysnum, detranslate_sysnum};
+use crate::tracee::Tracee;
 use crate::tracee::mem::{alloc_mem, poke_word, read_data, read_string, write_data};
 use crate::tracee::reg::{
-    fetch_regs, get_abi, get_sysnum, get_systrap_size, peek_reg, poke_reg, push_specific_regs,
-    save_current_regs, set_sysnum, Reg, RegVersion,
+    Reg, RegVersion, fetch_regs, get_abi, get_sysnum, get_systrap_size, peek_reg, poke_reg,
+    push_specific_regs, save_current_regs, set_sysnum,
 };
-use crate::tracee::Tracee;
-use crate::Word;
 
 /// `restart_syscall_after_seccomp()` — rewind to the trap and re-run the
 /// (rewritten) syscall so PRoot translates it on the way in.

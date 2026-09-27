@@ -5,13 +5,13 @@
 //! guests can claim "privileged" ports.  connect/sendto are only
 //! rewritten for localhost destinations.
 
+use crate::Word;
 use crate::extension::Event;
 use crate::syscall::seccomp::FILTER_SYSEXIT;
 use crate::sysnum::Sysnum;
-use crate::tracee::mem::{read_data, write_data};
-use crate::tracee::reg::{get_sysnum, peek_reg, Reg, RegVersion};
 use crate::tracee::Tracee;
-use crate::Word;
+use crate::tracee::mem::{read_data, write_data};
+use crate::tracee::reg::{Reg, RegVersion, get_sysnum, peek_reg};
 
 const PORT_THRESHOLD: u16 = 1024;
 const PORT_ADDITION: u16 = 2000;

@@ -1,12 +1,12 @@
 //! wait(2) emulation for emulated ptrace relations — port of
 //! ptrace/wait.c.
 
+use crate::Word;
 use crate::sysnum::Sysnum;
 use crate::tracee::event::TraceeRef;
 use crate::tracee::mem::poke_int32;
-use crate::tracee::reg::{peek_reg, poke_reg, push_regs, set_sysnum, Reg, RegVersion};
-use crate::tracee::{get_tracee, Tracee, WaitsIn};
-use crate::Word;
+use crate::tracee::reg::{Reg, RegVersion, peek_reg, poke_reg, push_regs, set_sysnum};
+use crate::tracee::{Tracee, WaitsIn, get_tracee};
 
 /// `EXPECTED_WAIT_CLONE` — whether @tracee matches @wait_options'
 /// clone-ness filter.

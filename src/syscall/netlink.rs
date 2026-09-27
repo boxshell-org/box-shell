@@ -8,10 +8,10 @@
 
 use std::cell::RefMut;
 
-use crate::tracee::mem::{peek_word, read_data, write_data};
-use crate::tracee::reg::{peek_reg, Reg, RegVersion};
-use crate::tracee::{FakeNetlinkSocket, Tracee, MAX_FAKE_NETLINK_REPLY};
 use crate::Word;
+use crate::tracee::mem::{peek_word, read_data, write_data};
+use crate::tracee::reg::{Reg, RegVersion, peek_reg};
+use crate::tracee::{FakeNetlinkSocket, MAX_FAKE_NETLINK_REPLY, Tracee};
 
 /* rtnetlink/netlink constants (ABI-stable). */
 const NLMSG_HDR_LEN: usize = 16;
@@ -175,7 +175,7 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
     req[2..4].copy_from_slice(&RTM_NEWADDR.to_ne_bytes());
     req[4..6].copy_from_slice(&(NLM_F_REQUEST | NLM_F_ACK).to_ne_bytes());
     req[8..12].copy_from_slice(&1u32.to_ne_bytes()); // seq
-                                                     // ifa_family = AF_UNSPEC already zeroed.
+    // ifa_family = AF_UNSPEC already zeroed.
 
     let rc = unsafe {
         libc::sendto(
@@ -1095,11 +1095,7 @@ fn fake_netlink_datagram_len(reply: &[u8]) -> usize {
         }
         off += nlmsg_align(mlen);
     }
-    if off == 0 || off > len {
-        len
-    } else {
-        off
-    }
+    if off == 0 || off > len { len } else { off }
 }
 
 /// `pending_fake_netlink_datagram()` — slice + length of the next datagram.
