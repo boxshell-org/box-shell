@@ -59,7 +59,29 @@ impl FixedPath {
         self.len == 0
     }
 
-    #[inline]
+    /// Mutable view of the *whole* buffer (capacity PATH_MAX) — for
+    /// kernel writes like `read_string` that fill it in place.
+    /// Afterwards call [`set_len`] or [`sync_len_from_nul`].
+    pub fn as_mut_bytes(&mut self) -> &mut [u8] {
+        &mut self.buf[..]
+    }
+
+    /// Set the logical length after writing through `as_mut_bytes`.
+    pub fn set_len(&mut self, len: usize) {
+        self.len = len.min(self.buf.len());
+    }
+
+    /// Recover the length of a NUL-terminated string written through
+    /// `as_mut_bytes` (C callers rely on implicit `strlen`).
+    pub fn sync_len_from_nul(&mut self) {
+        let nul = self
+            .buf
+            .iter()
+            .position(|b| *b == 0)
+            .unwrap_or(self.buf.len());
+        self.len = nul;
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         &self.buf[..self.len]
     }

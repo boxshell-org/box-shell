@@ -1,0 +1,95 @@
+//! ELF auxiliary vectors — port of execve/auxv.c.
+
+use crate::tracee::mem::{peek_word, poke_word};
+use crate::tracee::reg::{peek_reg, sizeof_word, Reg, RegVersion};
+use crate::tracee::Tracee;
+use crate::Word;
+
+pub const AT_NULL: Word = 0;
+
+#[derive(Copy, Clone, Default)]
+pub struct ElfAuxVector {
+    pub atype: Word,
+    pub value: Word,
+}
+
+/// `get_elf_aux_vectors_address()` — locate the auxv table on the initial
+/// stack right after a successful execve (valid only in execve sysexit).
+/// Returns 0 on error.
+pub fn get_elf_aux_vectors_address(tracee: &Tracee) -> Word {
+    let w = sizeof_word(tracee) as Word;
+    let mut address = peek_reg(tracee, RegVersion::Current, Reg::StackPointer);
+    unsafe { *libc::__errno_location() = 0 };
+
+    // argc, then argv[] + NULL.
+    let argc = peek_word(tracee, address);
+    if crate::path::errno() != 0 {
+        return 0;
+    }
+    address += (1 + argc + 1) * w;
+
+    // envp[] + NULL.
+    loop {
+        let data = peek_word(tracee, address);
+        if crate::path::errno() != 0 {
+            return 0;
+        }
+        address += w;
+        if data == 0 {
+            break;
+        }
+    }
+    address
+}
+
+/// `fetch_elf_aux_vectors()` — read the AT_NULL-terminated vector list.
+pub fn fetch_elf_aux_vectors(tracee: &Tracee, address: Word) -> Option<Vec<ElfAuxVector>> {
+    let w = sizeof_word(tracee) as Word;
+    let mut address = address;
+    let mut vectors = Vec::new();
+    loop {
+        unsafe { *libc::__errno_location() = 0 };
+        let atype = peek_word(tracee, address);
+        if crate::path::errno() != 0 {
+            return None;
+        }
+        address += w;
+        if atype == AT_NULL {
+            break;
+        }
+        let value = peek_word(tracee, address);
+        if crate::path::errno() != 0 {
+            return None;
+        }
+        address += w;
+        vectors.push(ElfAuxVector { atype, value });
+    }
+    vectors.push(ElfAuxVector {
+        atype: AT_NULL,
+        value: 0,
+    });
+    Some(vectors)
+}
+
+/// `push_elf_aux_vectors()` — write the vector list back to `address`.
+pub fn push_elf_aux_vectors(tracee: &Tracee, vectors: &[ElfAuxVector], address: Word) -> i32 {
+    let w = sizeof_word(tracee) as Word;
+    let mut address = address;
+    for v in vectors.iter().chain(std::iter::once(&ElfAuxVector::default())) {
+        unsafe { *libc::__errno_location() = 0 };
+        poke_word(tracee, address, v.atype);
+        if crate::path::errno() != 0 {
+            return -crate::path::errno();
+        }
+        address += w;
+        poke_word(tracee, address, v.value);
+        if crate::path::errno() != 0 {
+            return -crate::path::errno();
+        }
+        address += w;
+        if v.atype == AT_NULL {
+            break;
+        }
+    }
+    0
+}

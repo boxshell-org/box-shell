@@ -18,11 +18,18 @@ type word_t = usize;
 type byte_t = u8;
 
 /* Load script wire format (mirrors loader/script.h): a sequence of
- * variable-size statements, each starting with a word-sized action tag. */
+ * variable-size statements, each starting with a word-sized action tag
+ * followed by the action's payload (`LOAD_STATEMENT_SIZE` = word + payload). */
 #[repr(C)]
 #[derive(Copy, Clone)]
-union LoadStatement {
+struct LoadStatement {
     action: word_t,
+    payload: Payload,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+union Payload {
     open: Open,
     mmap: Mmap,
     make_stack_exec: MakeStackExec,
@@ -189,6 +196,7 @@ pub unsafe extern "C" fn _start(cursor: word_t) -> ! {
     loop {
         let stmt = cursor as *const LoadStatement;
         let action = (*stmt).action;
+        let payload = &(*stmt).payload;
         let advance;
 
         match action {
@@ -198,7 +206,7 @@ pub unsafe extern "C" fn _start(cursor: word_t) -> ! {
                         fatal();
                     }
                 }
-                fd = syscall3(NR_OPEN, (*stmt).open.string_address, O_RDONLY, 0);
+                fd = syscall3(NR_OPEN, payload.open.string_address, O_RDONLY, 0);
                 if (fd as isize) < 0 {
                     fatal();
                 }
@@ -206,7 +214,7 @@ pub unsafe extern "C" fn _start(cursor: word_t) -> ! {
                 advance = core::mem::size_of::<word_t>() + core::mem::size_of::<Open>();
             }
             LOAD_ACTION_MMAP_FILE | LOAD_ACTION_MMAP_ANON => {
-                let m = (*stmt).mmap;
+                let m = payload.mmap;
                 let anon = action == LOAD_ACTION_MMAP_ANON;
                 let ret = syscall6(
                     NR_MMAP,
@@ -235,7 +243,7 @@ pub unsafe extern "C" fn _start(cursor: word_t) -> ! {
             LOAD_ACTION_MAKE_STACK_EXEC => {
                 syscall3(
                     NR_MPROTECT,
-                    (*stmt).make_stack_exec.start,
+                    payload.make_stack_exec.start,
                     1,
                     PROT_READ | PROT_WRITE | PROT_EXEC | PROT_GROWSDOWN,
                 );
@@ -243,7 +251,7 @@ pub unsafe extern "C" fn _start(cursor: word_t) -> ! {
                     core::mem::size_of::<word_t>() + core::mem::size_of::<MakeStackExec>();
             }
             LOAD_ACTION_START | LOAD_ACTION_START_TRACED => {
-                let s = (*stmt).start;
+                let s = payload.start;
                 if action == LOAD_ACTION_START_TRACED {
                     traced = true;
                 }

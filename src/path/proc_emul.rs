@@ -64,12 +64,24 @@ pub fn readlink_proc(
     let comparison = compare_paths(proc_path.as_bytes(), base);
     match comparison {
         Comparison::PathsAreEqual => {
-            let known = crate::tracee::get_tracee(pid, false);
-            let known = match known {
-                Some(t) => t,
-                None => return Ok(Action::Default),
-            };
-            let known = known.borrow();
+            // Snapshot the referenced tracee's fields.  When `pid` names the
+            // current tracee its RefCell may already be mutably borrowed by
+            // the caller — use `tracee` directly in that case.
+            let (exe_bytes, cwd_bytes, root_bytes);
+            if pid == tracee.pid {
+                exe_bytes = tracee.exe.as_ref().map(|s| s.as_bytes().to_vec()).unwrap_or_default();
+                cwd_bytes = tracee.fs.borrow().cwd.as_bytes().to_vec();
+                root_bytes = crate::path::binding::get_root(tracee).as_bytes().to_vec();
+            } else {
+                let known = match crate::tracee::get_tracee(pid, false) {
+                    Some(t) => t,
+                    None => return Ok(Action::Default),
+                };
+                let known = known.borrow();
+                exe_bytes = known.exe.as_ref().map(|s| s.as_bytes().to_vec()).unwrap_or_default();
+                cwd_bytes = known.fs.borrow().cwd.as_bytes().to_vec();
+                root_bytes = crate::path::binding::get_root(&known).as_bytes().to_vec();
+            }
 
             macro_rules! substitute {
                 ($name:expr, $string:expr) => {
@@ -84,9 +96,6 @@ pub fn readlink_proc(
                 };
             }
 
-            let exe_bytes = known.exe.as_ref().map(|s| s.as_bytes().to_vec()).unwrap_or_default();
-            let cwd_bytes = known.fs.borrow().cwd.as_bytes().to_vec();
-            let root_bytes = crate::path::binding::get_root(&known).as_bytes().to_vec();
             substitute!(b"exe", &exe_bytes);
             substitute!(b"cwd", &cwd_bytes);
             substitute!(b"root", &root_bytes);

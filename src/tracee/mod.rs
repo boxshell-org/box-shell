@@ -4,6 +4,7 @@ pub mod abi;
 pub mod event;
 pub mod mem;
 pub mod reg;
+pub mod seccomp;
 pub mod statx;
 
 use std::cell::RefCell;
@@ -34,7 +35,9 @@ pub struct FileSystemNameSpace {
 #[derive(Default)]
 pub struct AsPtracer {
     pub nb_ptracees: usize,
-    pub zombies: Vec<crate::tracee::TraceeId>,
+    /// Dummy tracees standing in for dead ptracees until the ptracer
+    /// collects their exit event (not registered in the tracee map).
+    pub zombies: Vec<Rc<RefCell<Tracee>>>,
     pub wait_pid: i32,
     pub wait_options: Word,
     pub waits_in: WaitsIn,
@@ -254,10 +257,7 @@ impl Default for Tracee {
             seccomp_already_handled_enter: false,
             no_new_privs: false,
             seen_execve: false,
-            fs: Rc::new(RefCell::new(FileSystemNameSpace {
-                cwd: crate::fpath::FixedPath::from_bytes(b"/"),
-                ..FileSystemNameSpace::default()
-            })),
+            fs: Rc::new(RefCell::new(FileSystemNameSpace::default())),
             heap: Rc::new(RefCell::new(Heap::default())),
             exe: None,
             new_exe: None,
@@ -320,13 +320,36 @@ pub fn get_tracee(pid: i32, create: bool) -> Option<Rc<RefCell<Tracee>>> {
 }
 
 /// Iterating helper: runs `f` on each live tracee (snapshot of pids).
+/// Safe to call from atexit/signal contexts: no-ops once TLS is dead.
 pub fn for_each_tracee(mut f: impl FnMut(Rc<RefCell<Tracee>>)) {
-    let pids: Vec<i32> = TRACEE_ORDER.with(|o| o.borrow().clone());
+    let pids: Vec<i32> = match TRACEE_ORDER.try_with(|o| o.borrow().clone()) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
     for pid in pids {
-        if let Some(rc) = get_tracee(pid, false) {
+        if let Ok(Some(rc)) = TRACEES.try_with(|t| t.borrow().get(&pid).cloned()) {
             f(rc);
         }
     }
+}
+
+/// Register an already-allocated tracee Rc under `pid` (used at launch, when
+/// the tracee object exists before its pid is known).
+pub fn register_existing(rc: &Rc<RefCell<Tracee>>, pid: i32) {
+    TRACEES.with(|m| m.borrow_mut().insert(pid, rc.clone()));
+    TRACEE_ORDER.with(|o| o.borrow_mut().push(pid));
+}
+
+/// Remove the registry entry for `pid` without terminating the tracee
+/// (used when re-keying the placeholder pid at launch).
+pub fn unregister(pid: i32) {
+    TRACEES.with(|m| m.borrow_mut().remove(&pid));
+    TRACEE_ORDER.with(|o| o.borrow_mut().retain(|&p| p != pid));
+}
+
+/// Snapshot of all registered tracee pids.
+pub fn all_pids() -> Vec<i32> {
+    TRACEE_ORDER.with(|o| o.borrow().clone())
 }
 
 pub fn tracee_count() -> usize {
@@ -369,26 +392,141 @@ pub fn terminate_tracee(pid: i32) {
     });
 }
 
-/// Reap terminated tracees: drop their registry entries and unlink auxv
-/// bindings etc.  The single-threaded event loop is the only caller.
+/// Reap terminated tracees — port of `remove_tracee()` + the
+/// `free_terminated_tracees()` sweep.  Besides dropping registry entries
+/// this orphans children, releases ptracees, zombifies dead ptracees that
+/// still owe their ptracer an event, and wakes idle ptracers.
 pub fn free_terminated_tracees() {
-    let dead: Vec<i32> = TRACEES.with(|map| {
+    let dead: Vec<Rc<RefCell<Tracee>>> = TRACEES.with(|map| {
         map.borrow()
             .values()
             .filter(|rc| rc.borrow().terminated)
-            .map(|rc| rc.borrow().pid)
+            .cloned()
             .collect()
     });
-    for pid in dead {
-        // Give extensions a chance to release per-tracee state.
-        if let Some(rc) = get_tracee(pid, false) {
-            let mut t = rc.borrow_mut();
-            let exts = std::mem::take(&mut t.extensions);
-            drop(t);
-            drop(exts);
+    for rc in dead {
+        remove_tracee(&rc);
+        TRACEES.with(|m| m.borrow_mut().remove(&rc.borrow().pid));
+        TRACEE_ORDER.with(|o| o.borrow_mut().retain(|&p| p != rc.borrow().pid));
+    }
+}
+
+/// `remove_tracee()` — the C talloc destructor.
+fn remove_tracee(tracee_rc: &Rc<RefCell<Tracee>>) {
+    let dead_pid = tracee_rc.borrow().pid;
+
+    // Orphan this tracee's children and free the processes it traced.
+    let pids = all_pids();
+    for pid in pids {
+        if pid == dead_pid {
+            continue;
         }
-        TRACEES.with(|m| m.borrow_mut().remove(&pid));
-        TRACEE_ORDER.with(|o| o.borrow_mut().retain(|&p| p != pid));
+        let relative_rc = match get_tracee(pid, false) {
+            Some(r) => r,
+            None => continue,
+        };
+        let mut relative = relative_rc.borrow_mut();
+
+        // Its children are now orphan.
+        if relative.parent == dead_pid {
+            relative.parent = 0;
+        }
+
+        // Its tracees are now free.
+        if relative.as_ptracee.ptracer == dead_pid {
+            relative.as_ptracee.ptracer = 0;
+            if relative.as_ptracee.event4.proot.pending {
+                let event = relative.as_ptracee.event4.proot.value;
+                drop(relative);
+                let ev = crate::tracee::event::handle_tracee_event(&relative_rc, event);
+                crate::tracee::event::restart_tracee(&relative_rc, ev);
+            } else if relative.as_ptracee.event4.ptracer.pending {
+                let event = relative.as_ptracee.event4.proot.value;
+                drop(relative);
+                crate::tracee::event::restart_tracee(&relative_rc, event);
+            }
+        }
+    }
+
+    let ptracer_pid = tracee_rc.borrow().as_ptracee.ptracer;
+    if ptracer_pid == 0 {
+        // Give extensions a chance to release per-tracee state.
+        let mut t = tracee_rc.borrow_mut();
+        let exts = std::mem::take(&mut t.extensions);
+        drop(t);
+        drop(exts);
+        return;
+    }
+
+    // Zombify this ptracee until its ptracer collects its death event.
+    {
+        let t = tracee_rc.borrow();
+        let ev = t.as_ptracee.event4.ptracer.value;
+        if t.as_ptracee.event4.ptracer.pending
+            && (libc::WIFEXITED(ev) || libc::WIFSIGNALED(ev))
+        {
+            if let Some(ptracer_rc) = get_tracee(ptracer_pid, false) {
+                let zombie = Rc::new(RefCell::new(Tracee {
+                    pid: dead_pid,
+                    parent: t.parent,
+                    is_clone: t.is_clone,
+                    ..Tracee::default()
+                }));
+                detach_from_ptracer(dead_pid);
+                zombie.borrow_mut().as_ptracee.ptracer = ptracer_pid;
+                {
+                    let mut p = ptracer_rc.borrow_mut();
+                    p.as_ptracer.zombies.push(zombie.clone());
+                    p.as_ptracer.nb_ptracees += 1;
+                }
+                let mut z = zombie.borrow_mut();
+                z.as_ptracee.event4.ptracer.pending = true;
+                z.as_ptracee.event4.ptracer.value = ev;
+                z.as_ptracee.is_zombie = true;
+                drop(z);
+                drop(t);
+                // Extensions are dropped with the tracee below.
+                let mut t2 = tracee_rc.borrow_mut();
+                drop(std::mem::take(&mut t2.extensions));
+                return;
+            }
+        }
+    }
+
+    detach_from_ptracer(dead_pid);
+
+    // Wake its ptracer if there's nothing else to wait for.
+    if let Some(ptracer_rc) = get_tracee(ptracer_pid, false) {
+        let mut ptracer = ptracer_rc.borrow_mut();
+        if ptracer.as_ptracer.nb_ptracees == 0 && ptracer.as_ptracer.wait_pid != 0 {
+            crate::tracee::reg::poke_reg(
+                &mut ptracer,
+                Reg::SysargResult,
+                (-(libc::ECHILD as i64)) as Word,
+            );
+            let _ = crate::tracee::reg::push_regs(&mut ptracer);
+            ptracer.as_ptracer.wait_pid = 0;
+            drop(ptracer);
+            crate::tracee::event::restart_tracee(&ptracer_rc, 0);
+        }
+    }
+
+    let mut t = tracee_rc.borrow_mut();
+    drop(std::mem::take(&mut t.extensions));
+}
+
+/// `detach_from_ptracer()` — clear the ptracee's tracer and decrement
+/// the tracer's ptracee count (no-op when the tracer is gone).
+pub fn detach_from_ptracer(ptracee_pid: i32) {
+    let ptracer_pid = with_tracee(ptracee_pid, |t| t.as_ptracee.ptracer)
+        .unwrap_or(0);
+    with_tracee_mut(ptracee_pid, |t| t.as_ptracee.ptracer = 0);
+    if ptracer_pid != 0 {
+        with_tracee_mut(ptracer_pid, |p| {
+            if p.as_ptracer.nb_ptracees > 0 {
+                p.as_ptracer.nb_ptracees -= 1;
+            }
+        });
     }
 }
 

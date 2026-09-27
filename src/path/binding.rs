@@ -279,8 +279,18 @@ pub fn new_binding(
     Some(rc)
 }
 
-fn io_error_string(errno: i32) -> String {
-    std::io::Error::from_raw_os_error(errno).to_string()
+pub fn io_error_string(errno: i32) -> String {
+    crate::strerror(errno)
+}
+
+/// `remove_binding_from_all_lists()` — drop a binding from every list of
+/// every tracee sharing this file-system namespace (guest, host, pending).
+pub fn remove_binding_from_all_lists(tracee: &Tracee, binding: &Rc<Binding>) {
+    let target = Rc::as_ptr(binding) as usize;
+    let mut fs = tracee.fs.borrow_mut();
+    fs.guest.retain(|b| Rc::as_ptr(b) as usize != target);
+    fs.host.retain(|b| Rc::as_ptr(b) as usize != target);
+    fs.pending.retain(|b| Rc::as_ptr(b) as usize != target);
 }
 
 /// `initialize_binding()` — canonicalize the guest side and promote the
@@ -363,11 +373,14 @@ pub fn initialize_binding(tracee: &mut Tracee, binding: &Rc<Binding>) {
     }
 }
 
-/// `initialize_bindings()` — promote every pending binding.
+/// `initialize_bindings()` — promote every pending binding, in reverse
+/// order: the binding to "/" (the deepest in the pending list) goes first
+/// since it bootstraps the canonicalization of all the others.
 pub fn initialize_bindings(tracee: &mut Tracee) {
     let pending: Vec<Rc<Binding>> = tracee.fs.borrow().pending.clone();
-    for b in pending {
-        initialize_binding(tracee, &b);
+    for b in pending.iter().rev() {
+        initialize_binding(tracee, b);
+        // TODO: add_induced_bindings() for sub-reconfiguration contexts.
     }
     tracee.fs.borrow_mut().pending.clear();
 }

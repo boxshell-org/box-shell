@@ -1,5 +1,7 @@
 //! execve(2) subsystem — port of src/execve/*.
 
+pub mod aoxp;
+pub mod auxv;
 pub mod elf;
 pub mod enter;
 pub mod exit;
@@ -7,6 +9,8 @@ pub mod ldso;
 pub mod shebang;
 
 pub use elf::{ElfHeader, ProgramHeader};
+pub use enter::translate_execve_enter;
+pub use exit::translate_execve_exit;
 
 use crate::fpath::FixedPath;
 use crate::tracee::Tracee;
@@ -27,6 +31,7 @@ pub struct Mapping {
 
 /// `struct load_info` — everything execve-enter computes and execve-exit
 /// (or the embedded loader) consumes.
+#[derive(Clone)]
 pub struct LoadInfo {
     pub host_path: String,
     pub user_path: String,

@@ -29,3 +29,12 @@ pub const NAME_MAX: usize = 255;
 
 /// Guest-visible mount point of the host rootfs in QEMU/mixed mode.
 pub const HOST_ROOTFS: &str = "/host-rootfs";
+
+/// `strerror()` — human-readable errno text.
+pub fn strerror(errno: i32) -> String {
+    unsafe {
+        std::ffi::CStr::from_ptr(libc::strerror(errno))
+            .to_string_lossy()
+            .into_owned()
+    }
+}

@@ -52,8 +52,7 @@ pub fn note(severity: Severity, origin: Origin, args: std::fmt::Arguments) {
     eprint!("{}", args);
     match origin {
         Origin::System => {
-            let err = std::io::Error::last_os_error();
-            eprintln!(": {}", err);
+            eprintln!(": {}", crate::strerror(crate::path::errno()));
         }
         _ => eprintln!(),
     }
@@ -63,10 +62,16 @@ pub fn note(severity: Severity, origin: Origin, args: std::fmt::Arguments) {
 /// tracee when present, otherwise from the global level.
 #[macro_export]
 macro_rules! note {
-    ($severity:expr, $origin:expr, $($arg:tt)*) => {{
+    // The tracee-prefixed form is matched on the literal `Some(...)` token —
+    // otherwise the two forms are ambiguous at the syntax level.
+    (Some($tracee:expr), $severity:expr, $origin:expr, $($arg:tt)*) => {{
+        let _ = $tracee;
         $crate::note::note($severity, $origin, format_args!($($arg)*))
     }};
-    ($tracee:expr, $severity:expr, $origin:expr, $($arg:tt)*) => {{
+    (None, $severity:expr, $origin:expr, $($arg:tt)*) => {{
+        $crate::note::note($severity, $origin, format_args!($($arg)*))
+    }};
+    ($severity:expr, $origin:expr, $($arg:tt)*) => {{
         $crate::note::note($severity, $origin, format_args!($($arg)*))
     }};
 }

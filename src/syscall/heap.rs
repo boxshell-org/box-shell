@@ -25,6 +25,17 @@ pub struct Heap {
     pub disabled: bool,
 }
 
+impl Heap {
+    /// `talloc_memdup` equivalent for the non-CLONE_VM fork case.
+    pub fn clone_heap(&self) -> Heap {
+        Heap {
+            base: self.base,
+            size: self.size,
+            disabled: self.disabled,
+        }
+    }
+}
+
 /// `translate_brk_enter()`.
 pub fn translate_brk_enter(tracee: &mut Tracee) {
     if tracee.heap.borrow().disabled {

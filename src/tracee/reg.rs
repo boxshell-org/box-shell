@@ -191,8 +191,7 @@ pub fn save_current_regs(tracee: &mut Tracee, version: RegVersion) {
 /// `fetch_regs()` — refresh the CURRENT bank from the kernel.
 pub fn fetch_regs(tracee: &mut Tracee) -> i32 {
     let status = unsafe {
-        libc::ptrace(
-            libc::PTRACE_GETREGS,
+        libc::ptrace(crate::ptrace::ptc::PTRACE_GETREGS as u32,
             tracee.pid,
             std::ptr::null_mut::<libc::c_void>(),
             &mut tracee.regs[RegVersion::Current.idx()] as *mut _ as *mut libc::c_void,
@@ -233,8 +232,7 @@ pub fn push_specific_regs(tracee: &mut Tracee, including_sysnum: bool) -> i32 {
         // register set pushed by PTRACE_SETREGS anyway.
         let _ = including_sysnum;
         let status = unsafe {
-            libc::ptrace(
-                libc::PTRACE_SETREGS,
+            libc::ptrace(crate::ptrace::ptc::PTRACE_SETREGS as u32,
                 tracee.pid,
                 std::ptr::null_mut::<libc::c_void>(),
                 &tracee.regs[RegVersion::Current.idx()] as *const _ as *const libc::c_void,

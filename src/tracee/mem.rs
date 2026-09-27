@@ -10,7 +10,7 @@ use crate::Word;
 fn ptrace_peekdata(pid: i32, addr: Word) -> Result<Word, i32> {
     unsafe {
         *errno_ptr() = 0;
-        let v = libc::ptrace(libc::PTRACE_PEEKDATA, pid, addr as usize, 0usize);
+        let v = libc::ptrace(crate::ptrace::ptc::PTRACE_PEEKDATA as u32, pid, addr as usize, 0usize);
         let e = *errno_ptr();
         if e != 0 {
             return Err(if e == libc::EIO { libc::EFAULT } else { e });
@@ -22,7 +22,7 @@ fn ptrace_peekdata(pid: i32, addr: Word) -> Result<Word, i32> {
 fn ptrace_pokedata(pid: i32, addr: Word, value: Word) -> Result<(), i32> {
     unsafe {
         *errno_ptr() = 0;
-        libc::ptrace(libc::PTRACE_POKEDATA, pid, addr as usize, value as usize);
+        libc::ptrace(crate::ptrace::ptc::PTRACE_POKEDATA as u32, pid, addr as usize, value as usize);
         let e = *errno_ptr();
         if e != 0 {
             return Err(if e == libc::EIO { libc::EFAULT } else { e });
@@ -259,6 +259,52 @@ pub fn poke_word(tracee: &Tracee, address: Word, value: Word) {
     let _ = ptrace_pokedata(tracee.pid, address, v);
 }
 
+/// `peek_uint32()` — read 4 bytes; errno carries the failure.
+pub fn peek_uint32(tracee: &Tracee, address: Word) -> u32 {
+    let mut buf = [0u8; 4];
+    if process_vm_read(tracee.pid, &mut buf, address) == 4 {
+        return u32::from_ne_bytes(buf);
+    }
+    match ptrace_peekdata(tracee.pid, address) {
+        Ok(w) => w as u32,
+        Err(_) => 0,
+    }
+}
+
+/// `poke_uint32()` — write 4 bytes; errno carries the failure.
+pub fn poke_uint32(tracee: &Tracee, address: Word, value: u32) {
+    let buf = value.to_ne_bytes();
+    if process_vm_write(tracee.pid, &buf, address) == 4 {
+        return;
+    }
+    if let Ok(old) = ptrace_peekdata(tracee.pid, address) {
+        let v = (old & 0xFFFF_FFFF_0000_0000) | value as u64;
+        let _ = ptrace_pokedata(tracee.pid, address, v);
+    }
+}
+
+/// `peek_int32()`.
+pub fn peek_int32(tracee: &Tracee, address: Word) -> i32 {
+    peek_uint32(tracee, address) as i32
+}
+
+/// `poke_int32()`.
+pub fn poke_int32(tracee: &Tracee, address: Word, value: i32) {
+    poke_uint32(tracee, address, value as u32)
+}
+
+/// `peek_uint64()`.
+pub fn peek_uint64(tracee: &Tracee, address: Word) -> u64 {
+    let mut buf = [0u8; 8];
+    if process_vm_read(tracee.pid, &mut buf, address) == 8 {
+        return u64::from_ne_bytes(buf);
+    }
+    match ptrace_peekdata(tracee.pid, address) {
+        Ok(w) => w as u64,
+        Err(_) => 0,
+    }
+}
+
 /// `alloc_mem()` — grow the tracee stack downward by `size` bytes.
 pub fn alloc_mem(tracee: &mut Tracee, size: i64) -> Word {
     debug_assert!(crate::tracee::is_in_sysenter(tracee));
@@ -284,6 +330,13 @@ pub fn clear_mem(tracee: &Tracee, address: Word, size: usize) -> i32 {
     let zeros = vec![0u8; size];
     write_data(tracee, address, &zeros)
 }
+
+/// `mem_prepare_after_execve()` — on x86_64 the only post-execve work was
+/// the pokedata-workaround stub, which doesn't apply; kept for parity.
+pub fn mem_prepare_after_execve(_tracee: &mut Tracee) {}
+
+/// `mem_prepare_before_first_execve()` — see above.
+pub fn mem_prepare_before_first_execve(_tracee: &mut Tracee) {}
 
 /// `read_path()` — read a NUL-terminated path (PATH_MAX bound) from the
 /// tracee.

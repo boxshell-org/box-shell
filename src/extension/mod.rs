@@ -184,6 +184,20 @@ pub fn has_extension(tracee: &Tracee, pred: impl Fn(&AnyExtension) -> bool) -> b
     tracee.extensions.iter().flatten().any(pred)
 }
 
+/// `TALLOC_FREE(extension)` — fire REMOVED on matching extensions and drop
+/// them from `tracee.extensions`.
+pub fn remove_extension(tracee: &mut Tracee, pred: impl Fn(&AnyExtension) -> bool) {
+    for i in 0..tracee.extensions.len() {
+        let matches = tracee.extensions[i].as_ref().map(|e| pred(e)).unwrap_or(false);
+        if matches {
+            if let Some(mut ext) = tracee.extensions[i].take() {
+                ext.notify(tracee, &mut Event::Removed);
+            }
+        }
+    }
+    tracee.extensions.retain(|e| e.is_some());
+}
+
 /// `inherit_extensions()` — clone-attach the parent's extensions to `child`
 /// according to each extension's inheritability policy.
 pub fn inherit_extensions(child: &mut Tracee, parent: &mut Tracee, clone_flags: Word) {

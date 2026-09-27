@@ -66,10 +66,12 @@ pub fn compare_paths2(path1: &[u8], path2: &[u8]) -> Comparison {
     if path2[length2 - 1] == b'/' {
         length2 -= 1;
     }
+    // C reads the byte right after the shortest path — its NUL terminator
+    // when lengths are equal.
     let (length_min, sentinel) = if length1 < length2 {
         (length1, path2[length1])
     } else {
-        (length2, path1[length2])
+        (length2, path1.get(length2).copied().unwrap_or(0))
     };
     if sentinel != b'/' && sentinel != 0 {
         return Comparison::PathsAreNotComparable;

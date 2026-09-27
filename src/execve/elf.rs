@@ -297,7 +297,7 @@ pub fn iterate_program_headers(
             return -libc::EIO;
         }
         let status = cb(elf_header, &phdr);
-        if status < 0 {
+        if status != 0 {
             return status;
         }
     }
