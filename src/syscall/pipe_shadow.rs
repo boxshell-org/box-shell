@@ -5,6 +5,11 @@
 //! close first — the child's write() then gets EPIPE.  The tracer opens a
 //! shadow read reference via /proc/<pid>/fd/<fd> and releases it once the
 //! race window is over (POLLHUP, would-block writer, or max age).
+//!
+//! All state is thread-local: the event loop is single-threaded, so plain
+//! `Cell`/`RefCell` covers it without `static mut`.
+
+use std::cell::{Cell, RefCell};
 
 const MAX_SHADOW_PIPES: usize = 32;
 const SHADOW_MAX_AGE_MS: i64 = 1000;
@@ -12,43 +17,49 @@ const SHADOW_TIMER_MS: i64 = 50;
 const SHADOW_REAP_INTERVAL_MS: i64 = SHADOW_TIMER_MS / 2;
 const F_GETPIPE_SZ: i32 = 1032;
 
+#[derive(Copy, Clone)]
 struct Shadow {
     fd: i32,
     birth: libc::timespec,
 }
 
-static mut SHADOWS: [Shadow; MAX_SHADOW_PIPES] = {
-    const S: Shadow = Shadow {
-        fd: -1,
-        birth: libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        },
-    };
-    [S; MAX_SHADOW_PIPES]
-};
-static mut SHADOWS_HELD: i32 = 0;
-static mut LAST_REAP: libc::timespec = libc::timespec {
-    tv_sec: 0,
-    tv_nsec: 0,
+const EMPTY_SHADOW: Shadow = Shadow {
+    fd: -1,
+    birth: libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    },
 };
 
+thread_local! {
+    static SHADOWS: RefCell<[Shadow; MAX_SHADOW_PIPES]> =
+        const { RefCell::new([EMPTY_SHADOW; MAX_SHADOW_PIPES]) };
+    static SHADOWS_HELD: Cell<i32> = const { Cell::new(0) };
+    static LAST_REAP: Cell<libc::timespec> = const {
+        Cell::new(libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        })
+    };
+    static TIMER_ARMED: Cell<bool> = const { Cell::new(false) };
+}
+
 fn elapsed_ms(since: &libc::timespec) -> i64 {
-    let mut now: libc::timespec = unsafe { std::mem::zeroed() };
-    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } < 0 {
-        return 0;
-    }
+    let now = match crate::sys::clock_gettime(libc::CLOCK_MONOTONIC) {
+        Ok(t) => t,
+        Err(_) => return 0,
+    };
     (now.tv_sec - since.tv_sec) * 1000 + (now.tv_nsec - since.tv_nsec) / 1_000_000
 }
 
 /// `writer_would_block()` — the pipe is too full for a writer to proceed.
 fn writer_would_block(fd: i32) -> bool {
-    let capacity = unsafe { libc::fcntl(fd, F_GETPIPE_SZ) };
+    let capacity = crate::sys::fcntl(fd, F_GETPIPE_SZ, 0);
     if capacity <= 0 {
         return false;
     }
     let mut buffered: libc::c_int = 0;
-    if unsafe { libc::ioctl(fd, libc::FIONREAD, &mut buffered) } < 0 {
+    if crate::sys::ioctl_val(fd, libc::FIONREAD, &mut buffered) < 0 {
         return false;
     }
     buffered as i64
@@ -62,71 +73,66 @@ fn writer_would_block(fd: i32) -> bool {
 /// `shadow_pipe_read_end()` — open a tracer-side read reference to the
 /// tracee's pipe-read fd about to be closed.
 pub fn shadow_pipe_read_end(tracee_pid: i32, tracee_fd: i32) {
-    unsafe {
-        // Anonymous pipe?
-        let path = format!("/proc/{}/fd/{}", tracee_pid, tracee_fd);
-        let link = match std::fs::read_link(&path) {
-            Ok(l) => l,
-            Err(_) => return,
-        };
-        if !link.as_os_str().as_encoded_bytes().starts_with(b"pipe:[") {
-            return;
-        }
-
-        // Read end only (O_RDONLY in O_ACCMODE).
-        let info =
-            match std::fs::read_to_string(format!("/proc/{}/fdinfo/{}", tracee_pid, tracee_fd)) {
-                Ok(t) => t,
-                Err(_) => return,
-            };
-        let mut flags: u64 = 1;
-        for line in info.lines() {
-            if let Some(v) = line.strip_prefix("flags:") {
-                flags = u64::from_str_radix(v.trim(), 8).unwrap_or(1);
-                break;
-            }
-        }
-        if (flags & libc::O_ACCMODE as u64) != libc::O_RDONLY as u64 {
-            return;
-        }
-
-        let slot = match (*std::ptr::addr_of!(SHADOWS))
-            .iter()
-            .position(|s| s.fd == -1)
-        {
-            Some(s) => s,
-            None => return,
-        };
-
-        let c = std::ffi::CString::new(path).unwrap();
-        let fd = libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
-        if fd < 0 {
-            return;
-        }
-        SHADOWS[slot].fd = fd;
-        let _ = libc::clock_gettime(
-            libc::CLOCK_MONOTONIC,
-            &mut (*std::ptr::addr_of_mut!(SHADOWS))[slot].birth,
-        );
-        SHADOWS_HELD += 1;
+    // Anonymous pipe?
+    let path = format!("/proc/{}/fd/{}", tracee_pid, tracee_fd);
+    let link = match std::fs::read_link(&path) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    if !link.as_os_str().as_encoded_bytes().starts_with(b"pipe:[") {
+        return;
     }
+
+    // Read end only (O_RDONLY in O_ACCMODE).
+    let info = match std::fs::read_to_string(format!("/proc/{}/fdinfo/{}", tracee_pid, tracee_fd)) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    let mut flags: u64 = 1;
+    for line in info.lines() {
+        if let Some(v) = line.strip_prefix("flags:") {
+            flags = u64::from_str_radix(v.trim(), 8).unwrap_or(1);
+            break;
+        }
+    }
+    if (flags & libc::O_ACCMODE as u64) != libc::O_RDONLY as u64 {
+        return;
+    }
+
+    let slot = match SHADOWS.with(|s| s.borrow().iter().position(|sh| sh.fd == -1)) {
+        Some(s) => s,
+        None => return,
+    };
+
+    let c = std::ffi::CString::new(path).unwrap();
+    let fd = crate::sys::open(&c, libc::O_RDONLY | libc::O_CLOEXEC, 0);
+    if fd < 0 {
+        return;
+    }
+    SHADOWS.with(|s| {
+        let mut shadows = s.borrow_mut();
+        shadows[slot].fd = fd;
+        shadows[slot].birth = crate::sys::clock_gettime(libc::CLOCK_MONOTONIC)
+            .unwrap_or_else(|_| crate::sys::zeroed());
+    });
+    SHADOWS_HELD.with(|h| h.set(h.get() + 1));
 }
 
 /// `shadow_pipes_reap()` — release shadows that can no longer help.
 pub fn reap() {
-    unsafe {
-        if SHADOWS_HELD == 0 {
-            return;
-        }
-        if elapsed_ms(&*std::ptr::addr_of!(LAST_REAP)) < SHADOW_REAP_INTERVAL_MS {
-            return;
-        }
-        let _ = libc::clock_gettime(
-            libc::CLOCK_MONOTONIC,
-            &mut *std::ptr::addr_of_mut!(LAST_REAP),
-        );
+    if SHADOWS_HELD.with(|h| h.get()) == 0 {
+        return;
+    }
+    if LAST_REAP.with(|l| elapsed_ms(&l.get())) < SHADOW_REAP_INTERVAL_MS {
+        return;
+    }
+    if let Ok(now) = crate::sys::clock_gettime(libc::CLOCK_MONOTONIC) {
+        LAST_REAP.with(|l| l.set(now));
+    }
 
-        for shadow in (*std::ptr::addr_of_mut!(SHADOWS)).iter_mut() {
+    SHADOWS.with(|s| {
+        let mut shadows = s.borrow_mut();
+        for shadow in shadows.iter_mut() {
             if shadow.fd < 0 {
                 continue;
             }
@@ -135,38 +141,36 @@ pub fn reap() {
                 events: 0,
                 revents: 0,
             };
-            let hup = libc::poll(&mut pfd, 1, 0) > 0 && (pfd.revents & libc::POLLHUP) != 0;
+            let hup = crate::sys::poll(std::slice::from_mut(&mut pfd), 0) > 0
+                && (pfd.revents & libc::POLLHUP) != 0;
             if hup
                 || writer_would_block(shadow.fd)
                 || elapsed_ms(&shadow.birth) >= SHADOW_MAX_AGE_MS
             {
-                libc::close(shadow.fd);
+                crate::sys::close(shadow.fd);
                 shadow.fd = -1;
-                SHADOWS_HELD -= 1;
+                SHADOWS_HELD.with(|h| h.set(h.get() - 1));
             }
         }
-    }
+    });
 }
 
 /// `shadow_pipes_held()`.
 pub fn held() -> bool {
-    unsafe { SHADOWS_HELD > 0 }
+    SHADOWS_HELD.with(|h| h.get()) > 0
 }
 
 /// `shadow_pipes_set_timer()` — arm/disarm the SIGALRM wakeup.
 pub fn set_timer(enabled: bool) {
-    static mut ARMED: bool = false;
-    unsafe {
-        if !enabled && !ARMED {
-            return;
-        }
-        let mut timer: libc::itimerval = std::mem::zeroed();
-        if enabled {
-            timer.it_value.tv_usec = SHADOW_TIMER_MS * 1000;
-        }
-        if libc::setitimer(libc::ITIMER_REAL, &timer, std::ptr::null_mut()) < 0 {
-            return;
-        }
-        ARMED = enabled;
+    if !enabled && !TIMER_ARMED.with(|a| a.get()) {
+        return;
     }
+    let mut timer: libc::itimerval = crate::sys::zeroed();
+    if enabled {
+        timer.it_value.tv_usec = SHADOW_TIMER_MS * 1000;
+    }
+    if crate::sys::setitimer(libc::ITIMER_REAL, &timer) < 0 {
+        return;
+    }
+    TIMER_ARMED.with(|a| a.set(enabled));
 }

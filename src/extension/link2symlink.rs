@@ -111,12 +111,11 @@ fn open_l2s_directory() -> i32 {
         Ok(c) => c,
         Err(_) => return -libc::ENOENT,
     };
-    let fd = unsafe {
-        libc::open(
-            c.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
+    let fd = crate::sys::open(
+        &c,
+        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0,
+    );
     if fd < 0 {
         let e = crate::path::errno();
         return if e > 0 { -e } else { -libc::ENOENT };
@@ -160,12 +159,10 @@ fn l2s_access(path: &[u8]) -> i32 {
         Err(e) => return -e,
     };
     let c = CString::new(name).unwrap_or_default();
-    let r = unsafe {
-        if dir_fd < 0 {
-            libc::access(c.as_ptr(), libc::F_OK)
-        } else {
-            libc::faccessat(dir_fd, c.as_ptr(), libc::F_OK, 0)
-        }
+    let r = if dir_fd < 0 {
+        crate::sys::access(&c, libc::F_OK)
+    } else {
+        crate::sys::faccessat(dir_fd, &c, libc::F_OK, 0)
     };
     if r < 0 { -path_errno() } else { 0 }
 }
@@ -177,12 +174,10 @@ fn l2s_symlink(target: &[u8], path: &[u8]) -> i32 {
     };
     let t = CString::new(target).unwrap_or_default();
     let n = CString::new(name).unwrap_or_default();
-    let r = unsafe {
-        if dir_fd < 0 {
-            libc::symlink(t.as_ptr(), n.as_ptr())
-        } else {
-            libc::symlinkat(t.as_ptr(), dir_fd, n.as_ptr())
-        }
+    let r = if dir_fd < 0 {
+        crate::sys::symlink(&t, &n)
+    } else {
+        crate::sys::symlinkat(&t, dir_fd, &n)
     };
     if r < 0 { -path_errno() } else { 0 }
 }
@@ -193,12 +188,10 @@ fn l2s_unlink(path: &[u8]) -> i32 {
         Err(e) => return -e,
     };
     let c = CString::new(name).unwrap_or_default();
-    let r = unsafe {
-        if dir_fd < 0 {
-            libc::unlink(c.as_ptr())
-        } else {
-            libc::unlinkat(dir_fd, c.as_ptr(), 0)
-        }
+    let r = if dir_fd < 0 {
+        crate::sys::unlink(&c)
+    } else {
+        crate::sys::unlinkat(dir_fd, &c, 0)
     };
     if r < 0 { -path_errno() } else { 0 }
 }
@@ -214,19 +207,17 @@ fn l2s_rename(old_path: &[u8], new_path: &[u8]) -> i32 {
     };
     let o = CString::new(old_name).unwrap_or_default();
     let n = CString::new(new_name).unwrap_or_default();
-    let r = unsafe {
-        if old_dir < 0 && new_dir < 0 {
-            libc::rename(o.as_ptr(), n.as_ptr())
-        } else {
-            // An absolute path with AT_FDCWD is the side that isn't in
-            // the l2s directory.
-            libc::renameat(
-                if old_dir < 0 { libc::AT_FDCWD } else { old_dir },
-                o.as_ptr(),
-                if new_dir < 0 { libc::AT_FDCWD } else { new_dir },
-                n.as_ptr(),
-            )
-        }
+    let r = if old_dir < 0 && new_dir < 0 {
+        crate::sys::rename(&o, &n)
+    } else {
+        // An absolute path with AT_FDCWD is the side that isn't in
+        // the l2s directory.
+        crate::sys::renameat(
+            if old_dir < 0 { libc::AT_FDCWD } else { old_dir },
+            &o,
+            if new_dir < 0 { libc::AT_FDCWD } else { new_dir },
+            &n,
+        )
     };
     if r < 0 { -path_errno() } else { 0 }
 }
@@ -238,12 +229,10 @@ fn my_readlink(symlink: &[u8], value: &mut [u8; PATH_MAX]) -> i32 {
         Err(e) => return -e,
     };
     let c = CString::new(name).unwrap_or_default();
-    let size = unsafe {
-        if dir_fd < 0 {
-            libc::readlink(c.as_ptr(), value.as_mut_ptr() as *mut _, PATH_MAX)
-        } else {
-            libc::readlinkat(dir_fd, c.as_ptr(), value.as_mut_ptr() as *mut _, PATH_MAX)
-        }
+    let size = if dir_fd < 0 {
+        crate::sys::readlink(&c, value)
+    } else {
+        crate::sys::readlinkat(dir_fd, &c, value)
     };
     if size < 0 {
         return -path_errno();
@@ -491,10 +480,10 @@ fn move_and_symlink_path(
 
     // Sanity check: directories can't be linked.
     let c = CString::new(original_b.clone()).unwrap_or_default();
-    let mut statl: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::lstat(c.as_ptr(), &mut statl) } < 0 {
-        return -path_errno();
-    }
+    let statl = match crate::sys::lstat(&c) {
+        Ok(s) => s,
+        Err(e) => return -e,
+    };
     if statl.st_mode & libc::S_IFMT == libc::S_IFDIR {
         return -libc::EPERM;
     }
@@ -581,7 +570,7 @@ fn move_and_symlink_path(
         // Symlink the original path to the intermediate one.
         let i_c = CString::new(intermediate.clone()).unwrap_or_default();
         let o_c = CString::new(original_b.clone()).unwrap_or_default();
-        if unsafe { libc::symlink(i_c.as_ptr(), o_c.as_ptr()) } < 0 {
+        if crate::sys::symlink(&i_c, &o_c) < 0 {
             return -path_errno();
         }
     } else {
@@ -636,7 +625,7 @@ fn move_and_symlink_path(
     if status >= 0 {
         let i_c = CString::new(intermediate.clone()).unwrap_or_default();
         let f_c = CString::new(final_arg.as_bytes()).unwrap_or_default();
-        if unsafe { libc::symlink(i_c.as_ptr(), f_c.as_ptr()) } < 0 {
+        if crate::sys::symlink(&i_c, &f_c) < 0 {
             status = -path_errno();
         }
     }
@@ -671,10 +660,10 @@ fn decrement_link_count(tracee: &mut Tracee, sysarg: Reg) -> i32 {
 
     // Check if it is a converted link already.
     let c = CString::new(original_b.clone()).unwrap_or_default();
-    let mut statl: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::lstat(c.as_ptr(), &mut statl) } < 0 {
-        return 0;
-    }
+    let statl = match crate::sys::lstat(&c) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     if statl.st_mode & libc::S_IFMT != libc::S_IFLNK {
         return 0;
     }
@@ -822,8 +811,7 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut L2sConfig) -> i32 {
 
             // Check if it is a link.
             let c = CString::new(original_b.clone()).unwrap_or_default();
-            let mut statl: libc::stat = unsafe { std::mem::zeroed() };
-            let _ = unsafe { libc::lstat(c.as_ptr(), &mut statl) };
+            let statl = crate::sys::lstat(&c).unwrap_or_else(|_| crate::sys::zeroed());
 
             let name = base_name(&original_b);
             let intermediate;
@@ -856,10 +844,10 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut L2sConfig) -> i32 {
             }
 
             let c = CString::new(final_path.clone()).unwrap_or_default();
-            let mut final_stat: libc::stat = unsafe { std::mem::zeroed() };
-            if unsafe { libc::lstat(c.as_ptr(), &mut final_stat) } < 0 {
-                return -path_errno();
-            }
+            let mut final_stat = match crate::sys::lstat(&c) {
+                Ok(s) => s,
+                Err(e) => return -e,
+            };
             let len = final_path.len();
             final_stat.st_nlink = std::str::from_utf8(&final_path[len - 4..])
                 .ok()
@@ -873,12 +861,7 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut L2sConfig) -> i32 {
                 Reg::Sysarg2
             };
             // non-USERLAND: no mode/uid/gid re-merge.
-            let stat_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &final_stat as *const _ as *const u8,
-                    std::mem::size_of::<libc::stat>(),
-                )
-            };
+            let stat_bytes = crate::sys::as_bytes(&final_stat);
             let size = if is_32on64_mode(tracee) {
                 SIZEOF_RELEVANT_STRUCT_STAT
             } else {
@@ -1004,7 +987,7 @@ fn handle_linkat_from_proc_fd(tracee: &mut Tracee) -> i32 {
     // Ensure the provided path is a symlink to a " (deleted)" file.
     let c = CString::new(proc_path_b.clone()).unwrap_or_default();
     let mut buf = [0u8; PATH_MAX];
-    let status = unsafe { libc::readlink(c.as_ptr(), buf.as_mut_ptr() as *mut _, PATH_MAX) };
+    let status = crate::sys::readlink(&c, &mut buf);
     if status < 10 || status as usize >= PATH_MAX {
         return 0;
     }
@@ -1013,10 +996,10 @@ fn handle_linkat_from_proc_fd(tracee: &mut Tracee) -> i32 {
     }
 
     // Ensure the source is a regular file.
-    let mut stats: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::stat(c.as_ptr(), &mut stats) } != 0 {
-        return 0;
-    }
+    let stats = match crate::sys::stat(&c) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     if stats.st_mode & libc::S_IFMT != libc::S_IFREG {
         return 0;
     }
@@ -1034,34 +1017,32 @@ fn handle_linkat_from_proc_fd(tracee: &mut Tracee) -> i32 {
     let target_b = target_path.as_bytes().to_vec();
 
     // Open the source for reading.
-    let source_fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY) };
+    let source_fd = crate::sys::open(&c, libc::O_RDONLY, 0);
     if source_fd < 0 {
         return 0;
     }
 
     // Point of no return — errors below are propagated.
     let t_c = CString::new(target_b.clone()).unwrap_or_default();
-    unsafe { libc::unlink(t_c.as_ptr()) }; // ignore result
-    let target_fd = unsafe {
-        libc::open(
-            t_c.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
-            stats.st_mode & 0o777,
-        )
-    };
+    crate::sys::unlink(&t_c); // ignore result
+    let target_fd = crate::sys::open(
+        &t_c,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+        stats.st_mode & 0o777,
+    );
     if target_fd < 0 {
         let mut status = -crate::path::errno();
         if status >= 0 {
             status = -libc::EPERM;
         }
-        unsafe { libc::close(source_fd) };
+        crate::sys::close(source_fd);
         return status;
     }
 
     // Copy the contents.
     let mut buf = [0u8; 4096];
     loop {
-        let nread = unsafe { libc::read(source_fd, buf.as_mut_ptr() as *mut _, buf.len()) };
+        let nread = crate::sys::read(source_fd, &mut buf);
         if nread == 0 {
             break;
         }
@@ -1070,39 +1051,27 @@ fn handle_linkat_from_proc_fd(tracee: &mut Tracee) -> i32 {
             if status >= 0 {
                 status = -libc::EPERM;
             }
-            unsafe {
-                libc::close(source_fd);
-                libc::close(target_fd);
-            }
+            crate::sys::close(source_fd);
+            crate::sys::close(target_fd);
             return status;
         }
         let mut pos = 0isize;
         while pos < nread {
-            let nwrite = unsafe {
-                libc::write(
-                    target_fd,
-                    buf.as_ptr().offset(pos) as *const _,
-                    (nread - pos) as usize,
-                )
-            };
+            let nwrite = crate::sys::write(target_fd, &buf[pos as usize..nread as usize]);
             if nwrite <= 0 {
                 let mut status = -crate::path::errno();
                 if status >= 0 {
                     status = -libc::EPERM;
                 }
-                unsafe {
-                    libc::close(source_fd);
-                    libc::close(target_fd);
-                }
+                crate::sys::close(source_fd);
+                crate::sys::close(target_fd);
                 return status;
             }
             pos += nwrite;
         }
     }
-    unsafe {
-        libc::close(source_fd);
-        libc::close(target_fd);
-    }
+    crate::sys::close(source_fd);
+    crate::sys::close(target_fd);
     1
 }
 

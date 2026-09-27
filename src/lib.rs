@@ -13,6 +13,7 @@ pub mod fpath;
 pub mod note;
 pub mod path;
 pub mod ptrace;
+pub mod sys;
 pub mod syscall;
 pub mod sysnum;
 pub mod tracee;

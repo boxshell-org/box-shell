@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 
 use crate::Word;
 use crate::sysnum::Sysnum;
@@ -23,21 +24,37 @@ enum EventmsgState {
     Lost,
 }
 
-static mut SECCOMP_AFTER_PTRACE_ENTER: bool = false;
-static mut SECCOMP_PTRACE_EVENT_SUPPORTED: bool = false;
-static mut EVENTMSG_STATE: EventmsgState = EventmsgState::Unknown;
-static mut SECCOMP_DETECTED: bool = false;
-static mut SECCOMP_AFTER_PTRACE_ENTER_CHECKED: bool = false;
-static mut DELIVER_SIGTRAP: bool = false;
-static mut LAST_EXIT_STATUS: i32 = -1;
+static SECCOMP_AFTER_PTRACE_ENTER: AtomicBool = AtomicBool::new(false);
+static SECCOMP_PTRACE_EVENT_SUPPORTED: AtomicBool = AtomicBool::new(false);
+static EVENTMSG_STATE: AtomicU8 = AtomicU8::new(EventmsgState::Unknown as u8);
+static SECCOMP_DETECTED: AtomicBool = AtomicBool::new(false);
+static SECCOMP_AFTER_PTRACE_ENTER_CHECKED: AtomicBool = AtomicBool::new(false);
+static DELIVER_SIGTRAP: AtomicBool = AtomicBool::new(false);
+static LAST_EXIT_STATUS: AtomicI32 = AtomicI32::new(-1);
+
+impl EventmsgState {
+    fn load() -> EventmsgState {
+        match EVENTMSG_STATE.load(Ordering::Relaxed) {
+            1 => EventmsgState::Reliable,
+            2 => EventmsgState::Lost,
+            _ => EventmsgState::Unknown,
+        }
+    }
+
+    fn store(self) {
+        EVENTMSG_STATE.store(self as u8, Ordering::Relaxed);
+    }
+}
 
 /// Whether the kernel is new enough to generate PTRACE_EVENT_SECCOMP stops.
 fn kernel_supports_ptrace_event_seccomp() -> bool {
-    let mut uts: libc::utsname = unsafe { std::mem::zeroed() };
-    if unsafe { libc::uname(&mut uts) } < 0 {
-        return true;
-    }
-    let release = unsafe { std::ffi::CStr::from_ptr(uts.release.as_ptr()) }
+    let uts = match crate::sys::uname() {
+        Ok(u) => u,
+        Err(_) => return true,
+    };
+    // SAFETY: uts comes from a successful uname() — fields are
+    // NUL-terminated.
+    let release = unsafe { crate::sys::cstr_from_field(&uts.release) }
         .to_string_lossy()
         .into_owned();
     let mut it = release.split('.');
@@ -47,11 +64,11 @@ fn kernel_supports_ptrace_event_seccomp() -> bool {
 }
 
 pub fn seccomp_event_happens_after_enter_sigtrap() -> bool {
-    unsafe { !SECCOMP_AFTER_PTRACE_ENTER }
+    !SECCOMP_AFTER_PTRACE_ENTER.load(Ordering::Relaxed)
 }
 
 pub fn seccomp_ptrace_event_is_supported() -> bool {
-    unsafe { SECCOMP_PTRACE_EVENT_SUPPORTED }
+    SECCOMP_PTRACE_EVENT_SUPPORTED.load(Ordering::Relaxed)
 }
 
 /* ================================================================== */
@@ -72,7 +89,7 @@ pub fn launch_process(tracee_rc: &TraceeRef, argv: &[String]) -> i32 {
 
     // TODO: mem_prepare_before_first_execve / list_open_fd (verbose).
 
-    let pid = unsafe { libc::fork() };
+    let pid = crate::sys::fork();
     match pid {
         -1 => {
             crate::note!(
@@ -85,24 +102,22 @@ pub fn launch_process(tracee_rc: &TraceeRef, argv: &[String]) -> i32 {
         0 => {
             // Child: give the guest a sane SIGPIPE disposition, request
             // tracing, stop for the event loop, install the filter, exec.
-            unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
-            let status = unsafe {
-                libc::ptrace(
-                    crate::ptrace::ptc::PTRACE_TRACEME as u32,
-                    0,
-                    std::ptr::null::<u8>(),
-                    0usize,
-                )
-            };
+            crate::sys::signal(libc::SIGPIPE, libc::SIG_DFL);
+            let status = crate::sys::ptrace(
+                crate::ptrace::ptc::PTRACE_TRACEME as u32,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
             if status < 0 {
                 crate::note!(
                     crate::note::Severity::Error,
                     crate::note::Origin::System,
                     "ptrace(TRACEME)"
                 );
-                unsafe { libc::_exit(1) };
+                crate::sys::exit_immediately(1);
             }
-            unsafe { libc::kill(libc::getpid(), libc::SIGSTOP) };
+            crate::sys::kill(crate::sys::getpid(), libc::SIGSTOP);
 
             if std::env::var_os("PROOT_NO_SECCOMP").is_none() {
                 let t = tracee_rc.borrow_mut();
@@ -120,10 +135,8 @@ pub fn launch_process(tracee_rc: &TraceeRef, argv: &[String]) -> i32 {
                 argv_c.iter().map(|c| c.as_ptr()).collect();
             argv_ptrs.push(std::ptr::null());
             let exe_c = std::ffi::CString::new(exe.as_bytes()).unwrap();
-            unsafe {
-                libc::execvp(exe_c.as_ptr(), argv_ptrs.as_ptr());
-                libc::_exit(127);
-            }
+            crate::sys::execvp(&exe_c, &argv_ptrs);
+            crate::sys::exit_immediately(127);
         }
         pid => {
             let old_key = {
@@ -146,9 +159,7 @@ pub fn launch_process(tracee_rc: &TraceeRef, argv: &[String]) -> i32 {
 /// `event_loop()` — waitpid(-1, __WALL) + dispatch until no tracee is left.
 /// Returns the exit status of the last terminated program.
 pub fn event_loop() -> i32 {
-    unsafe {
-        libc::atexit(kill_all_tracees_atexit);
-    }
+    crate::sys::at_exit(kill_all_tracees_atexit);
 
     install_signal_handlers();
 
@@ -160,24 +171,24 @@ pub fn event_loop() -> i32 {
         crate::syscall::pipe_shadow::reap();
         crate::syscall::pipe_shadow::set_timer(crate::syscall::pipe_shadow::held());
 
-        let mut tracee_status: i32 = 0;
-        let pid = unsafe { libc::waitpid(-1, &mut tracee_status, libc::__WALL) };
-        crate::syscall::pipe_shadow::set_timer(false);
-        if pid < 0 {
-            let e = crate::path::errno();
-            if e == libc::EINTR {
-                continue;
+        let (pid, tracee_status) = match crate::sys::waitpid(-1, libc::__WALL) {
+            Ok(v) => v,
+            Err(e) => {
+                crate::syscall::pipe_shadow::set_timer(false);
+                if e == libc::EINTR {
+                    continue;
+                }
+                if e != libc::ECHILD {
+                    crate::note!(
+                        crate::note::Severity::Error,
+                        crate::note::Origin::System,
+                        "waitpid()"
+                    );
+                    return libc::EXIT_FAILURE;
+                }
+                break;
             }
-            if e != libc::ECHILD {
-                crate::note!(
-                    crate::note::Severity::Error,
-                    crate::note::Origin::System,
-                    "waitpid()"
-                );
-                return libc::EXIT_FAILURE;
-            }
-            break;
-        }
+        };
 
         let tracee_rc = match get_tracee(pid, true) {
             Some(t) => t,
@@ -211,7 +222,7 @@ pub fn event_loop() -> i32 {
         restart_tracee(&tracee_rc, signal);
     }
 
-    unsafe { LAST_EXIT_STATUS }
+    LAST_EXIT_STATUS.load(Ordering::Relaxed)
 }
 
 /* ================================================================== */
@@ -259,56 +270,54 @@ extern "C" fn kill_all_tracees_atexit() {
 }
 
 fn install_signal_handlers() {
-    unsafe {
-        let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
-        libc::sigfillset(&mut sa.sa_mask);
+    let mut sa: libc::sigaction = crate::sys::zeroed();
+    sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
+    crate::sys::sigfillset(&mut sa.sa_mask);
 
-        for signum in 1..libc::SIGRTMAX() {
-            match signum {
-                libc::SIGQUIT | libc::SIGILL | libc::SIGABRT | libc::SIGFPE | libc::SIGSEGV => {
-                    sa.sa_sigaction = kill_all_tracees2 as *const () as usize;
-                }
-                libc::SIGUSR1 | libc::SIGUSR2 => {
-                    // Was print_talloc_hierarchy; keep a cheap tracee dump.
-                    sa.sa_sigaction = dump_tracees as *const () as usize;
-                }
-                libc::SIGCHLD
-                | libc::SIGCONT
-                | libc::SIGSTOP
-                | libc::SIGTSTP
-                | libc::SIGTTIN
-                | libc::SIGTTOU => {
-                    continue;
-                }
-                _ => {
-                    sa.sa_sigaction = libc::SIG_IGN;
-                }
+    for signum in 1..libc::SIGRTMAX() {
+        match signum {
+            libc::SIGQUIT | libc::SIGILL | libc::SIGABRT | libc::SIGFPE | libc::SIGSEGV => {
+                sa.sa_sigaction = kill_all_tracees2 as *const () as usize;
             }
-            if libc::sigaction(signum, &sa, std::ptr::null_mut()) < 0
-                && crate::path::errno() != libc::EINVAL
-            {
-                crate::note!(
-                    crate::note::Severity::Warning,
-                    crate::note::Origin::System,
-                    "sigaction({})",
-                    signum
-                );
+            libc::SIGUSR1 | libc::SIGUSR2 => {
+                // Was print_talloc_hierarchy; keep a cheap tracee dump.
+                sa.sa_sigaction = dump_tracees as *const () as usize;
+            }
+            libc::SIGCHLD
+            | libc::SIGCONT
+            | libc::SIGSTOP
+            | libc::SIGTSTP
+            | libc::SIGTTIN
+            | libc::SIGTTOU => {
+                continue;
+            }
+            _ => {
+                sa.sa_sigaction = libc::SIG_IGN;
             }
         }
-
-        // SIGALRM wakes the loop for shadow-pipe reaping: SA_RESTART must NOT
-        // be set so waitpid(2) returns EINTR.
-        let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_flags = libc::SA_SIGINFO;
-        sa.sa_sigaction = wakeup_event_loop as *const () as usize;
-        libc::sigfillset(&mut sa.sa_mask);
-        libc::sigaction(libc::SIGALRM, &sa, std::ptr::null_mut());
+        if crate::sys::sigaction(signum, &sa, None) < 0 && crate::path::errno() != libc::EINVAL {
+            crate::note!(
+                crate::note::Severity::Warning,
+                crate::note::Origin::System,
+                "sigaction({})",
+                signum
+            );
+        }
     }
+
+    // SIGALRM wakes the loop for shadow-pipe reaping: SA_RESTART must NOT
+    // be set so waitpid(2) returns EINTR.
+    let mut sa: libc::sigaction = crate::sys::zeroed();
+    sa.sa_flags = libc::SA_SIGINFO;
+    sa.sa_sigaction = wakeup_event_loop as *const () as usize;
+    crate::sys::sigfillset(&mut sa.sa_mask);
+    crate::sys::sigaction(libc::SIGALRM, &sa, None);
 }
 
 extern "C" fn kill_all_tracees2(signum: i32, siginfo: *mut libc::siginfo_t, _u: *mut libc::c_void) {
-    let si_pid = unsafe { (*siginfo).si_pid() };
+    // SAFETY: siginfo is provided by the kernel for this SA_SIGINFO
+    // handler.
+    let si_pid = unsafe { crate::sys::siginfo_si_pid(siginfo) };
     crate::note!(
         crate::note::Severity::Warning,
         crate::note::Origin::Internal,
@@ -318,7 +327,7 @@ extern "C" fn kill_all_tracees2(signum: i32, siginfo: *mut libc::siginfo_t, _u: 
     );
     crate::tracee::kill_all_tracees();
     if signum != libc::SIGQUIT {
-        unsafe { libc::_exit(libc::EXIT_FAILURE) };
+        crate::sys::exit_immediately(libc::EXIT_FAILURE);
     }
 }
 
@@ -335,11 +344,11 @@ extern "C" fn dump_tracees(_s: i32, _i: *mut libc::siginfo_t, _u: *mut libc::c_v
 
 /// `handle_tracee_event()` — compute the restart signal for this stop.
 pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
-    unsafe {
-        if !SECCOMP_AFTER_PTRACE_ENTER_CHECKED {
-            SECCOMP_AFTER_PTRACE_ENTER = std::env::var_os("PROOT_ASSUME_NEW_SECCOMP").is_some();
-            SECCOMP_AFTER_PTRACE_ENTER_CHECKED = true;
-        }
+    if !SECCOMP_AFTER_PTRACE_ENTER_CHECKED.swap(true, Ordering::Relaxed) {
+        SECCOMP_AFTER_PTRACE_ENTER.store(
+            std::env::var_os("PROOT_ASSUME_NEW_SECCOMP").is_some(),
+            Ordering::Relaxed,
+        );
     }
 
     let mut t = tracee_rc.borrow_mut();
@@ -361,7 +370,7 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
     let mut signal = 0i32;
 
     if libc::WIFEXITED(tracee_status) {
-        unsafe { LAST_EXIT_STATUS = libc::WEXITSTATUS(tracee_status) };
+        LAST_EXIT_STATUS.store(libc::WEXITSTATUS(tracee_status), Ordering::Relaxed);
         crate::verbose!(
             Some(tracee),
             1,
@@ -400,29 +409,21 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
                     | crate::ptrace::ptc::PTRACE_O_TRACECLONE
                     | crate::ptrace::ptc::PTRACE_O_TRACEEXIT;
 
-                if unsafe { DELIVER_SIGTRAP } {
+                if DELIVER_SIGTRAP.load(Ordering::Relaxed) {
                     // A later bare SIGTRAP is a real signal: deliver as-is.
                 } else {
-                    unsafe { DELIVER_SIGTRAP = true };
+                    DELIVER_SIGTRAP.store(true, Ordering::Relaxed);
                     // Try to enable seccomp-accelerated event delivery.
-                    let status = unsafe {
-                        libc::ptrace(
-                            crate::ptrace::ptc::PTRACE_SETOPTIONS as u32,
-                            tracee.pid,
-                            std::ptr::null::<u8>(),
-                            (default_ptrace_options | crate::ptrace::ptc::PTRACE_O_TRACESECCOMP)
-                                as usize,
-                        )
-                    };
+                    let status = crate::sys::ptrace_setoptions(
+                        tracee.pid,
+                        (default_ptrace_options | crate::ptrace::ptc::PTRACE_O_TRACESECCOMP)
+                            as usize,
+                    );
                     if status < 0 {
-                        let status = unsafe {
-                            libc::ptrace(
-                                crate::ptrace::ptc::PTRACE_SETOPTIONS as u32,
-                                tracee.pid,
-                                std::ptr::null::<u8>(),
-                                default_ptrace_options as usize,
-                            )
-                        };
+                        let status = crate::sys::ptrace_setoptions(
+                            tracee.pid,
+                            default_ptrace_options as usize,
+                        );
                         if status < 0 {
                             crate::note!(
                                 crate::note::Severity::Error,
@@ -431,11 +432,10 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
                             );
                             std::process::exit(libc::EXIT_FAILURE);
                         }
-                        unsafe { SECCOMP_PTRACE_EVENT_SUPPORTED = false };
+                        SECCOMP_PTRACE_EVENT_SUPPORTED.store(false, Ordering::Relaxed);
                     } else {
-                        unsafe {
-                            SECCOMP_PTRACE_EVENT_SUPPORTED = kernel_supports_ptrace_event_seccomp()
-                        };
+                        SECCOMP_PTRACE_EVENT_SUPPORTED
+                            .store(kernel_supports_ptrace_event_seccomp(), Ordering::Relaxed);
                     }
                     signal = handle_sigtrap_syscall(tracee, &mut signal);
                 }
@@ -601,7 +601,7 @@ fn do_syscall_stage(tracee: &mut Tracee, signal: &mut i32) {
             "skipping SIGTRAP for already handled sysenter"
         );
         debug_assert!(!is_in_sysenter(tracee));
-        debug_assert!(!unsafe { SECCOMP_AFTER_PTRACE_ENTER });
+        debug_assert!(!SECCOMP_AFTER_PTRACE_ENTER.load(Ordering::Relaxed));
         tracee.seccomp_already_handled_enter = false;
         tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
     }
@@ -611,28 +611,26 @@ fn do_syscall_stage(tracee: &mut Tracee, signal: &mut i32) {
 fn handle_seccomp_stop(tracee: &mut Tracee, sysexit_necessary: bool) -> i32 {
     let mut signal = 0;
 
-    unsafe {
-        if !SECCOMP_DETECTED {
-            tracee.seccomp = Seccomp::Enabled;
-            SECCOMP_DETECTED = true;
-            SECCOMP_AFTER_PTRACE_ENTER = !is_in_sysenter(tracee);
-            crate::verbose!(
-                Some(tracee),
-                1,
-                "ptrace acceleration (seccomp mode 2, {} syscall order) enabled",
-                if SECCOMP_AFTER_PTRACE_ENTER {
-                    "new"
-                } else {
-                    "old"
-                }
-            );
-        }
+    if !SECCOMP_DETECTED.load(Ordering::Relaxed) {
+        tracee.seccomp = Seccomp::Enabled;
+        SECCOMP_DETECTED.store(true, Ordering::Relaxed);
+        SECCOMP_AFTER_PTRACE_ENTER.store(!is_in_sysenter(tracee), Ordering::Relaxed);
+        crate::verbose!(
+            Some(tracee),
+            1,
+            "ptrace acceleration (seccomp mode 2, {} syscall order) enabled",
+            if SECCOMP_AFTER_PTRACE_ENTER.load(Ordering::Relaxed) {
+                "new"
+            } else {
+                "old"
+            }
+        );
     }
 
     tracee.skip_next_seccomp_signal = false;
 
     // If the kernel triggers the event after we handled sysenter, skip it.
-    if unsafe { SECCOMP_AFTER_PTRACE_ENTER } && !is_in_sysenter(tracee) {
+    if SECCOMP_AFTER_PTRACE_ENTER.load(Ordering::Relaxed) && !is_in_sysenter(tracee) {
         tracee.restart_how = tracee.last_restart_how;
         crate::verbose!(
             Some(tracee),
@@ -650,48 +648,38 @@ fn handle_seccomp_stop(tracee: &mut Tracee, sysexit_necessary: bool) -> i32 {
         return signal;
     }
 
-    let mut flags: Word = 0;
-    let status = unsafe {
-        libc::ptrace(
-            crate::ptrace::ptc::PTRACE_GETEVENTMSG as u32,
-            tracee.pid,
-            std::ptr::null::<u8>(),
-            &mut flags as *mut Word as usize,
-        )
+    let mut flags: Word = match crate::sys::ptrace_geteventmsg(tracee.pid) {
+        Ok(v) => v as Word,
+        Err(_) => return signal,
     };
-    if status < 0 {
-        return signal;
-    }
 
     // Kernels that lose event messages: reconstruct flags from the filter.
-    unsafe {
-        if EVENTMSG_STATE != EventmsgState::Reliable && fetch_regs(tracee) >= 0 {
-            let expected = crate::syscall::seccomp::filtered_sysnum_flags(
-                tracee,
-                get_sysnum(tracee, RegVersion::Current),
-            );
-            if EVENTMSG_STATE == EventmsgState::Unknown
-                && (expected & crate::syscall::seccomp::FILTER_SYSEXIT) != 0
-            {
-                if (flags & crate::syscall::seccomp::FILTER_SYSEXIT) != 0 {
-                    EVENTMSG_STATE = EventmsgState::Reliable;
-                } else {
-                    EVENTMSG_STATE = EventmsgState::Lost;
-                    crate::verbose!(
-                        Some(tracee),
-                        1,
-                        "this kernel loses ptrace event messages (PTRACE_GETEVENTMSG reads 0), working around it"
-                    );
-                }
+    if EventmsgState::load() != EventmsgState::Reliable && fetch_regs(tracee) >= 0 {
+        let expected = crate::syscall::seccomp::filtered_sysnum_flags(
+            tracee,
+            get_sysnum(tracee, RegVersion::Current),
+        );
+        if EventmsgState::load() == EventmsgState::Unknown
+            && (expected & crate::syscall::seccomp::FILTER_SYSEXIT) != 0
+        {
+            if (flags & crate::syscall::seccomp::FILTER_SYSEXIT) != 0 {
+                EventmsgState::Reliable.store();
+            } else {
+                EventmsgState::Lost.store();
+                crate::verbose!(
+                    Some(tracee),
+                    1,
+                    "this kernel loses ptrace event messages (PTRACE_GETEVENTMSG reads 0), working around it"
+                );
             }
-            if EVENTMSG_STATE != EventmsgState::Reliable {
-                flags |= expected;
-            }
+        }
+        if EventmsgState::load() != EventmsgState::Reliable {
+            flags |= expected;
         }
     }
 
     if (flags & crate::syscall::seccomp::FILTER_SYSEXIT) != 0 || sysexit_necessary {
-        if unsafe { SECCOMP_AFTER_PTRACE_ENTER } {
+        if SECCOMP_AFTER_PTRACE_ENTER.load(Ordering::Relaxed) {
             tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
             crate::syscall::translate_syscall(tracee);
         }
@@ -709,7 +697,7 @@ fn handle_seccomp_stop(tracee: &mut Tracee, sysexit_necessary: bool) -> i32 {
     if tracee.seccomp == Seccomp::Disabling {
         tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
     }
-    if !unsafe { SECCOMP_AFTER_PTRACE_ENTER }
+    if !SECCOMP_AFTER_PTRACE_ENTER.load(Ordering::Relaxed)
         && tracee.restart_how == crate::ptrace::ptc::PTRACE_SYSCALL
         && !tracee.voided_syscall_cancelled
     {
@@ -726,6 +714,8 @@ fn handle_seccomp_stop(tracee: &mut Tracee, sysexit_necessary: bool) -> i32 {
 /// 8 bytes, so `_syscall` sits at offset 24.
 fn sigsys_syscall_nr(siginfo: &libc::siginfo_t) -> i32 {
     const _: () = assert!(std::mem::size_of::<libc::siginfo_t>() == 128);
+    // SAFETY: siginfo_t is 128 bytes (asserted above); offset 24 reads the
+    // `_syscall` field of the `_sigsys` sifields member on x86_64.
     unsafe {
         (siginfo as *const _ as *const u8)
             .add(24)
@@ -736,15 +726,8 @@ fn sigsys_syscall_nr(siginfo: &libc::siginfo_t) -> i32 {
 
 /// SIGSYS delivery (seccomp trap on a syscall we or the tracee filtered).
 fn handle_sigsys(tracee: &mut Tracee, mut signal: i32) -> i32 {
-    let mut siginfo: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    unsafe {
-        libc::ptrace(
-            crate::ptrace::ptc::PTRACE_GETSIGINFO as u32,
-            tracee.pid,
-            std::ptr::null::<u8>(),
-            &mut siginfo as *mut _ as usize,
-        );
-    }
+    let siginfo =
+        crate::sys::ptrace_getsiginfo(tracee.pid).unwrap_or_else(|_| crate::sys::zeroed());
     // si_code 1 == SYS_SECCOMP: raised by a seccomp filter.
     const SI_SYS_SECCOMP: i32 = 1;
     if siginfo.si_code == SI_SYS_SECCOMP {
@@ -788,7 +771,7 @@ fn check_architecture(tracee: &mut Tracee) {
         return;
     }
     if let Ok((fd, ehdr)) = crate::execve::elf::open_elf(path.as_bytes()) {
-        unsafe { libc::close(fd) };
+        crate::sys::close(fd);
         if !ehdr.is_class64() || std::mem::size_of::<Word>() == 8 {
             return;
         }
@@ -809,14 +792,12 @@ pub fn restart_tracee(tracee_rc: &TraceeRef, signal: i32) -> bool {
         return false;
     }
     debug_assert_ne!(t.restart_how, 0);
-    let status = unsafe {
-        libc::ptrace(
-            t.restart_how as u32,
-            t.pid,
-            std::ptr::null::<u8>(),
-            signal as usize,
-        )
-    };
+    let status = crate::sys::ptrace(
+        t.restart_how as u32,
+        t.pid,
+        std::ptr::null_mut(),
+        signal as *mut libc::c_void,
+    );
     if status < 0 {
         return false; // The process likely died in a syscall.
     }
@@ -852,7 +833,7 @@ fn new_child_stack(parent: &mut Tracee) -> Word {
         Sysnum::clone => peek_reg(parent, RegVersion::Current, Reg::Sysarg2),
         Sysnum::clone3 => {
             let args = peek_reg(parent, RegVersion::Current, Reg::Sysarg1);
-            unsafe { *libc::__errno_location() = 0 };
+            crate::sys::clear_errno();
             let stack = crate::tracee::mem::peek_word(parent, args + 5 * 8);
             let size = crate::tracee::mem::peek_word(parent, args + 6 * 8);
             if crate::path::errno() != 0 || stack == 0 {
@@ -983,7 +964,7 @@ pub fn resolve_pending_child(parent: &mut Tracee) {
     // The pid must name a process we actually trace.
     let ok = pid > 0
         && read_proc_status_ids(pid)
-            .map(|(_t, _p, tracer)| tracer == unsafe { libc::getpid() })
+            .map(|(_t, _p, tracer)| tracer == crate::sys::getpid())
             .unwrap_or(false);
     if !ok {
         crate::note!(
@@ -1022,15 +1003,9 @@ pub fn new_child(parent_rc: &TraceeRef, clone_flags: Word) {
         }
     }
 
-    let pid: libc::c_ulong = unsafe {
-        let mut msg: libc::c_ulong = 0;
-        let status = libc::ptrace(
-            crate::ptrace::ptc::PTRACE_GETEVENTMSG as u32,
-            parent_rc.borrow().pid,
-            std::ptr::null::<u8>(),
-            &mut msg as *mut _ as usize,
-        );
-        if status < 0 || msg == 0 { 0 } else { msg }
+    let pid: libc::c_ulong = match crate::sys::ptrace_geteventmsg(parent_rc.borrow().pid) {
+        Ok(msg) if msg != 0 => msg,
+        _ => 0,
     };
 
     if pid == 0 {

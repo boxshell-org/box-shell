@@ -7,6 +7,7 @@
 //! host socket, and NLMSG_DONE terminators.
 
 use std::cell::RefMut;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::Word;
 use crate::tracee::mem::{peek_word, read_data, write_data};
@@ -115,24 +116,20 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
     const PROBE_UNKNOWN: i32 = 0;
     const PROBE_ALLOWED: i32 = 1;
     const PROBE_BLOCKED: i32 = 2;
-    static mut CACHED: i32 = PROBE_UNKNOWN;
+    static CACHED: AtomicI32 = AtomicI32::new(PROBE_UNKNOWN);
 
-    unsafe {
-        if CACHED != PROBE_UNKNOWN {
-            return CACHED == PROBE_BLOCKED;
-        }
+    if CACHED.load(Ordering::Relaxed) != PROBE_UNKNOWN {
+        return CACHED.load(Ordering::Relaxed) == PROBE_BLOCKED;
     }
 
-    let fd = unsafe {
-        libc::socket(
-            libc::AF_NETLINK,
-            libc::SOCK_RAW | libc::SOCK_CLOEXEC,
-            0, /* NETLINK_ROUTE */
-        )
-    };
+    let fd = crate::sys::socket(
+        libc::AF_NETLINK,
+        libc::SOCK_RAW | libc::SOCK_CLOEXEC,
+        0, /* NETLINK_ROUTE */
+    );
     if fd < 0 {
         let e = crate::path::errno();
-        unsafe { CACHED = PROBE_BLOCKED };
+        CACHED.store(PROBE_BLOCKED, Ordering::Relaxed);
         crate::verbose!(
             Some(tracee),
             1,
@@ -146,17 +143,11 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
     let mut snl = [0u8; 12];
     snl[0] = (libc::AF_NETLINK & 0xff) as u8;
     snl[1] = ((libc::AF_NETLINK >> 8) & 0xff) as u8;
-    let rc = unsafe {
-        libc::bind(
-            fd,
-            snl.as_ptr() as *const libc::sockaddr,
-            snl.len() as libc::socklen_t,
-        )
-    };
+    let rc = crate::sys::bind(fd, &snl);
     if rc < 0 {
         let e = crate::path::errno();
-        unsafe { libc::close(fd) };
-        unsafe { CACHED = PROBE_BLOCKED };
+        crate::sys::close(fd);
+        CACHED.store(PROBE_BLOCKED, Ordering::Relaxed);
         crate::verbose!(
             Some(tracee),
             1,
@@ -177,21 +168,12 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
     req[8..12].copy_from_slice(&1u32.to_ne_bytes()); // seq
     // ifa_family = AF_UNSPEC already zeroed.
 
-    let rc = unsafe {
-        libc::sendto(
-            fd,
-            req.as_ptr() as *const libc::c_void,
-            req.len(),
-            libc::MSG_DONTWAIT,
-            snl.as_ptr() as *const libc::sockaddr,
-            snl.len() as libc::socklen_t,
-        )
-    };
+    let rc = crate::sys::sendto(fd, &req, libc::MSG_DONTWAIT, Some(&snl));
     let err = crate::path::errno();
-    unsafe { libc::close(fd) };
+    crate::sys::close(fd);
 
     if rc < 0 && (err == libc::EACCES || err == libc::EPERM) {
-        unsafe { CACHED = PROBE_BLOCKED };
+        CACHED.store(PROBE_BLOCKED, Ordering::Relaxed);
         crate::verbose!(
             Some(tracee),
             1,
@@ -201,7 +183,7 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
         return true;
     }
 
-    unsafe { CACHED = PROBE_ALLOWED };
+    CACHED.store(PROBE_ALLOWED, Ordering::Relaxed);
     false
 }
 
@@ -217,14 +199,14 @@ pub fn msghdr_first_iovec(tracee: &Tracee, msghdr_addr: Word) -> Option<(Word, W
         return None;
     }
     let w = crate::tracee::reg::sizeof_word(tracee) as Word;
-    unsafe { *libc::__errno_location() = 0 };
+    crate::sys::clear_errno();
     let iov_ptr = peek_word(tracee, msghdr_addr + 2 * w);
     let iov_count = if crate::path::errno() == 0 {
         peek_word(tracee, msghdr_addr + 3 * w)
     } else {
         0
     };
-    unsafe { *libc::__errno_location() = 0 };
+    crate::sys::clear_errno();
     if iov_ptr == 0 || iov_count == 0 {
         return None;
     }
@@ -234,7 +216,7 @@ pub fn msghdr_first_iovec(tracee: &Tracee, msghdr_addr: Word) -> Option<(Word, W
     } else {
         0
     };
-    unsafe { *libc::__errno_location() = 0 };
+    crate::sys::clear_errno();
     Some((base, len))
 }
 
@@ -471,7 +453,7 @@ pub fn write_fake_netlink_sockname(
     if size_ptr == 0 {
         return -libc::EINVAL;
     }
-    unsafe { *libc::__errno_location() = 0 };
+    crate::sys::clear_errno();
     let in_size = crate::tracee::mem::peek_uint32(tracee, size_ptr);
     if crate::path::errno() != 0 {
         return -crate::path::errno();
@@ -620,26 +602,18 @@ struct HostIf {
 }
 
 fn host_interfaces() -> Vec<HostIf> {
-    let mut ifaddr: *mut libc::ifaddrs = std::ptr::null_mut();
-    if unsafe { libc::getifaddrs(&mut ifaddr) } != 0 {
-        return Vec::new();
-    }
-    let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
+    let list = match crate::sys::IfAddrs::get() {
+        Ok(l) => l,
+        Err(_) => return Vec::new(),
+    };
+    let sock = crate::sys::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0);
 
     let mut out: Vec<HostIf> = Vec::new();
-    let mut cur = ifaddr;
-    while !cur.is_null() {
-        let ifa = unsafe { &*cur };
-        cur = ifa.ifa_next;
-        if ifa.ifa_name.is_null() {
-            continue;
-        }
-        let name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) }
-            .to_bytes()
-            .to_vec();
+    for ifa in list.iter() {
+        let name = ifa.name().to_bytes().to_vec();
 
         let idx = out.iter().position(|h: &HostIf| h.name == name);
-        let ifflags = ifa.ifa_flags as u32;
+        let ifflags = ifa.flags() as u32;
         let entry = match idx {
             Some(i) => &mut out[i],
             None => {
@@ -651,7 +625,7 @@ fn host_interfaces() -> Vec<HostIf> {
                     } else {
                         ARPHRD_ETHER
                     },
-                    ifindex: unsafe { libc::if_nametoindex(ifa.ifa_name) } as i32,
+                    ifindex: crate::sys::if_nametoindex(ifa.name()) as i32,
                     mtu: if (ifflags & IFF_LOOPBACK) != 0 {
                         65536
                     } else {
@@ -664,79 +638,60 @@ fn host_interfaces() -> Vec<HostIf> {
             }
         };
 
-        if !ifa.ifa_addr.is_null() {
-            let family = unsafe { (*ifa.ifa_addr).sa_family } as i32;
-            match family {
-                libc::AF_PACKET => {
-                    // sockaddr_ll: u16 family, u16 proto, i32 ifindex,
-                    // u16 hatype, u8 pkttype, u8 halen, u8 addr[8]
-                    let sll = ifa.ifa_addr as *const u8;
-                    let v: &[u8] = unsafe { std::slice::from_raw_parts(sll, 20) };
-                    let sifindex = i32::from_ne_bytes(v[4..8].try_into().unwrap());
-                    if sifindex != 0 {
-                        entry.ifindex = sifindex;
-                    }
-                    entry.iftype = u16::from_ne_bytes(v[10..12].try_into().unwrap());
-                    let halen = v[13] as usize;
-                    if halen > 0 && halen <= 8 {
-                        entry.hwaddr = v[14..14 + halen].to_vec();
-                    }
-                }
-                libc::AF_INET => {
-                    let sin = ifa.ifa_addr as *const libc::sockaddr_in;
-                    let addr = unsafe { (*sin).sin_addr.s_addr.to_ne_bytes().to_vec() };
-                    let mask = if ifa.ifa_netmask.is_null() {
-                        Vec::new()
-                    } else {
-                        let m = ifa.ifa_netmask as *const libc::sockaddr_in;
-                        unsafe { (*m).sin_addr.s_addr.to_ne_bytes().to_vec() }
-                    };
-                    entry.addrs.push((libc::AF_INET, addr, mask));
-                }
-                libc::AF_INET6 => {
-                    let sin6 = ifa.ifa_addr as *const libc::sockaddr_in6;
-                    let addr = unsafe { (*sin6).sin6_addr.s6_addr.to_vec() };
-                    let mask = if ifa.ifa_netmask.is_null() {
-                        Vec::new()
-                    } else {
-                        let m = ifa.ifa_netmask as *const libc::sockaddr_in6;
-                        unsafe { (*m).sin6_addr.s6_addr.to_vec() }
-                    };
-                    entry.addrs.push((libc::AF_INET6, addr, mask));
-                }
-                _ => {}
+        // sockaddr_ll: u16 family, u16 proto, i32 ifindex, u16 hatype,
+        // u8 pkttype, u8 halen, u8 addr[8]
+        if let Some(sll) = ifa.addr_ll() {
+            if sll.sll_ifindex != 0 {
+                entry.ifindex = sll.sll_ifindex;
             }
+            entry.iftype = sll.sll_hatype;
+            let halen = sll.sll_halen as usize;
+            if halen > 0 && halen <= 8 {
+                entry.hwaddr = sll.sll_addr[..halen].to_vec();
+            }
+        } else if let Some(sin) = ifa.addr_in() {
+            let addr = sin.sin_addr.s_addr.to_ne_bytes().to_vec();
+            let mask = ifa
+                .netmask_in()
+                .map(|m| m.sin_addr.s_addr.to_ne_bytes().to_vec())
+                .unwrap_or_default();
+            entry.addrs.push((libc::AF_INET, addr, mask));
+        } else if let Some(sin6) = ifa.addr_in6() {
+            let addr = sin6.sin6_addr.s6_addr.to_vec();
+            let mask = ifa
+                .netmask_in6()
+                .map(|m| m.sin6_addr.s6_addr.to_vec())
+                .unwrap_or_default();
+            entry.addrs.push((libc::AF_INET6, addr, mask));
         }
     }
 
     // Best-effort MTU/hwaddr via ioctl when no AF_PACKET entry filled them.
+    // ifreq layout: ifr_name[16] then the ifr_ifru union — read union fields
+    // by byte offset (ifr_ifru starts at offset 16; sockaddr members at
+    // +0 family, +2 data).
+    fn ifru(ifr: &libc::ifreq) -> &[u8] {
+        &crate::sys::as_bytes(ifr)[16..]
+    }
     if sock >= 0 {
         for entry in out.iter_mut() {
-            let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
+            let mut ifr: libc::ifreq = crate::sys::zeroed();
             let n = entry.name.len().min(IFNAMSIZ - 1);
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    entry.name.as_ptr(),
-                    ifr.ifr_name.as_mut_ptr() as *mut u8,
-                    n,
-                );
+            for (dst, &src) in ifr.ifr_name.iter_mut().zip(entry.name.iter().take(n)) {
+                *dst = src as libc::c_char;
             }
-            if unsafe { libc::ioctl(sock, libc::SIOCGIFMTU, &ifr) } == 0 {
-                entry.mtu = unsafe { ifr.ifr_ifru.ifru_mtu } as u32;
+            if crate::sys::ioctl_val(sock, libc::SIOCGIFMTU, &mut ifr) == 0 {
+                entry.mtu = i32::from_ne_bytes(ifru(&ifr)[0..4].try_into().unwrap()) as u32;
             }
             if entry.hwaddr.is_empty()
-                && unsafe { libc::ioctl(sock, libc::SIOCGIFHWADDR, &ifr) } == 0
+                && crate::sys::ioctl_val(sock, libc::SIOCGIFHWADDR, &mut ifr) == 0
             {
-                let sa = unsafe { &ifr.ifr_ifru.ifru_hwaddr };
-                entry.iftype = sa.sa_family as u16;
-                entry.hwaddr = unsafe {
-                    std::slice::from_raw_parts(sa.sa_data.as_ptr() as *const u8, 6).to_vec()
-                };
+                entry.iftype = u16::from_ne_bytes(ifru(&ifr)[0..2].try_into().unwrap());
+                entry.hwaddr = ifru(&ifr)[2..8].to_vec();
             }
         }
-        unsafe { libc::close(sock) };
+        crate::sys::close(sock);
     }
-    unsafe { libc::freeifaddrs(ifaddr) };
     out
 }
 
@@ -853,7 +808,7 @@ fn relay_route_dump(req: &[u8], out: &mut [u8], max: usize, seq: u32, pid: u32) 
         0
     };
 
-    let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, 0) };
+    let fd = crate::sys::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, 0);
     if fd < 0 {
         return 0;
     }
@@ -861,15 +816,7 @@ fn relay_route_dump(req: &[u8], out: &mut [u8], max: usize, seq: u32, pid: u32) 
         tv_sec: 1,
         tv_usec: 0,
     };
-    unsafe {
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_RCVTIMEO,
-            &tv as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
-        )
-    };
+    crate::sys::setsockopt_val(fd, libc::SOL_SOCKET, libc::SO_RCVTIMEO, &tv);
 
     // nlmsghdr + rtmsg{rtm_family,...}
     let mut dreq = [0u8; NLMSG_HDR_LEN + 32];
@@ -882,18 +829,9 @@ fn relay_route_dump(req: &[u8], out: &mut [u8], max: usize, seq: u32, pid: u32) 
 
     let mut snl = [0u8; 12];
     snl[0..2].copy_from_slice(&(libc::AF_NETLINK as u16).to_ne_bytes());
-    let rc = unsafe {
-        libc::sendto(
-            fd,
-            dreq.as_ptr() as *const libc::c_void,
-            nlmsg_length(32),
-            0,
-            snl.as_ptr() as *const libc::sockaddr,
-            snl.len() as libc::socklen_t,
-        )
-    };
+    let rc = crate::sys::sendto(fd, &dreq[..nlmsg_length(32)], 0, Some(&snl));
     if rc < 0 {
-        unsafe { libc::close(fd) };
+        crate::sys::close(fd);
         return 0;
     }
 
@@ -904,7 +842,7 @@ fn relay_route_dump(req: &[u8], out: &mut [u8], max: usize, seq: u32, pid: u32) 
     while !done && rounds < 64 {
         rounds += 1;
         let mut buf = [0u8; 8192];
-        let n = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+        let n = crate::sys::recv(fd, &mut buf, 0);
         if n <= 0 {
             break;
         }
@@ -937,7 +875,7 @@ fn relay_route_dump(req: &[u8], out: &mut [u8], max: usize, seq: u32, pid: u32) 
             let _ = &mut len;
         }
     }
-    unsafe { libc::close(fd) };
+    crate::sys::close(fd);
 
     if off == 0 {
         return 0;
@@ -1135,7 +1073,7 @@ pub fn scatter_fake_netlink_reply(
         } else {
             0
         };
-        unsafe { *libc::__errno_location() = 0 };
+        crate::sys::clear_errno();
         let mut chunk = reply.len() - done;
         if chunk > len as usize {
             chunk = len as usize;
@@ -1266,7 +1204,7 @@ pub fn handle_netlink_reply_exit(tracee: &mut Tracee, is_recvfrom: bool) {
                     crate::strerror(-error)
                 );
             }
-            unsafe { *libc::__errno_location() = 0 };
+            crate::sys::clear_errno();
             break;
         }
         off += nlmsg_align(hlen);
@@ -1292,9 +1230,10 @@ pub fn maybe_fake_siocgifindex(tracee: &Tracee, cmd: Word, arg: Word) -> bool {
         return false;
     }
     name[IFNAMSIZ - 1] = 0;
+    // SAFETY: name[..IFNAMSIZ] is NUL-terminated by construction.
     let name_c = unsafe { std::ffi::CStr::from_ptr(name.as_ptr() as *const libc::c_char) };
 
-    let mut ifindex = unsafe { libc::if_nametoindex(name_c.as_ptr()) } as i32;
+    let mut ifindex = crate::sys::if_nametoindex(name_c) as i32;
     if ifindex <= 0 {
         if name_c.to_bytes() != b"lo" {
             return false;

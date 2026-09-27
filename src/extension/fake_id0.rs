@@ -7,6 +7,7 @@
 //! consistent metadata.
 
 use std::ffi::CString;
+use std::os::unix::ffi::OsStrExt;
 
 use crate::PATH_MAX;
 use crate::Word;
@@ -127,7 +128,7 @@ fn path_exists(path: &[u8]) -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
-    unsafe { libc::access(c.as_ptr(), libc::F_OK) == 0 }
+    crate::sys::access(&c, libc::F_OK) == 0
 }
 
 /// `get_name()` — final component of `path`.
@@ -173,26 +174,33 @@ fn get_meta_path(orig_path: &[u8], meta_path: &mut FixedPath) -> Result<(), i32>
 /// `read_meta_file()` — fill (mode, owner, group) from a meta file; absent
 /// meta files fall back to permissive defaults (755, euid/egid).
 fn read_meta_file(path: &[u8], config: &Config) -> (u32, u32, u32) {
-    let c = match CString::new(path) {
-        Ok(c) => c,
+    // C reads `fscanf(fp, "%d %d %d ", ...)`; fields that fail to parse stay
+    // at their defaults.
+    let text = match std::fs::read_to_string(std::ffi::OsStr::from_bytes(path)) {
+        Ok(t) => t,
         Err(_) => return (0o755, config.euid, config.egid),
     };
-    let fp = unsafe { libc::fopen(c.as_ptr(), c"r".as_ptr()) };
-    if fp.is_null() {
-        return (0o755, config.euid, config.egid);
-    }
     let mut mode: i32 = 0;
     let mut owner: u32 = 0;
     let mut group: u32 = 0;
-    unsafe {
-        libc::fscanf(
-            fp,
-            c"%d %d %d ".as_ptr(),
-            &mut mode as *mut i32,
-            &mut owner as *mut u32,
-            &mut group as *mut u32,
-        );
-        libc::fclose(fp);
+    let mut it = text.split_whitespace();
+    if let Some(tok) = it.next() {
+        match tok.parse::<i32>() {
+            Ok(v) => mode = v,
+            Err(_) => return (otod(mode) as u32, owner, group),
+        }
+    }
+    if let Some(tok) = it.next() {
+        match tok.parse::<u32>() {
+            Ok(v) => owner = v,
+            Err(_) => return (otod(mode) as u32, owner, group),
+        }
+    }
+    if let Some(tok) = it.next() {
+        match tok.parse::<u32>() {
+            Ok(v) => group = v,
+            Err(_) => return (otod(mode) as u32, owner, group),
+        }
     }
     (otod(mode) as u32, owner, group)
 }
@@ -212,17 +220,9 @@ fn write_meta_file(
     } else {
         mode
     };
-    let c = CString::new(path).map_err(|_| -libc::EINVAL)?;
-    let fp = unsafe { libc::fopen(c.as_ptr(), c"w".as_ptr()) };
-    if fp.is_null() {
-        return Err(-crate::path::errno());
-    }
     let text = format!("{}\n{}\n{}\n", dtoo(mode as i32), owner, group);
-    unsafe {
-        libc::fwrite(text.as_ptr() as *const _, 1, text.len(), fp);
-        libc::fclose(fp);
-    }
-    Ok(())
+    std::fs::write(std::ffi::OsStr::from_bytes(path), text)
+        .map_err(|e| -(e.raw_os_error().unwrap_or(libc::EIO)))
 }
 
 /// `get_permissions()` — the rwx class digit (as a decimal-looking octal
@@ -587,7 +587,7 @@ fn handle_unlink_enter(
     // If a meta file exists, unlink it as well.
     if path_exists(meta_path.as_bytes()) {
         let c = CString::new(meta_path.as_bytes()).unwrap();
-        unsafe { libc::unlink(c.as_ptr()) };
+        crate::sys::unlink(&c);
     }
     0
 }
@@ -650,7 +650,7 @@ fn handle_rename_enter(
     }
     let (mode, uid, gid) = read_meta_file(meta_path.as_bytes(), config);
     let c = CString::new(meta_path.as_bytes()).unwrap();
-    unsafe { libc::unlink(c.as_ptr()) };
+    crate::sys::unlink(&c);
 
     if let Err(e) = get_meta_path(newpath.as_bytes(), &mut meta_path) {
         return e;
@@ -784,13 +784,8 @@ fn handle_utimensat_enter(
     // Only care about calls that attempt to change something.
     let times_addr = peek_reg(tracee, RegVersion::Original, times_sysarg);
     if times_addr != 0 {
-        let mut times: [libc::timespec; 2] = unsafe { std::mem::zeroed() };
-        let raw = unsafe {
-            std::slice::from_raw_parts_mut(
-                times.as_mut_ptr() as *mut u8,
-                std::mem::size_of_val(&times),
-            )
-        };
+        let mut times: [libc::timespec; 2] = crate::sys::zeroed();
+        let raw = crate::sys::as_bytes_mut(&mut times);
         if read_data(tracee, raw, times_addr) < 0 {
             // C ignores the read error and proceeds to check permissions.
         }
@@ -1114,15 +1109,9 @@ fn handle_sendmsg_enter(tracee: &mut Tracee, sysnum: Sysnum) -> i32 {
         let call = peek_reg(tracee, RegVersion::Current, Reg::Sysarg1);
 
         if call == SYS_SOCKET {
-            let raw = unsafe {
-                std::slice::from_raw_parts_mut(
-                    socketcall_args.as_mut_ptr() as *mut u8,
-                    std::mem::size_of_val(&socketcall_args),
-                )
-            };
             let status = read_data(
                 tracee,
-                raw,
+                crate::sys::as_bytes_mut(&mut socketcall_args),
                 peek_reg(tracee, RegVersion::Current, Reg::Sysarg2),
             );
             if status >= 0
@@ -1136,15 +1125,9 @@ fn handle_sendmsg_enter(tracee: &mut Tracee, sysnum: Sysnum) -> i32 {
         if call != SYS_SENDMSG {
             return 0;
         }
-        let raw = unsafe {
-            std::slice::from_raw_parts_mut(
-                socketcall_args.as_mut_ptr() as *mut u8,
-                std::mem::size_of_val(&socketcall_args),
-            )
-        };
         let status = read_data(
             tracee,
-            raw,
+            crate::sys::as_bytes_mut(&mut socketcall_args),
             peek_reg(tracee, RegVersion::Current, Reg::Sysarg2),
         );
         if status < 0 {
@@ -1207,8 +1190,8 @@ fn handle_sendmsg_enter(tracee: &mut Tracee, sysnum: Sysnum) -> i32 {
             }
             // struct ucred { pid(4), uid(4), gid(4) }: patch uid/gid only.
             let off = msg_position + size_cmsghdr;
-            let uid = unsafe { libc::getuid() };
-            let gid = unsafe { libc::getgid() };
+            let uid = crate::sys::getuid();
+            let gid = crate::sys::getgid();
             cmsg_buf[off + 4..off + 8].copy_from_slice(&uid.to_ne_bytes());
             cmsg_buf[off + 8..off + 12].copy_from_slice(&gid.to_ne_bytes());
             did_modify = true;
@@ -1243,13 +1226,7 @@ fn handle_sendmsg_enter(tracee: &mut Tracee, sysnum: Sysnum) -> i32 {
         poke_reg(tracee, Reg::Sysarg2, new_msghdr);
     } else {
         socketcall_args[1] = new_msghdr;
-        let raw = unsafe {
-            std::slice::from_raw_parts(
-                socketcall_args.as_ptr() as *const u8,
-                std::mem::size_of_val(&socketcall_args),
-            )
-        };
-        return set_sysarg_data(tracee, raw, Reg::Sysarg2);
+        return set_sysarg_data(tracee, crate::sys::as_bytes(&socketcall_args), Reg::Sysarg2);
     }
     0
 }
@@ -1276,26 +1253,14 @@ fn handle_getsockopt_exit(tracee: &mut Tracee) -> i32 {
         && peek_reg(tracee, RegVersion::Current, Reg::SysargResult) == 0
     {
         let cred_addr = peek_reg(tracee, RegVersion::Original, Reg::Sysarg4);
-        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
-        let raw = unsafe {
-            std::slice::from_raw_parts_mut(
-                &mut cred as *mut _ as *mut u8,
-                std::mem::size_of::<libc::ucred>(),
-            )
-        };
-        if read_data(tracee, raw, cred_addr) != 0 {
+        let mut cred: libc::ucred = crate::sys::zeroed();
+        if read_data(tracee, crate::sys::as_bytes_mut(&mut cred), cred_addr) != 0 {
             return 0;
         }
         if let Some(peer) = config_of_pid(cred.pid) {
             cred.uid = peer.euid;
             cred.gid = peer.egid;
-            let raw = unsafe {
-                std::slice::from_raw_parts(
-                    &cred as *const _ as *const u8,
-                    std::mem::size_of::<libc::ucred>(),
-                )
-            };
-            write_data(tracee, cred_addr, raw);
+            write_data(tracee, cred_addr, crate::sys::as_bytes(&cred));
         }
     }
     0
@@ -1347,10 +1312,8 @@ fn handle_chroot_exit(tracee: &mut Tracee, config: &Config, from_sigsys: bool) -
 
     // realpath()
     let c = CString::new(path.as_bytes()).unwrap_or_default();
-    let mut buf = vec![0u8; PATH_MAX];
-    if !unsafe { libc::realpath(c.as_ptr(), buf.as_mut_ptr() as *mut _) }.is_null() {
-        let len = buf.iter().position(|&b| b == 0).unwrap_or(PATH_MAX);
-        path_host_absolute.set(&buf[..len]);
+    if let Some(resolved) = crate::sys::realpath(&c) {
+        path_host_absolute.set(&resolved);
     } else {
         path_host_absolute.set(path.as_bytes());
     }
@@ -1366,11 +1329,11 @@ fn handle_chroot_exit(tracee: &mut Tracee, config: &Config, from_sigsys: bool) -
     }
 
     // Validate target.
-    let mut statbuf: libc::stat = unsafe { std::mem::zeroed() };
     let c = CString::new(path_host_absolute.as_bytes()).unwrap_or_default();
-    if unsafe { libc::stat(c.as_ptr(), &mut statbuf) } < 0 {
-        return -crate::path::errno();
-    }
+    let statbuf = match crate::sys::stat(&c) {
+        Ok(s) => s,
+        Err(e) => return -e,
+    };
     if (statbuf.st_mode & libc::S_IFMT) != libc::S_IFDIR {
         return -libc::ENOTDIR;
     }
@@ -1495,7 +1458,6 @@ fn handle_getresgid_exit(tracee: &mut Tracee, config: &Config) -> i32 {
 /// `override_permissions()` — force rwx on a path component during path
 /// translation (CAP_DAC_OVERRIDE emulation); restoration is deferred.
 fn override_permissions(tracee: &mut Tracee, path: &[u8], is_final: bool) {
-    use std::os::unix::ffi::OsStrExt;
     if crate::path::f2fs::should_skip_file_access_due_to_f2fs_bug(tracee, path) {
         return;
     }
@@ -1503,10 +1465,10 @@ fn override_permissions(tracee: &mut Tracee, path: &[u8], is_final: bool) {
         Ok(c) => c,
         Err(_) => return,
     };
-    let mut perms: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::stat(c.as_ptr(), &mut perms) } < 0 {
-        return;
-    }
+    let perms = match crate::sys::stat(&c) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
 
     let mut new_mode = perms.st_mode & (libc::S_IRWXU | libc::S_IRWXG | libc::S_IRWXO);
     new_mode |= libc::S_IRUSR | libc::S_IWUSR;
@@ -1544,12 +1506,12 @@ fn override_permissions(tracee: &mut Tracee, path: &[u8], is_final: bool) {
     let path_vec = path.to_vec();
     tracee.deferred.push(Box::new(move || {
         let c = CString::new(path_vec.as_slice()).unwrap_or_default();
-        unsafe { libc::chmod(c.as_ptr(), restore_mode) };
+        crate::sys::chmod(&c, restore_mode);
     }));
 
     let path_os = std::ffi::OsStr::from_bytes(path);
     let _ = path_os;
-    unsafe { libc::chmod(c.as_ptr(), new_mode) };
+    crate::sys::chmod(&c, new_mode);
 }
 
 /// `adjust_elf_auxv()` — patch AT_UID/EUID/GID/EGID on the post-execve stack.
@@ -1801,16 +1763,15 @@ fn handle_stat_exit(tracee: &mut Tracee, config: &Config, sysnum: Sysnum) -> i32
     let mut meta_path = FixedPath::new();
     if get_meta_path(path.as_bytes(), &mut meta_path).is_ok() && path_exists(meta_path.as_bytes()) {
         let (mode, uid, gid) = read_meta_file(meta_path.as_bytes(), config);
-        let mut buf = [0u8; std::mem::size_of::<libc::stat>()];
+        let mut st: libc::stat = crate::sys::zeroed();
         let addr = peek_reg(tracee, RegVersion::Original, sysarg);
-        if read_data(tracee, &mut buf, addr) < 0 {
+        if read_data(tracee, crate::sys::as_bytes_mut(&mut st), addr) < 0 {
             return 0;
         }
-        let st = unsafe { &mut *buf.as_mut_ptr().cast::<libc::stat>() };
         st.st_mode = mode | ((st.st_mode & libc::S_IFMT) | (st.st_mode & 0o7000));
         st.st_uid = uid;
         st.st_gid = gid;
-        write_data(tracee, addr, &buf);
+        write_data(tracee, addr, crate::sys::as_bytes(&st));
         return 0;
     }
 
@@ -1818,14 +1779,14 @@ fn handle_stat_exit(tracee: &mut Tracee, config: &Config, sysnum: Sysnum) -> i32
     let address = peek_reg(tracee, RegVersion::Original, sysarg);
     let uid = peek_uint32(tracee, address + offsetof_stat_uid(tracee) as Word);
     let gid = peek_uint32(tracee, address + offsetof_stat_gid(tracee) as Word);
-    if uid == unsafe { libc::getuid() } {
+    if uid == crate::sys::getuid() {
         poke_uint32(
             tracee,
             address + offsetof_stat_uid(tracee) as Word,
             config.suid,
         );
     }
-    if gid == unsafe { libc::getgid() } {
+    if gid == crate::sys::getgid() {
         poke_uint32(
             tracee,
             address + offsetof_stat_gid(tracee) as Word,
@@ -1850,10 +1811,10 @@ fn handle_chown_swap(
     let uid = peek_reg(tracee, RegVersion::Original, uid_sysarg) as u32;
     let gid = peek_reg(tracee, RegVersion::Original, gid_sysarg) as u32;
     if uid == config.ruid {
-        poke_reg(tracee, uid_sysarg, unsafe { libc::getuid() } as Word);
+        poke_reg(tracee, uid_sysarg, crate::sys::getuid() as Word);
     }
     if gid == config.rgid {
-        poke_reg(tracee, gid_sysarg, unsafe { libc::getgid() } as Word);
+        poke_reg(tracee, gid_sysarg, crate::sys::getgid() as Word);
     }
     0
 }
@@ -1868,14 +1829,14 @@ fn handle_stat_exit_simple(tracee: &mut Tracee, config: &Config, stat_sysarg: Re
     let address = peek_reg(tracee, RegVersion::Original, stat_sysarg);
     let uid = peek_uint32(tracee, address + offsetof_stat_uid(tracee) as Word);
     let gid = peek_uint32(tracee, address + offsetof_stat_gid(tracee) as Word);
-    if uid == unsafe { libc::getuid() } {
+    if uid == crate::sys::getuid() {
         poke_uint32(
             tracee,
             address + offsetof_stat_uid(tracee) as Word,
             config.suid,
         );
     }
-    if gid == unsafe { libc::getgid() } {
+    if gid == crate::sys::getgid() {
         poke_uint32(
             tracee,
             address + offsetof_stat_gid(tracee) as Word,
@@ -2189,14 +2150,14 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut Config) -> i32 {
         let address = peek_reg(tracee, RegVersion::Original, Reg::Sysarg2);
         let uid = peek_uint32(tracee, address + offsetof_stat_uid(tracee) as Word);
         let gid = peek_uint32(tracee, address + offsetof_stat_gid(tracee) as Word);
-        if uid == unsafe { libc::getuid() } {
+        if uid == crate::sys::getuid() {
             poke_uint32(
                 tracee,
                 address + offsetof_stat_uid(tracee) as Word,
                 config.suid,
             );
         }
-        if gid == unsafe { libc::getgid() } {
+        if gid == crate::sys::getgid() {
             poke_uint32(
                 tracee,
                 address + offsetof_stat_gid(tracee) as Word,
@@ -2395,7 +2356,7 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut Config) -> i32 {
             }
             if path_exists(meta_path.as_bytes()) {
                 let c = CString::new(meta_path.as_bytes()).unwrap();
-                unsafe { libc::unlink(c.as_ptr()) };
+                crate::sys::unlink(&c);
             }
             0
         }
@@ -2448,10 +2409,10 @@ fn handle_sysexit_start(tracee: &mut Tracee, config: &mut Config) -> i32 {
         None => return 0,
     };
     let c = CString::new(host_exe.as_str()).unwrap_or_default();
-    let mut mode: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::stat(c.as_ptr(), &mut mode) } < 0 {
-        return 0; // not fatal
-    }
+    let mode = match crate::sys::stat(&c) {
+        Ok(s) => s,
+        Err(_) => return 0, // not fatal
+    };
     if (mode.st_mode & libc::S_ISUID) != 0 {
         config.euid = 0;
         config.suid = 0;
@@ -2477,14 +2438,14 @@ impl FakeId0 {
                 let uid_str = *arg;
                 let uid = match uid_str.split(':').next().unwrap_or("").parse::<i64>() {
                     Ok(v) => v as u32,
-                    Err(_) => unsafe { libc::getuid() },
+                    Err(_) => crate::sys::getuid(),
                 };
                 let gid = match uid_str.find(':') {
                     Some(i) => match uid_str[i + 1..].parse::<i64>() {
                         Ok(v) => v as u32,
-                        Err(_) => unsafe { libc::getgid() },
+                        Err(_) => crate::sys::getgid(),
                     },
-                    None => unsafe { libc::getgid() },
+                    None => crate::sys::getgid(),
                 };
                 self.config.ruid = uid;
                 self.config.euid = uid;
@@ -2526,7 +2487,7 @@ impl FakeId0 {
                 }
                 let o = CString::new(old_meta.as_bytes()).unwrap();
                 let n = CString::new(new_meta.as_bytes()).unwrap();
-                if unsafe { libc::rename(o.as_ptr(), n.as_ptr()) } < 0 {
+                if crate::sys::rename(&o, &n) < 0 {
                     return -crate::path::errno();
                 }
                 0
@@ -2541,7 +2502,7 @@ impl FakeId0 {
                     return 0;
                 }
                 let c = CString::new(meta.as_bytes()).unwrap();
-                if unsafe { libc::unlink(c.as_ptr()) } < 0 {
+                if crate::sys::unlink(&c) < 0 {
                     return -crate::path::errno();
                 }
                 0
@@ -2606,14 +2567,14 @@ impl FakeId0 {
             Event::StatxSyscall { state } => {
                 if state.statx_buf.stx_mask & 0x0008 != 0 {
                     // STATX_UID
-                    if state.statx_buf.stx_uid == unsafe { libc::getuid() } {
+                    if state.statx_buf.stx_uid == crate::sys::getuid() {
                         state.statx_buf.stx_uid = self.config.suid;
                         state.updated_stats = true;
                     }
                 }
                 if state.statx_buf.stx_mask & 0x0010 != 0 {
                     // STATX_GID
-                    if state.statx_buf.stx_gid == unsafe { libc::getuid() } {
+                    if state.statx_buf.stx_gid == crate::sys::getuid() {
                         state.statx_buf.stx_gid = self.config.sgid;
                         state.updated_stats = true;
                     }
