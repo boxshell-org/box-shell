@@ -66,17 +66,13 @@ fn handle_sysexit_end(tracee: &mut Tracee) -> i32 {
 
     // Overwrite st_size with the target length.
     let stat_addr = peek_reg(tracee, RegVersion::Original, Reg::Sysarg2);
-    let raw = unsafe {
-        std::slice::from_raw_parts_mut(
-            &mut statl as *mut libc::stat as *mut u8,
-            std::mem::size_of::<libc::stat>(),
-        )
-    };
-    if read_data(tracee, raw, stat_addr) < 0 {
+    let mut buf = [0u8; std::mem::size_of::<libc::stat>()];
+    if read_data(tracee, &mut buf, stat_addr) < 0 {
         return 0;
     }
-    statl.st_size = size as i64;
-    if write_data(tracee, stat_addr, raw) < 0 {
+    let st = unsafe { &mut *buf.as_mut_ptr().cast::<libc::stat>() };
+    st.st_size = size as i64;
+    if write_data(tracee, stat_addr, &buf) < 0 {
         return -libc::EIO;
     }
     0

@@ -10,7 +10,7 @@ use crate::fpath::FixedPath;
 use crate::path::{compare_paths, Comparison};
 use crate::sysnum::{detranslate_sysnum, Sysnum};
 use crate::syscall::set_sysarg_data;
-use crate::tracee::mem::{alloc_mem, peek_word, poke_word, read_data, read_string, write_data};
+use crate::tracee::mem::{alloc_mem, poke_word, read_data, read_string, write_data};
 use crate::tracee::reg::{
     fetch_regs, get_abi, get_sysnum, get_systrap_size, peek_reg, poke_reg, push_specific_regs,
     save_current_regs, set_sysnum, Reg, RegVersion,

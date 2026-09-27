@@ -11,7 +11,7 @@ use crate::note::{note, Origin, Severity};
 use crate::path::{self, binding, canon};
 use crate::tracee::event::TraceeRef;
 use crate::tracee::{self, Tracee};
-use crate::{HOST_ROOTFS, PATH_MAX};
+use crate::HOST_ROOTFS;
 
 /// `exit_failure` in C: toggled by -V/-h so the "-1 means exit" protocol
 /// still reports success.
@@ -757,7 +757,7 @@ fn initialize_exe(tracee: &mut Tracee, exe: Option<&str>) -> Result<(), i32> {
     let reconf_paths = tracee.reconf_paths.clone();
     let mut path = FixedPath::new();
     path::which(
-        tracee,
+        Some(tracee),
         reconf_paths.as_deref(),
         &mut path,
         exe.as_bytes(),
@@ -779,11 +779,11 @@ fn post_initialize_exe(tracee: &mut Tracee) -> Result<(), i32> {
     match tracee.reconf_tracee.and_then(|id| tracee::get_tracee(id as i32, false)) {
         Some(rc) => {
             let mut t = rc.borrow_mut();
-            path::which(&mut t, reconf_paths.as_deref(), &mut path, qemu0.as_bytes())?;
+            path::which(Some(&mut t), reconf_paths.as_deref(), &mut path, qemu0.as_bytes())?;
             path::detranslate_path(&mut t, &mut path, None)?;
         }
         None => {
-            path::which(tracee, reconf_paths.as_deref(), &mut path, qemu0.as_bytes())?;
+            path::which(None, reconf_paths.as_deref(), &mut path, qemu0.as_bytes())?;
         }
     }
     if let Some(qemu) = &tracee.qemu {

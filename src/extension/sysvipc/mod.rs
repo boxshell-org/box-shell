@@ -14,8 +14,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::extension::Event;
-use crate::syscall::chain::register_chained_syscall;
-use crate::syscall::seccomp::FILTER_SYSEXIT;
 use crate::sysnum::Sysnum;
 use crate::tracee::reg::{get_sysnum, peek_reg, poke_reg, set_sysnum, Reg, RegVersion};
 use crate::tracee::seccomp::{restart_syscall_after_seccomp, set_result_after_seccomp};

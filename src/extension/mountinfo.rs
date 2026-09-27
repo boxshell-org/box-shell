@@ -42,8 +42,8 @@ fn check_open_path(tracee: &mut Tracee, path: &mut FixedPath) {
     // The target may be the current tracee itself (already borrowed) —
     // use it directly in that case, like the C raw-pointer code.
     let mut root_path = FixedPath::new();
-    let mut extra_bindings = false;
-    let mut guest_list: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let extra_bindings: bool;
+    let guest_list: Vec<(Vec<u8>, Vec<u8>)>;
     if target_pid == tracee.pid {
         let _ = crate::path::translate_path(tracee, &mut root_path, libc::AT_FDCWD, b"/", true);
         extra_bindings = has_extra_bindings(tracee);
@@ -71,6 +71,7 @@ fn check_open_path(tracee: &mut Tracee, path: &mut FixedPath) {
     } else {
         return;
     }
+    let _ = &extra_bindings;
 
     let is_android_data = matches!(
         compare_paths(root_path.as_bytes(), b"/data"),

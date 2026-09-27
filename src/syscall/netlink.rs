@@ -8,7 +8,7 @@
 
 use std::cell::RefMut;
 
-use crate::tracee::mem::{peek_word, poke_word, read_data, write_data};
+use crate::tracee::mem::{peek_word, read_data, write_data};
 use crate::tracee::reg::{peek_reg, Reg, RegVersion};
 use crate::tracee::{FakeNetlinkSocket, Tracee, MAX_FAKE_NETLINK_REPLY};
 use crate::Word;
@@ -241,7 +241,7 @@ pub fn msghdr_first_iovec(tracee: &Tracee, msghdr_addr: Word) -> Option<(Word, W
 /// `nl_add_attr()`.
 fn nl_add_attr(
     buf: &mut [u8],
-    mut off: usize,
+    off: usize,
     max: usize,
     ty: u16,
     data: &[u8],
@@ -921,9 +921,8 @@ pub fn build_fake_netlink_reply(
     let mut off = 0usize;
 
     let mut req = [0u8; 256];
-    let mut req_len = 0usize;
     if buf_addr != 0 && buf_len >= NLMSG_HDR_LEN as Word {
-        req_len = (buf_len as usize).min(req.len());
+        let req_len = (buf_len as usize).min(req.len());
         if read_data(tracee, &mut req[..req_len], buf_addr) >= 0 {
             let ty = u16::from_ne_bytes(req[4..6].try_into().unwrap());
             let flags = u16::from_ne_bytes(req[6..8].try_into().unwrap());

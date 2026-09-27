@@ -9,13 +9,11 @@ pub mod wait;
 use crate::sysnum::Sysnum;
 use crate::tracee::mem::{peek_word, poke_word, read_data, write_data};
 use crate::tracee::reg::{
-    get_sysnum, is_32on64_mode, peek_reg, poke_reg, set_sysnum, Reg, RegVersion,
+    is_32on64_mode, peek_reg, set_sysnum, Reg, RegVersion,
 };
 use crate::tracee::{get_tracee, Seccomp, Tracee, WaitsIn};
 use crate::Word;
 
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// PTrace request/option constants as `i32` (libc exposes them as `u32`
 /// on Linux/glibc, while all our bookkeeping is `i32`/`Word`), plus the

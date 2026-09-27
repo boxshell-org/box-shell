@@ -166,9 +166,10 @@ pub fn belongs_to_guestfs(tracee: &crate::tracee::Tracee, host_path: &[u8]) -> b
     c == Comparison::PathsAreEqual || c == Comparison::Path1IsPrefix
 }
 
-/// `which()` — resolve `command` using $PATH within the tracee's namespace.
+/// `which()` — resolve `command` using $PATH; within the tracee's namespace
+/// when `tracee` is set, the host namespace otherwise (C NULL case).
 pub fn which(
-    tracee: &mut crate::tracee::Tracee,
+    mut tracee: Option<&mut crate::tracee::Tracee>,
     paths: Option<&str>,
     host_path: &mut FixedPath,
     command: &[u8],
@@ -176,7 +177,7 @@ pub fn which(
     let is_explicit = command.contains(&b'/');
 
     let mut found = false;
-    if realpath2(Some(tracee), host_path, command, true).is_ok() {
+    if realpath2(tracee.as_deref_mut(), host_path, command, true).is_ok() {
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
         let c = std::ffi::CString::new(host_path.as_bytes()).unwrap();
         if unsafe { libc::stat(c.as_ptr(), &mut st) } == 0 {
@@ -199,7 +200,7 @@ pub fn which(
                 return Err(-libc::EACCES);
             }
             found = true;
-            let _ = realpath2(Some(tracee), host_path, command, false);
+            let _ = realpath2(tracee.as_deref_mut(), host_path, command, false);
         }
     }
 
@@ -233,14 +234,14 @@ pub fn which(
         let mut cand = FixedPath::new();
         cand.set(dir.as_bytes());
         let _ = cand.push_component(command);
-        if realpath2(Some(tracee), host_path, cand.as_bytes(), true).is_ok() {
+        if realpath2(tracee.as_deref_mut(), host_path, cand.as_bytes(), true).is_ok() {
             let mut st: libc::stat = unsafe { std::mem::zeroed() };
             let c = std::ffi::CString::new(host_path.as_bytes()).unwrap();
             if unsafe { libc::stat(c.as_ptr(), &mut st) } == 0
                 && (st.st_mode & libc::S_IFMT) == libc::S_IFREG
                 && (st.st_mode & libc::S_IXUSR) != 0
             {
-                let _ = realpath2(Some(tracee), host_path, cand.as_bytes(), false);
+                let _ = realpath2(tracee.as_deref_mut(), host_path, cand.as_bytes(), false);
                 return Ok(());
             }
         }
@@ -249,17 +250,20 @@ pub fn which(
 }
 
 fn not_found(
-    tracee: &mut crate::tracee::Tracee,
+    tracee: Option<&mut crate::tracee::Tracee>,
     paths: Option<&str>,
     command: &[u8],
     found: bool,
 ) -> Result<(), i32> {
     let mut cwd = FixedPath::new();
-    let cwd_str = match getcwd2(Some(tracee), &mut cwd) {
+    let cwd_str = match getcwd2(tracee.as_deref(), &mut cwd) {
         Ok(()) => cwd.to_string(),
         Err(_) => "<unknown>".to_string(),
     };
-    let root = binding::get_root(tracee);
+    let root = match tracee {
+        Some(t) => binding::get_root(t).to_string(),
+        None => "/".to_string(),
+    };
     crate::note!(
         crate::note::Severity::Error,
         crate::note::Origin::User,

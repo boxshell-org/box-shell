@@ -419,7 +419,7 @@ fn socketcall_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
     const SYS_GETPEERNAME: Word = 7;
     const SYS_ACCEPT4: Word = 18;
 
-    let mut status = 0i32;
+    let status;
     match peek_reg(tracee, RegVersion::Original, Reg::Sysarg1) {
         n if n == SYS_ACCEPT || n == SYS_ACCEPT4 => {
             let sock_addr = peekw!(arg(2));
@@ -516,8 +516,8 @@ fn rename_exit(tracee: &mut Tracee) -> Flow {
     }
 
     let mut updated = FixedPath::from_bytes(cwd.as_bytes());
-    updated.substitute_prefix(old_length, &new_path.as_bytes()[..new_length]);
-    tracee.fs.borrow_mut().cwd.set(updated.as_bytes());
+    let _ = updated.substitute_prefix(old_length, &new_path.as_bytes()[..new_length]);
+    let _ = tracee.fs.borrow_mut().cwd.set(updated.as_bytes());
     Flow::Result(0)
 }
 
@@ -526,7 +526,7 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
     if (syscall_result as i64) < 0 {
         return Flow::End;
     }
-    let mut old_size = syscall_result as usize;
+    let old_size = syscall_result as usize;
 
     let is_readlink = get_sysnum(tracee, RegVersion::Original) == Sysnum::readlink;
     let (output, max_size, input) = if is_readlink {
@@ -599,7 +599,6 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
         let full = unsafe { libc::readlink(c.as_ptr(), rbuf.as_mut_ptr() as *mut _, rbuf.len() - 1) };
         if full > 0 {
             referee.set(&rbuf[..full as usize]);
-            old_size = full as usize;
         }
     }
 

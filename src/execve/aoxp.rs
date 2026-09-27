@@ -5,7 +5,7 @@
 //! writes back the pointer table plus every modified pointee into a fresh
 //! tracer-allocated block.
 
-use crate::tracee::mem::{alloc_mem, peek_word, read_string, write_data, writev_data};
+use crate::tracee::mem::{alloc_mem, peek_word, read_string, writev_data};
 use crate::tracee::reg::{is_32on64_mode, peek_reg, poke_reg, sizeof_word, Reg, RegVersion};
 use crate::tracee::Tracee;
 use crate::Word;

@@ -25,6 +25,7 @@ const ARG_MAX: usize = 131072;
 /// `ldso_env_passthru()` — move every `LD_*` env into `define env`-prefixed
 /// runner arguments and blank them from `envp`.  `offset` is where to insert
 /// in `argv`; `undefine`/`define` are the runner flags ("-U"/"-E" for QEMU).
+#[allow(unused_assignments)] // the `known` scratch var mirrors C's shared flag
 pub fn ldso_env_passthru(
     tracee: &Tracee,
     envp: &mut XPointerArray,

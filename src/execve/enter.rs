@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 use crate::execve::aoxp::{
     fetch_array_of_xpointers, push_array_of_xpointers, read_xpointee_as_string,
-    resize_array_of_xpointers, write_xpointee_string, write_xpointees, XPointerArray,
+    resize_array_of_xpointers, write_xpointee_string, write_xpointees,
 };
 use crate::execve::elf::{
     is_host_elf, iterate_program_headers, open_elf, ElfHeader, ProgramHeader, ET_DYN, ET_EXEC,
@@ -393,7 +393,6 @@ pub fn translate_execve_enter(tracee: &mut Tracee) -> i32 {
 
     // Compute the new /proc/self/exe (guest side): extensions may
     // substitute it, else it is the detranslated host path.
-    let mut new_exe = FixedPath::new();
     let mut proc_exe = ExecveProcExeState {
         host_path: host_path.clone(),
         guest_path: FixedPath::new(),
@@ -405,12 +404,12 @@ pub fn translate_execve_enter(tracee: &mut Tracee) -> i32 {
             state: &mut proc_exe,
         },
     );
-    let ok = if ext_status >= 0 && proc_exe.substituted {
-        new_exe = proc_exe.guest_path.clone();
-        true
+    let (new_exe, ok) = if ext_status >= 0 && proc_exe.substituted {
+        (proc_exe.guest_path.clone(), true)
     } else {
-        new_exe = host_path.clone();
-        crate::path::detranslate_path(tracee, &mut new_exe, None).is_ok()
+        let mut p = host_path.clone();
+        let ok = crate::path::detranslate_path(tracee, &mut p, None).is_ok();
+        (p, ok)
     };
     tracee.new_exe = if ok { Some(new_exe.to_string()) } else { None };
 

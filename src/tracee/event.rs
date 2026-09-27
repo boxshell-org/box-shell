@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use crate::sysnum::Sysnum;
 use crate::tracee::reg::{
-    fetch_regs, get_sysnum, peek_reg, poke_reg, Reg, RegVersion,
+    fetch_regs, get_sysnum, peek_reg, Reg, RegVersion,
 };
 use crate::tracee::{get_tracee, is_in_sysenter, Seccomp, Sigstop, Tracee};
 use crate::Word;
@@ -261,11 +261,11 @@ fn install_signal_handlers() {
         for signum in 1..libc::SIGRTMAX() {
             match signum {
                 libc::SIGQUIT | libc::SIGILL | libc::SIGABRT | libc::SIGFPE | libc::SIGSEGV => {
-                    sa.sa_sigaction = kill_all_tracees2 as usize;
+                    sa.sa_sigaction = kill_all_tracees2 as *const () as usize;
                 }
                 libc::SIGUSR1 | libc::SIGUSR2 => {
                     // Was print_talloc_hierarchy; keep a cheap tracee dump.
-                    sa.sa_sigaction = dump_tracees as usize;
+                    sa.sa_sigaction = dump_tracees as *const () as usize;
                 }
                 libc::SIGCHLD | libc::SIGCONT | libc::SIGSTOP | libc::SIGTSTP
                 | libc::SIGTTIN | libc::SIGTTOU => {
@@ -291,7 +291,7 @@ fn install_signal_handlers() {
         // be set so waitpid(2) returns EINTR.
         let mut sa: libc::sigaction = std::mem::zeroed();
         sa.sa_flags = libc::SA_SIGINFO;
-        sa.sa_sigaction = wakeup_event_loop as usize;
+        sa.sa_sigaction = wakeup_event_loop as *const () as usize;
         libc::sigfillset(&mut sa.sa_mask);
         libc::sigaction(libc::SIGALRM, &sa, std::ptr::null_mut());
     }

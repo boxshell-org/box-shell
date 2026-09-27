@@ -16,11 +16,10 @@ use crate::syscall::chain::{force_chain_final_result, register_chained_syscall};
 use crate::sysnum::detranslate_sysnum;
 use crate::tracee::mem::{read_data, write_data};
 use crate::tracee::reg::{
-    get_abi, get_sysnum, is_32on64_mode, peek_reg, poke_reg, set_sysnum, Reg, RegVersion,
+    get_abi, is_32on64_mode, peek_reg, poke_reg, set_sysnum, Reg, RegVersion,
 };
 use crate::tracee::Tracee;
 use crate::Word;
-use crate::sysnum::Abi;
 
 const IPC_PRIVATE: i32 = 0;
 const IPC_CREAT: i32 = 0o1000;
@@ -55,7 +54,7 @@ struct HelperRequest {
     key: Word,
 }
 
-/// `sysvipc_shm_helper_addr` — the socket path the helper printed.
+// `sysvipc_shm_helper_addr` — the socket path the helper printed.
 thread_local! {
     static HELPER: RefCell<Option<HelperConn>> = const { RefCell::new(None) };
 }

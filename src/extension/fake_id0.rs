@@ -1340,7 +1340,7 @@ fn handle_chroot_exit(tracee: &mut Tracee, config: &Config, from_sigsys: bool) -
         }
 
         // Replace the tracee's file-system namespace.
-        let mut new_fs = crate::tracee::FileSystemNameSpace::default();
+        let new_fs = crate::tracee::FileSystemNameSpace::default();
         drop(new_fs);
         tracee.fs = std::rc::Rc::new(std::cell::RefCell::new(
             crate::tracee::FileSystemNameSpace::default(),
@@ -1743,21 +1743,16 @@ fn handle_stat_exit(tracee: &mut Tracee, config: &Config, sysnum: Sysnum) -> i32
     if get_meta_path(path.as_bytes(), &mut meta_path).is_ok() && path_exists(meta_path.as_bytes())
     {
         let (mode, uid, gid) = read_meta_file(meta_path.as_bytes(), config);
-        let mut st: libc::stat = unsafe { std::mem::zeroed() };
-        let raw = unsafe {
-            std::slice::from_raw_parts_mut(
-                &mut st as *mut _ as *mut u8,
-                std::mem::size_of::<libc::stat>(),
-            )
-        };
+        let mut buf = [0u8; std::mem::size_of::<libc::stat>()];
         let addr = peek_reg(tracee, RegVersion::Original, sysarg);
-        if read_data(tracee, raw, addr) < 0 {
+        if read_data(tracee, &mut buf, addr) < 0 {
             return 0;
         }
+        let st = unsafe { &mut *buf.as_mut_ptr().cast::<libc::stat>() };
         st.st_mode = mode | ((st.st_mode & libc::S_IFMT) | (st.st_mode & 0o7000));
         st.st_uid = uid;
         st.st_gid = gid;
-        write_data(tracee, addr, raw);
+        write_data(tracee, addr, &buf);
         return 0;
     }
 

@@ -641,10 +641,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                             None => (0, Vec::new()),
                         }
                     };
-                    if datagram == 0 {
-                        // Let the read hit the (empty) substitute socket.
-                        status = 0;
-                    } else {
+                    if datagram != 0 {
                         let mut copied = 0usize;
                         if buf != 0 {
                             copied = (len as usize).min(datagram);
@@ -673,7 +670,6 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                         unsafe { *libc::__errno_location() = 0 };
                         poke_reg(tracee, Reg::SysargResult, result as Word);
                         set_sysnum(tracee, Sysnum::Void);
-                        status = 0;
                     }
                 }
                 None => netlink::note_netns_netlink_reply(tracee, fd),
@@ -696,9 +692,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                             None => (0, Vec::new()),
                         }
                     };
-                    if datagram == 0 {
-                        status = 0;
-                    } else {
+                    if datagram != 0 {
                         let (mut msg_name, mut iov_ptr, mut iov_count) = (0, 0, 0);
                         if msghdr_addr != 0 {
                             unsafe { *libc::__errno_location() = 0 };
@@ -776,7 +770,6 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
 
                         poke_reg(tracee, Reg::SysargResult, result as Word);
                         set_sysnum(tracee, Sysnum::Void);
-                        status = 0;
                     }
                 }
                 None => netlink::note_netns_netlink_reply(tracee, fd),

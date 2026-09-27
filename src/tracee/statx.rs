@@ -207,8 +207,8 @@ pub fn handle_statx_syscall(tracee: &mut Tracee, from_sigsys: bool) -> i32 {
             // stat() doesn't expose btime; ctime is the approximation.
             state.statx_buf.stx_btime = statx_ts(sb.st_ctime, sb.st_ctime_nsec);
         }
-        state.statx_buf.stx_rdev_major = unsafe { libc::major(sb.st_rdev) };
-        state.statx_buf.stx_rdev_minor = unsafe { libc::minor(sb.st_rdev) };
+        state.statx_buf.stx_rdev_major = libc::major(sb.st_rdev);
+        state.statx_buf.stx_rdev_minor = libc::minor(sb.st_rdev);
         state.updated_stats = true;
     } else {
         // The kernel wrote the result; read it back so extensions can
