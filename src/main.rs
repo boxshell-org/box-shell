@@ -3,6 +3,11 @@
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
+    // `proot --shm-helper` — detached sysvipc backing-fd daemon.
+    if args.len() == 2 && args[1] == "--shm-helper" {
+        boxshell::extension::sysvipc::shm::shm_helper_main();
+    }
+
     // Pre-create the first tracee (pid == 0 placeholder).
     let tracee = match boxshell::tracee::get_tracee(0, true) {
         Some(t) => t,

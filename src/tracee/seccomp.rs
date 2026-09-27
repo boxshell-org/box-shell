@@ -20,7 +20,7 @@ use crate::Word;
 
 /// `restart_syscall_after_seccomp()` — rewind to the trap and re-run the
 /// (rewritten) syscall so PRoot translates it on the way in.
-fn restart_syscall_after_seccomp(tracee: &mut Tracee) {
+pub fn restart_syscall_after_seccomp(tracee: &mut Tracee) {
     // Restore regs when the replaced call exits; also defers signals.
     tracee.restore_original_regs_after_seccomp_event = true;
     tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
@@ -41,7 +41,7 @@ fn restart_syscall_after_seccomp(tracee: &mut Tracee) {
 }
 
 /// `set_result_after_seccomp()` — answer the trapped syscall directly.
-fn set_result_after_seccomp(tracee: &mut Tracee, result: Word) {
+pub fn set_result_after_seccomp(tracee: &mut Tracee, result: Word) {
     crate::verbose!(
         Some(tracee),
         3,
