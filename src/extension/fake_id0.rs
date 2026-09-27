@@ -1399,14 +1399,10 @@ fn offsetof_stat_gid(tracee: &Tracee) -> usize {
     }
 }
 
-/// `POKE_MEM_ID` — write a u16 id into tracee memory at a sysarg pointer.
+/// `POKE_MEM_ID` — write a uid/gid (u32) into tracee memory at a sysarg pointer.
 fn poke_mem_id(tracee: &mut Tracee, sysarg: Reg, field: u32) -> i32 {
     let addr = peek_reg(tracee, RegVersion::Original, sysarg);
-    // Write u16 — reuse poke_uint32 on an aligned buffer?  C writes exactly
-    // 2 bytes; use poke_word with a read-modify-write to be safe.
-    let cur = crate::tracee::mem::peek_word(tracee, addr);
-    let cleared = cur & !0xffff;
-    crate::tracee::mem::poke_word(tracee, addr, cleared | (field as Word & 0xffff));
+    crate::tracee::mem::poke_uint32(tracee, addr, field);
     if crate::path::errno() != 0 {
         return -crate::path::errno();
     }

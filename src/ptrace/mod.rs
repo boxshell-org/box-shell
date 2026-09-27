@@ -94,15 +94,25 @@ pub fn attach_to_ptracer(ptracee: &mut Tracee, ptracer_pid: i32) {
 }
 
 /// `detach_from_ptracer()` — drop the relation from both sides.
-pub fn detach_from_ptracer(ptracee: &mut Tracee) {
+pub fn detach_from_ptracer(ptracee: &mut Tracee, held_ptracer: Option<&mut Tracee>) {
     let ptracer_pid = ptracee.as_ptracee.ptracer;
     ptracee.as_ptracee.ptracer = 0;
-    if ptracer_pid != 0 {
-        crate::tracee::with_tracee_mut(ptracer_pid, |p| {
+    if ptracer_pid == 0 {
+        return;
+    }
+    // `held_ptracer` lets callers that already hold `&mut` on the ptracer
+    // avoid a re-entrant registry borrow (C mutates through raw pointers).
+    if let Some(p) = held_ptracer {
+        if p.pid == ptracer_pid {
             debug_assert!(p.as_ptracer.nb_ptracees > 0);
             p.as_ptracer.nb_ptracees = p.as_ptracer.nb_ptracees.saturating_sub(1);
-        });
+            return;
+        }
     }
+    crate::tracee::with_tracee_mut_try(ptracer_pid, |p| {
+        debug_assert!(p.as_ptracer.nb_ptracees > 0);
+        p.as_ptracer.nb_ptracees = p.as_ptracer.nb_ptracees.saturating_sub(1);
+    });
 }
 
 fn ptrace_req(request: Word, pid: i32, addr: usize, data: usize) -> i32 {
@@ -226,7 +236,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
             forced_signal = data as i32;
         }
         crate::ptrace::ptc::PTRACE_DETACH => {
-            detach_from_ptracer(&mut ptracee);
+            detach_from_ptracer(&mut ptracee, Some(ptracer));
         }
         crate::ptrace::ptc::PTRACE_KILL => {
             status = ptrace_req(request, ptracee_pid, 0, 0);

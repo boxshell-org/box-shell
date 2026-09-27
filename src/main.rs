@@ -8,6 +8,12 @@ fn main() {
         boxshell::extension::sysvipc::shm::shm_helper_main();
     }
 
+    // talloc_autofree equivalent: temp files and binding placeholders
+    // are removed when the process exits.
+    unsafe {
+        libc::atexit(temp_cleanup_atexit);
+    }
+
     // Pre-create the first tracee (pid == 0 placeholder).
     let tracee = match boxshell::tracee::get_tracee(0, true) {
         Some(t) => t,
@@ -26,4 +32,8 @@ fn main() {
         std::process::exit(libc::EXIT_SUCCESS);
     }
     std::process::exit(status);
+}
+
+extern "C" fn temp_cleanup_atexit() {
+    boxshell::path::temp::cleanup();
 }

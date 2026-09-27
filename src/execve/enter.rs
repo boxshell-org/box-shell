@@ -267,7 +267,10 @@ fn expand_runner(tracee: &mut Tracee, host_path: &mut FixedPath, user_path: &mut
         };
 
         let qemu = tracee.qemu.clone().unwrap();
-        let nb_qemu_args = qemu.len().saturating_sub(1);
+        // C stores qemu as a NULL-terminated array; `nb_qemu_args` =
+        // array_length - 1 = every real argument.  Our Vec has no
+        // terminator, so it is just `len()`.
+        let nb_qemu_args = qemu.len();
         if resize_array_of_xpointers(&mut argv, 1, nb_qemu_args as isize + 2) < 0 {
             return -libc::ENOMEM;
         }

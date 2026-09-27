@@ -150,7 +150,11 @@ pub fn translate_socketcall_enter(tracee: &mut Tracee, address: &mut Word, size:
             SIZEOF_SOCKADDR_UN,
         )
     };
-    write_data(tracee, *address, raw)
+    let status = write_data(tracee, *address, raw);
+    if status < 0 {
+        return status;
+    }
+    1
 }
 
 /// `translate_socketcall_exit()` — detranslate the sun_path written by

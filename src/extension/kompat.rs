@@ -79,12 +79,14 @@ struct Config {
     virtual_release: i32,
     utsname: Utsname,
     hwcap: Word,
+    warned_futex: bool,
 }
 
+/// Config is shared with every child tracee, like the C version where
+/// `INHERIT_PARENT` returns 0 (`talloc_reference` on the same config).
 #[derive(Default)]
 pub struct Kompat {
-    config: Option<Config>,
-    warned_futex: bool,
+    config: Option<std::rc::Rc<std::cell::RefCell<Config>>>,
 }
 
 /// `strtoul` on a byte cursor — parses the digit prefix, advances `pos`.
@@ -188,7 +190,8 @@ const F_DUPFD: Word = libc::F_DUPFD as Word;
 const FUTEX_PRIVATE_FLAG: Word = 128;
 
 /// `handle_sysenter_end()` — the per-syscall rewrite switch.
-fn handle_sysenter_end(tracee: &mut Tracee, config: &Config, warned_futex: &mut bool) -> i32 {
+fn handle_sysenter_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefCell<Config>>) -> i32 {
+    let config = &mut *config.borrow_mut();
     match get_sysnum(tracee, RegVersion::Original) {
         Sysnum::accept4 => {
             let modif = Modif {
@@ -337,8 +340,8 @@ fn handle_sysenter_end(tracee: &mut Tracee, config: &Config, warned_futex: &mut 
             if (operation & FUTEX_PRIVATE_FLAG) == 0 {
                 return 0;
             }
-            if !*warned_futex {
-                *warned_futex = true;
+            if !config.warned_futex {
+                config.warned_futex = true;
                 note!(Severity::Warning, Origin::User,
                     "kompat: this kernel doesn't support private futexes \
 and PRoot can't emulate them.  Expect some troubles...");
@@ -617,7 +620,8 @@ fn adjust_elf_auxv(tracee: &mut Tracee, config: &Config) {
 }
 
 /// `handle_sysexit_end()` — adjust results of modified syscalls.
-fn handle_sysexit_end(tracee: &mut Tracee, config: &mut Config) -> i32 {
+fn handle_sysexit_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefCell<Config>>) -> i32 {
+    let config = &mut *config.borrow_mut();
     let result = peek_reg(tracee, RegVersion::Current, Reg::SysargResult);
     let sysnum = get_sysnum(tracee, RegVersion::Original);
 
@@ -844,11 +848,12 @@ impl Kompat {
                     virtual_release: 0,
                     utsname: Utsname::default(),
                     hwcap: 0,
+                    warned_futex: false,
                 };
                 if parse_utsname(&mut config, arg) < 0 {
                     return -1;
                 }
-                self.config = Some(config);
+                self.config = Some(std::rc::Rc::new(std::cell::RefCell::new(config)));
                 0
             }
             Event::SysEnterEnd { status } => {
@@ -858,10 +863,10 @@ impl Kompat {
                     return 0;
                 }
                 let Some(config) = &self.config else { return 0 };
-                handle_sysenter_end(tracee, config, &mut self.warned_futex)
+                handle_sysenter_end(tracee, config)
             }
             Event::SysExitEnd { .. } => {
-                let Some(config) = &mut self.config else { return 0 };
+                let Some(config) = &self.config else { return 0 };
                 handle_sysexit_end(tracee, config)
             }
             Event::SysExitStart => {
@@ -871,7 +876,7 @@ impl Kompat {
                 if (result as i64) >= 0 && get_sysnum(tracee, RegVersion::Original) == Sysnum::execve
                 {
                     if let Some(config) = &self.config {
-                        adjust_elf_auxv(tracee, config);
+                        adjust_elf_auxv(tracee, &config.borrow());
                     }
                 }
                 0
@@ -921,7 +926,7 @@ impl Kompat {
     pub fn clone_for_child(&self, _clone_flags: Word) -> Self {
         Self {
             config: self.config.clone(),
-            warned_futex: self.warned_futex,
+
         }
     }
 }

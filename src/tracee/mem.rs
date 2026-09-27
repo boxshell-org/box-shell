@@ -225,7 +225,8 @@ pub fn peek_word(tracee: &Tracee, address: Word) -> Word {
     let n = process_vm_read(tracee.pid, unsafe {
         std::slice::from_raw_parts_mut(&mut result as *mut _ as *mut u8, wsize)
     }, address);
-    if n > 0 {
+    if n == wsize as isize {
+        unsafe { *errno_ptr() = 0 };
         return result;
     }
     match ptrace_peekdata(tracee.pid, address) {
@@ -245,7 +246,8 @@ pub fn poke_word(tracee: &Tracee, address: Word, value: Word) {
     let n = process_vm_write(tracee.pid, unsafe {
         std::slice::from_raw_parts(&value as *const _ as *const u8, wsize)
     }, address);
-    if n > 0 {
+    if n == wsize as isize {
+        unsafe { *errno_ptr() = 0 };
         return;
     }
     let mut v = value;
@@ -263,6 +265,7 @@ pub fn poke_word(tracee: &Tracee, address: Word, value: Word) {
 pub fn peek_uint32(tracee: &Tracee, address: Word) -> u32 {
     let mut buf = [0u8; 4];
     if process_vm_read(tracee.pid, &mut buf, address) == 4 {
+        unsafe { *errno_ptr() = 0 };
         return u32::from_ne_bytes(buf);
     }
     match ptrace_peekdata(tracee.pid, address) {
@@ -275,6 +278,7 @@ pub fn peek_uint32(tracee: &Tracee, address: Word) -> u32 {
 pub fn poke_uint32(tracee: &Tracee, address: Word, value: u32) {
     let buf = value.to_ne_bytes();
     if process_vm_write(tracee.pid, &buf, address) == 4 {
+        unsafe { *errno_ptr() = 0 };
         return;
     }
     if let Ok(old) = ptrace_peekdata(tracee.pid, address) {
@@ -297,6 +301,7 @@ pub fn poke_int32(tracee: &Tracee, address: Word, value: i32) {
 pub fn peek_uint64(tracee: &Tracee, address: Word) -> u64 {
     let mut buf = [0u8; 8];
     if process_vm_read(tracee.pid, &mut buf, address) == 8 {
+        unsafe { *errno_ptr() = 0 };
         return u64::from_ne_bytes(buf);
     }
     match ptrace_peekdata(tracee.pid, address) {

@@ -44,7 +44,12 @@ fn get_ptracee(
             Some(r) => r,
             None => continue,
         };
-        let t = rc.borrow();
+        // `ptracer` itself is already mutably borrowed up the call chain;
+        // it can never be its own ptracee, so skip it.
+        let t = match rc.try_borrow() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
         if t.as_ptracee.ptracer != ptracer.pid {
             continue;
         }
@@ -132,7 +137,7 @@ fn update_wait_status(ptracer: &mut Tracee, ptracee_rc: &TraceeRef) -> i32 {
 
         {
             let mut p = ptracee_rc.borrow_mut();
-            crate::ptrace::detach_from_ptracer(&mut p);
+            crate::ptrace::detach_from_ptracer(&mut p, Some(ptracer));
         }
         // Zombies rest in peace once notified.
         let is_zombie = ptracee_rc.borrow().as_ptracee.is_zombie;
@@ -162,7 +167,7 @@ fn update_wait_status(ptracer: &mut Tracee, ptracee_rc: &TraceeRef) -> i32 {
 
     if is_zombie {
         let mut p = ptracee_rc.borrow_mut();
-        crate::ptrace::detach_from_ptracer(&mut p);
+        crate::ptrace::detach_from_ptracer(&mut p, Some(ptracer));
         drop(p);
         remove_zombie(ptracer, ptracee_pid);
     }

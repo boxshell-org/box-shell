@@ -302,6 +302,15 @@ pub fn with_tracee_mut<R>(pid: i32, f: impl FnOnce(&mut Tracee) -> R) -> Option<
     TRACEES.with(|t| t.borrow().get(&pid).map(|rc| f(&mut rc.borrow_mut())))
 }
 
+/// Like `with_tracee_mut` but returns `None` instead of panicking when the
+/// tracee's `RefCell` is already borrowed (it is a raw pointer in C, where
+/// aliasing is fine; here we must degrade gracefully).
+pub fn with_tracee_mut_try<R>(pid: i32, f: impl FnOnce(&mut Tracee) -> R) -> Option<R> {
+    TRACEES.try_with(|t| t.borrow().get(&pid).cloned()).ok().flatten().and_then(|rc| {
+        rc.try_borrow_mut().ok().map(|mut t| f(&mut t))
+    })
+}
+
 /// Get an `Rc` handle on the tracee with @pid, creating+registering a fresh
 /// one when `create` is true.
 /// Get an `Rc` handle on the tracee with @pid, creating+registering a fresh
@@ -550,9 +559,9 @@ fn remove_tracee(tracee_rc: &Rc<RefCell<Tracee>>) {
 pub fn detach_from_ptracer(ptracee_pid: i32) {
     let ptracer_pid = with_tracee(ptracee_pid, |t| t.as_ptracee.ptracer)
         .unwrap_or(0);
-    with_tracee_mut(ptracee_pid, |t| t.as_ptracee.ptracer = 0);
+    with_tracee_mut_try(ptracee_pid, |t| t.as_ptracee.ptracer = 0);
     if ptracer_pid != 0 {
-        with_tracee_mut(ptracer_pid, |p| {
+        with_tracee_mut_try(ptracer_pid, |p| {
             if p.as_ptracer.nb_ptracees > 0 {
                 p.as_ptracer.nb_ptracees -= 1;
             }

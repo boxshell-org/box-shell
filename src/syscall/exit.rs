@@ -632,16 +632,19 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
         status = referee.len() + 1;
     }
 
+    // `referee` is conceptually NUL-terminated (status counts the NUL).
+    let mut out = referee.as_bytes().to_vec();
+    out.push(0);
     let new_size;
     if status < max_size {
         new_size = status - 1;
-        let r = write_data(tracee, output, &referee.as_bytes()[..new_size]);
+        let r = write_data(tracee, output, &out[..status.min(out.len())]);
         if r < 0 {
             return Flow::Result(r);
         }
     } else {
         new_size = max_size;
-        let r = write_data(tracee, output, &referee.as_bytes()[..max_size.min(referee.len())]);
+        let r = write_data(tracee, output, &out[..max_size.min(out.len())]);
         if r < 0 {
             return Flow::Result(r);
         }

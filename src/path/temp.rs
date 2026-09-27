@@ -160,8 +160,13 @@ fn remove_placeholder(path: &std::path::Path) {
 }
 
 /// Remove every registered temp path and placeholder; call at exit.
+/// Reverse order matches talloc_autofree (children destroy newest-first),
+/// so `dont/create` is removed before `dont`.
 pub fn cleanup() {
-    for p in TEMP_PATHS.lock().unwrap().drain(..) {
+    for p in PLACEHOLDERS.lock().unwrap().iter().rev() {
+        remove_placeholder(p);
+    }
+    for p in TEMP_PATHS.lock().unwrap().drain(..).collect::<Vec<_>>().into_iter().rev() {
         let meta = std::fs::symlink_metadata(&p);
         match meta {
             Ok(m) if m.is_dir() => {
