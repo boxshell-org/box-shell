@@ -391,7 +391,9 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
                     | crate::ptrace::ptc::PTRACE_O_TRACECLONE
                     | crate::ptrace::ptc::PTRACE_O_TRACEEXIT;
 
-                if !unsafe { DELIVER_SIGTRAP } {
+                if unsafe { DELIVER_SIGTRAP } {
+                    // A later bare SIGTRAP is a real signal: deliver as-is.
+                } else {
                     unsafe { DELIVER_SIGTRAP = true };
                     // Try to enable seccomp-accelerated event delivery.
                     let status = unsafe {
@@ -424,8 +426,8 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
                                 kernel_supports_ptrace_event_seccomp()
                         };
                     }
+                    signal = handle_sigtrap_syscall(tracee, &mut signal);
                 }
-                signal = handle_sigtrap_syscall(tracee, &mut signal);
             }
             s if s == libc::SIGTRAP | 0x80 => {
                 signal = handle_sigtrap_syscall(tracee, &mut signal);
