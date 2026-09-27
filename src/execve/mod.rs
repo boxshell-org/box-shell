@@ -1,0 +1,55 @@
+//! execve(2) subsystem — port of src/execve/*.
+
+pub mod elf;
+pub mod enter;
+pub mod exit;
+pub mod ldso;
+pub mod shebang;
+
+pub use elf::{ElfHeader, ProgramHeader};
+
+use crate::fpath::FixedPath;
+use crate::tracee::Tracee;
+use crate::Word;
+
+/// `struct mapping` — one file-backed or anonymous mapping the loader
+/// creates for the program/interpreter.
+#[derive(Copy, Clone, Default)]
+pub struct Mapping {
+    pub addr: Word,
+    pub length: Word,
+    pub clear_length: Word,
+    pub prot: Word,
+    pub flags: Word,
+    pub fd: Word,
+    pub offset: Word,
+}
+
+/// `struct load_info` — everything execve-enter computes and execve-exit
+/// (or the embedded loader) consumes.
+pub struct LoadInfo {
+    pub host_path: String,
+    pub user_path: String,
+    pub raw_path: String,
+    pub mappings: Vec<Mapping>,
+    pub elf_header: ElfHeader,
+    pub needs_executable_stack: bool,
+    pub interp: Option<Box<LoadInfo>>,
+}
+
+/// `struct execve_proc_exe_state` — EXECVE_PROC_EXE event payload.
+pub struct ExecveProcExeState {
+    pub host_path: FixedPath,
+    pub guest_path: FixedPath,
+    pub substituted: bool,
+}
+
+/// `IS_NOTIFICATION_PTRACED_LOAD_DONE`.
+pub fn is_notification_ptraced_load_done(tracee: &Tracee) -> bool {
+    use crate::tracee::reg::{peek_reg, Reg, RegVersion};
+    tracee.as_ptracee.ptracer != 0
+        && peek_reg(tracee, RegVersion::Original, Reg::Sysarg1) == 1
+        && peek_reg(tracee, RegVersion::Original, Reg::Sysarg4) == 2
+        && peek_reg(tracee, RegVersion::Original, Reg::Sysarg5) == 3
+        && peek_reg(tracee, RegVersion::Original, Reg::Sysarg6) == 4
+}

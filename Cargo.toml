@@ -1,0 +1,23 @@
+[package]
+name = "box-shell"
+version = "5.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "User-space implementation of chroot, bind mounts and binfmt_misc (clean-room PRoot rewrite in Rust)"
+license = "GPL-2.0-or-later"
+
+[[bin]]
+name = "proot"
+path = "src/main.rs"
+
+[lib]
+name = "boxshell"
+path = "src/lib.rs"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
