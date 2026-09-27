@@ -270,7 +270,11 @@ pub fn ipc_object_id(index: usize, generation: i16) -> i32 {
 
 /// `LOOKUP_IPC_OBJECT` — resolve the tracee's SYSARG_1 id to an index,
 /// validating generation. Returns Err(-EINVAL) or the 0-based index.
-pub fn lookup_ipc_object(tracee: &Tracee, objects_len: usize, valid_at: impl Fn(usize) -> (bool, i16)) -> Result<usize, i32> {
+pub fn lookup_ipc_object(
+    tracee: &Tracee,
+    objects_len: usize,
+    valid_at: impl Fn(usize) -> (bool, i16),
+) -> Result<usize, i32> {
     let object_id = peek_reg(tracee, RegVersion::Current, Reg::Sysarg1) as i32;
     let object_index = (object_id & 0xFFF) as usize;
     if object_index == 0 || object_index > objects_len {
@@ -482,9 +486,7 @@ impl Sysvipc {
             Event::SysEnterEnd { status } => {
                 // If we've just finished execve, remove mapped shms from
                 // this process.
-                if *status == 0
-                    && get_sysnum(tracee, RegVersion::Current) == Sysnum::execve
-                {
+                if *status == 0 && get_sysnum(tracee, RegVersion::Current) == Sysnum::execve {
                     if let Some(process) = &self.process {
                         shm::remove_mappings_from_process(
                             &mut process.borrow_mut(),

@@ -137,8 +137,8 @@ pub fn handle_statx_syscall(tracee: &mut Tracee, from_sigsys: bool) -> i32 {
         // Answer from a tracer-side [l]stat of the translated path.
         let mut sb: libc::stat = unsafe { std::mem::zeroed() };
         let r = if do_fstat {
-            let link = std::ffi::CString::new(format!("/proc/{}/fd/{}", tracee.pid, dirfd))
-                .unwrap();
+            let link =
+                std::ffi::CString::new(format!("/proc/{}/fd/{}", tracee.pid, dirfd)).unwrap();
             unsafe { libc::stat(link.as_ptr(), &mut sb) }
         } else {
             let c = std::ffi::CString::new(state.host_path.as_bytes()).unwrap();

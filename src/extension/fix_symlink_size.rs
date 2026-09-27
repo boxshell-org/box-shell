@@ -9,8 +9,8 @@
 use std::ffi::CString;
 
 use crate::extension::Event;
-use crate::sysnum::Sysnum;
 use crate::syscall::seccomp::FILTER_SYSEXIT;
+use crate::sysnum::Sysnum;
 use crate::tracee::mem::{read_data, read_string, write_data};
 use crate::tracee::reg::{get_sysnum, peek_reg, Reg, RegVersion};
 use crate::tracee::Tracee;

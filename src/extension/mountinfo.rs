@@ -19,7 +19,12 @@ use crate::Word;
 pub struct Mountinfo;
 
 fn has_extra_bindings(target: &Tracee) -> bool {
-    target.fs.borrow().guest.iter().any(|b| b.guest.as_bytes() != b"/")
+    target
+        .fs
+        .borrow()
+        .guest
+        .iter()
+        .any(|b| b.guest.as_bytes() != b"/")
 }
 
 /// `mountinfo_check_open_path()` — if the translated path is
@@ -58,13 +63,12 @@ fn check_open_path(tracee: &mut Tracee, path: &mut FixedPath) {
         if let Ok(mut t) = rc.try_borrow_mut() {
             let _ = crate::path::translate_path(&mut t, &mut root_path, libc::AT_FDCWD, b"/", true);
             extra_bindings = has_extra_bindings(&t);
-            guest_list = t
-                .fs
-                .borrow()
-                .guest
-                .iter()
-                .map(|b| (b.guest.as_bytes().to_vec(), b.host.as_bytes().to_vec()))
-                .collect();
+            guest_list =
+                t.fs.borrow()
+                    .guest
+                    .iter()
+                    .map(|b| (b.guest.as_bytes().to_vec(), b.host.as_bytes().to_vec()))
+                    .collect();
         } else {
             return;
         }

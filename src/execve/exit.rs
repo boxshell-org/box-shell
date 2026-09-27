@@ -14,8 +14,7 @@ use crate::path::{compare_paths, Comparison, Side};
 use crate::sysnum::Sysnum;
 use crate::tracee::mem::{peek_word, write_data};
 use crate::tracee::reg::{
-    is_32on64_mode, peek_reg, poke_reg, save_current_regs, set_sysnum, sizeof_word, Reg,
-    RegVersion,
+    is_32on64_mode, peek_reg, poke_reg, save_current_regs, set_sysnum, sizeof_word, Reg, RegVersion,
 };
 use crate::tracee::Tracee;
 use crate::Word;
@@ -282,7 +281,9 @@ pub fn translate_execve_exit(tracee: &mut Tracee) {
 
     // New processes have no heap.
     if Rc::strong_count(&tracee.heap) > 1 {
-        tracee.heap = Rc::new(std::cell::RefCell::new(crate::syscall::heap::Heap::default()));
+        tracee.heap = Rc::new(std::cell::RefCell::new(
+            crate::syscall::heap::Heap::default(),
+        ));
     } else if let Ok(mut heap) = tracee.heap.try_borrow_mut() {
         *heap = crate::syscall::heap::Heap::default();
     }

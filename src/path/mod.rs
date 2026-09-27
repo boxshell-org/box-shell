@@ -114,7 +114,10 @@ pub fn readlink_proc_pid_fd(pid: i32, fd: i32, path: &mut FixedPath) -> Result<(
 
 /// `getcwd2()` — the tracee's virtual cwd (guest path) or host getcwd when
 /// `tracee` is None.
-pub fn getcwd2(tracee: Option<&crate::tracee::Tracee>, guest_path: &mut FixedPath) -> Result<(), i32> {
+pub fn getcwd2(
+    tracee: Option<&crate::tracee::Tracee>,
+    guest_path: &mut FixedPath,
+) -> Result<(), i32> {
     match tracee {
         None => {
             let mut buf = vec![0u8; PATH_MAX];
@@ -384,7 +387,8 @@ pub fn detranslate_path(
             _ => {
                 if !belongs_to_guestfs(tracee, t_referrer.as_bytes()) {
                     let referree = binding::get_path_binding(tracee, Side::Host, path.as_bytes());
-                    let referrer = binding::get_path_binding(tracee, Side::Host, t_referrer.as_bytes());
+                    let referrer =
+                        binding::get_path_binding(tracee, Side::Host, t_referrer.as_bytes());
                     if let (Some(ree), Some(rer)) = (referree, referrer) {
                         follow_binding = compare_paths(ree.as_bytes(), rer.as_bytes())
                             == Comparison::PathsAreEqual;

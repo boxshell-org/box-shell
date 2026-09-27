@@ -161,19 +161,27 @@ pub fn msgsnd(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
     // Deliver to a waiting msgrcv.
     let mut woke = false;
     let ns_ptr = ns.clone();
-    for_each_tracee_in_ns(Some(&ns_ptr), tracee.pid, |receiver_tracee, receiver_config| {
-        if woke {
-            return;
-        }
-        if receiver_config.wait_reason == WaitReason::QueueRecv
-            && receiver_config.waiting_object_index == queue_index
-            && msg_match(item.mtype, receiver_config.msgrcv_msgtyp, receiver_config.msgrcv_msgflg)
-        {
-            receiver_config.chain_state = ChainState::MsgrcvRetry;
-            wake_tracee(receiver_tracee, receiver_config, -libc::EAGAIN);
-            woke = true;
-        }
-    });
+    for_each_tracee_in_ns(
+        Some(&ns_ptr),
+        tracee.pid,
+        |receiver_tracee, receiver_config| {
+            if woke {
+                return;
+            }
+            if receiver_config.wait_reason == WaitReason::QueueRecv
+                && receiver_config.waiting_object_index == queue_index
+                && msg_match(
+                    item.mtype,
+                    receiver_config.msgrcv_msgtyp,
+                    receiver_config.msgrcv_msgflg,
+                )
+            {
+                receiver_config.chain_state = ChainState::MsgrcvRetry;
+                wake_tracee(receiver_tracee, receiver_config, -libc::EAGAIN);
+                woke = true;
+            }
+        },
+    );
 
     let mut nsb = ns.borrow_mut();
     let queue = &mut nsb.queues[queue_index];
@@ -307,13 +315,17 @@ pub fn msgctl(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
     match cmd {
         c if c == IPC_RMID || c == IPC_RMID | SYSVIPC_IPC_64 => {
             let ns_ptr = ns.clone();
-            for_each_tracee_in_ns(Some(&ns_ptr), tracee.pid, |waiting_tracee, waiting_config| {
-                if waiting_config.wait_reason == WaitReason::QueueRecv
-                    && waiting_config.waiting_object_index == queue_index
-                {
-                    wake_tracee(waiting_tracee, waiting_config, -libc::EIDRM);
-                }
-            });
+            for_each_tracee_in_ns(
+                Some(&ns_ptr),
+                tracee.pid,
+                |waiting_tracee, waiting_config| {
+                    if waiting_config.wait_reason == WaitReason::QueueRecv
+                        && waiting_config.waiting_object_index == queue_index
+                    {
+                        wake_tracee(waiting_tracee, waiting_config, -libc::EIDRM);
+                    }
+                },
+            );
             let mut nsb = ns.borrow_mut();
             let queue = &mut nsb.queues[queue_index];
             queue.valid = false;

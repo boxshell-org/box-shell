@@ -10,7 +10,12 @@ use crate::Word;
 fn ptrace_peekdata(pid: i32, addr: Word) -> Result<Word, i32> {
     unsafe {
         *errno_ptr() = 0;
-        let v = libc::ptrace(crate::ptrace::ptc::PTRACE_PEEKDATA as u32, pid, addr as usize, 0usize);
+        let v = libc::ptrace(
+            crate::ptrace::ptc::PTRACE_PEEKDATA as u32,
+            pid,
+            addr as usize,
+            0usize,
+        );
         let e = *errno_ptr();
         if e != 0 {
             return Err(if e == libc::EIO { libc::EFAULT } else { e });
@@ -22,7 +27,12 @@ fn ptrace_peekdata(pid: i32, addr: Word) -> Result<Word, i32> {
 fn ptrace_pokedata(pid: i32, addr: Word, value: Word) -> Result<(), i32> {
     unsafe {
         *errno_ptr() = 0;
-        libc::ptrace(crate::ptrace::ptc::PTRACE_POKEDATA as u32, pid, addr as usize, value as usize);
+        libc::ptrace(
+            crate::ptrace::ptc::PTRACE_POKEDATA as u32,
+            pid,
+            addr as usize,
+            value as usize,
+        );
         let e = *errno_ptr();
         if e != 0 {
             return Err(if e == libc::EIO { libc::EFAULT } else { e });
@@ -36,14 +46,26 @@ fn errno_ptr() -> *mut i32 {
 }
 
 fn process_vm_write(pid: i32, local: &[u8], remote: Word) -> isize {
-    let liovec = libc::iovec { iov_base: local.as_ptr() as *mut _, iov_len: local.len() };
-    let riovec = libc::iovec { iov_base: remote as usize as *mut _, iov_len: local.len() };
+    let liovec = libc::iovec {
+        iov_base: local.as_ptr() as *mut _,
+        iov_len: local.len(),
+    };
+    let riovec = libc::iovec {
+        iov_base: remote as usize as *mut _,
+        iov_len: local.len(),
+    };
     unsafe { libc::process_vm_writev(pid, &liovec, 1, &riovec, 1, 0) }
 }
 
 fn process_vm_read(pid: i32, local: &mut [u8], remote: Word) -> isize {
-    let liovec = libc::iovec { iov_base: local.as_mut_ptr() as *mut _, iov_len: local.len() };
-    let riovec = libc::iovec { iov_base: remote as usize as *mut _, iov_len: local.len() };
+    let liovec = libc::iovec {
+        iov_base: local.as_mut_ptr() as *mut _,
+        iov_len: local.len(),
+    };
+    let riovec = libc::iovec {
+        iov_base: remote as usize as *mut _,
+        iov_len: local.len(),
+    };
     unsafe { libc::process_vm_readv(pid, &liovec, 1, &riovec, 1, 0) }
 }
 
@@ -63,8 +85,11 @@ pub fn write_data(tracee: &Tracee, dest: Word, src: &[u8]) -> i32 {
     for i in 0..full {
         let w = Word::from_ne_bytes(src[i * ws..i * ws + ws].try_into().unwrap());
         if ptrace_pokedata(tracee.pid, dest + (i * ws) as Word, w).is_err() {
-            crate::note!(crate::note::Severity::Warning, crate::note::Origin::System,
-                         "ptrace(POKEDATA)");
+            crate::note!(
+                crate::note::Severity::Warning,
+                crate::note::Origin::System,
+                "ptrace(POKEDATA)"
+            );
             return -libc::EFAULT;
         }
     }
@@ -76,8 +101,11 @@ pub fn write_data(tracee: &Tracee, dest: Word, src: &[u8]) -> i32 {
     let mut word = match ptrace_peekdata(tracee.pid, dest + (full * ws) as Word) {
         Ok(w) => w,
         Err(_) => {
-            crate::note!(crate::note::Severity::Warning, crate::note::Origin::System,
-                         "ptrace(PEEKDATA)");
+            crate::note!(
+                crate::note::Severity::Warning,
+                crate::note::Origin::System,
+                "ptrace(PEEKDATA)"
+            );
             return -libc::EFAULT;
         }
     };
@@ -85,8 +113,11 @@ pub fn write_data(tracee: &Tracee, dest: Word, src: &[u8]) -> i32 {
     wb[..trailing].copy_from_slice(&src[full * ws..]);
     word = Word::from_ne_bytes(wb);
     if ptrace_pokedata(tracee.pid, dest + (full * ws) as Word, word).is_err() {
-        crate::note!(crate::note::Severity::Warning, crate::note::Origin::System,
-                     "ptrace(POKEDATA)");
+        crate::note!(
+            crate::note::Severity::Warning,
+            crate::note::Origin::System,
+            "ptrace(POKEDATA)"
+        );
         return -libc::EFAULT;
     }
     0
@@ -97,11 +128,18 @@ pub fn writev_data(tracee: &Tracee, dest: Word, srcs: &[&[u8]]) -> i32 {
     let total: usize = srcs.iter().map(|s| s.len()).sum();
     let local: Vec<libc::iovec> = srcs
         .iter()
-        .map(|s| libc::iovec { iov_base: s.as_ptr() as *mut _, iov_len: s.len() })
+        .map(|s| libc::iovec {
+            iov_base: s.as_ptr() as *mut _,
+            iov_len: s.len(),
+        })
         .collect();
-    let remote = libc::iovec { iov_base: dest as usize as *mut _, iov_len: total };
-    if unsafe { libc::process_vm_writev(tracee.pid, local.as_ptr(), local.len() as _, &remote, 1, 0) }
-        == total as isize
+    let remote = libc::iovec {
+        iov_base: dest as usize as *mut _,
+        iov_len: total,
+    };
+    if unsafe {
+        libc::process_vm_writev(tracee.pid, local.as_ptr(), local.len() as _, &remote, 1, 0)
+    } == total as isize
     {
         return 0;
     }
@@ -133,8 +171,11 @@ pub fn read_data(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
         match ptrace_peekdata(tracee.pid, src + (i * ws) as Word) {
             Ok(w) => dest[i * ws..i * ws + ws].copy_from_slice(&w.to_ne_bytes()),
             Err(_) => {
-                crate::note!(crate::note::Severity::Warning, crate::note::Origin::System,
-                             "ptrace(PEEKDATA)");
+                crate::note!(
+                    crate::note::Severity::Warning,
+                    crate::note::Origin::System,
+                    "ptrace(PEEKDATA)"
+                );
                 return -libc::EFAULT;
             }
         }
@@ -148,8 +189,11 @@ pub fn read_data(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
             0
         }
         Err(_) => {
-            crate::note!(crate::note::Severity::Warning, crate::note::Origin::System,
-                         "ptrace(PEEKDATA)");
+            crate::note!(
+                crate::note::Severity::Warning,
+                crate::note::Origin::System,
+                "ptrace(PEEKDATA)"
+            );
             -libc::EFAULT
         }
     }
@@ -222,9 +266,11 @@ pub fn read_string(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
 pub fn peek_word(tracee: &Tracee, address: Word) -> Word {
     let mut result: Word = 0;
     let wsize = sizeof_word(tracee);
-    let n = process_vm_read(tracee.pid, unsafe {
-        std::slice::from_raw_parts_mut(&mut result as *mut _ as *mut u8, wsize)
-    }, address);
+    let n = process_vm_read(
+        tracee.pid,
+        unsafe { std::slice::from_raw_parts_mut(&mut result as *mut _ as *mut u8, wsize) },
+        address,
+    );
     if n == wsize as isize {
         unsafe { *errno_ptr() = 0 };
         return result;
@@ -243,9 +289,11 @@ pub fn peek_word(tracee: &Tracee, address: Word) -> Word {
 /// `poke_word()` — write one guest word; errno carries the failure.
 pub fn poke_word(tracee: &Tracee, address: Word, value: Word) {
     let wsize = sizeof_word(tracee);
-    let n = process_vm_write(tracee.pid, unsafe {
-        std::slice::from_raw_parts(&value as *const _ as *const u8, wsize)
-    }, address);
+    let n = process_vm_write(
+        tracee.pid,
+        unsafe { std::slice::from_raw_parts(&value as *const _ as *const u8, wsize) },
+        address,
+    );
     if n == wsize as isize {
         unsafe { *errno_ptr() = 0 };
         return;
@@ -318,11 +366,12 @@ pub fn alloc_mem(tracee: &mut Tracee, size: i64) -> Word {
     if sp == peek_reg(tracee, RegVersion::Original, Reg::StackPointer) {
         size += crate::arch::RED_ZONE_SIZE as i64;
     }
-    if (size > 0 && sp <= size as u64)
-        || (size < 0 && sp >= u64::MAX.wrapping_add(size as u64))
-    {
-        crate::note!(crate::note::Severity::Warning, crate::note::Origin::Internal,
-                     "integer under/overflow detected in alloc_mem");
+    if (size > 0 && sp <= size as u64) || (size < 0 && sp >= u64::MAX.wrapping_add(size as u64)) {
+        crate::note!(
+            crate::note::Severity::Warning,
+            crate::note::Origin::Internal,
+            "integer under/overflow detected in alloc_mem"
+        );
         return 0;
     }
     sp = sp.wrapping_sub(size as u64);

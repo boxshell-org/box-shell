@@ -123,7 +123,12 @@ fn launch_helper() -> Option<HelperConn> {
                 let exe = CString::new("/proc/self/exe").unwrap();
                 let arg0 = CString::new("proot").unwrap();
                 let arg1 = CString::new("--shm-helper").unwrap();
-                libc::execl(exe.as_ptr(), arg0.as_ptr(), arg1.as_ptr(), std::ptr::null::<u8>());
+                libc::execl(
+                    exe.as_ptr(),
+                    arg0.as_ptr(),
+                    arg1.as_ptr(),
+                    std::ptr::null::<u8>(),
+                );
                 libc::_exit(1);
             }
             libc::_exit(0);
@@ -181,7 +186,7 @@ fn recvmsg_pointers(
     let msghdr_iovlen = msghdr_control - ptr_len;
     let msghdr_iov = msghdr_iovlen - ptr_len;
     let msghdr = msghdr_iov - ptr_len * 2; // name & namelen unused
-    // control data is at guest_buf
+                                           // control data is at guest_buf
 
     if do_write {
         let mut data = vec![0u8; sockaddr_un_len as usize];
@@ -493,7 +498,14 @@ pub fn shmat_chain(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
             register_chained_syscall(
                 tracee,
                 Sysnum::recvmsg,
-                [config.shmat_socket_fd as Word, pointers.msghdr_ptr, 0, 0, 0, 0],
+                [
+                    config.shmat_socket_fd as Word,
+                    pointers.msghdr_ptr,
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
             );
             config.chain_state = ChainState::ShmatRecvmsg;
             1
@@ -513,9 +525,8 @@ pub fn shmat_chain(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
                     .try_into()
                     .unwrap(),
             );
-            let cmsg_type = i32::from_ne_bytes(
-                cmsg[std::mem::size_of::<Word>() + 4..].try_into().unwrap(),
-            );
+            let cmsg_type =
+                i32::from_ne_bytes(cmsg[std::mem::size_of::<Word>() + 4..].try_into().unwrap());
             if cmsg_level != libc::SOL_SOCKET || cmsg_type != SCM_RIGHTS {
                 return shmat_fail_close(tracee, config);
             }
@@ -629,9 +640,9 @@ pub fn shmdt(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
     let proc = config.process.as_ref().unwrap().clone();
     let found = {
         let p = proc.borrow();
-        p.mapped_shms.iter().position(|m| {
-            m.as_ref().map(|m| m.addr == addr).unwrap_or(false)
-        })
+        p.mapped_shms
+            .iter()
+            .position(|m| m.as_ref().map(|m| m.addr == addr).unwrap_or(false))
     };
     let Some(index) = found else {
         return -libc::EINVAL;
@@ -654,7 +665,9 @@ pub fn shmdt(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
         p.mapped_shms[index] = None;
     }
     let ns = config.ipc_namespace.as_ref().unwrap().clone();
-    ns.borrow_mut().shms[shm_index].mappings.retain(|r| *r != mref);
+    ns.borrow_mut().shms[shm_index]
+        .mappings
+        .retain(|r| *r != mref);
     let empty = ns.borrow().shms[shm_index].mappings.is_empty();
     if empty && ns.borrow().shms[shm_index].rmid_pending {
         do_rmid(&ns, shm_index);
@@ -900,7 +913,9 @@ pub fn shm_helper_main() -> ! {
                 libc::close(request.fd);
             },
             x if x == HelperOp::Distribute as i32 => {
-                let client = unsafe { libc::accept(socket_server_fd, std::ptr::null_mut(), std::ptr::null_mut()) };
+                let client = unsafe {
+                    libc::accept(socket_server_fd, std::ptr::null_mut(), std::ptr::null_mut())
+                };
                 if client >= 0 {
                     sendfd(client, request.fd);
                     unsafe { libc::close(client) };

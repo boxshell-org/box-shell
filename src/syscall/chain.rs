@@ -66,11 +66,7 @@ fn register_at_front(tracee: &mut Tracee, sysnum: Sysnum, sysargs: [Word; 6]) ->
 /// instruction pointer back onto the trap and rewrite sysargs.
 pub fn chain_next_syscall(tracee: &mut Tracee) {
     debug_assert!(tracee.chain.syscalls.is_some());
-    let popped = tracee
-        .chain
-        .syscalls
-        .as_mut()
-        .and_then(|q| q.pop_front());
+    let popped = tracee.chain.syscalls.as_mut().and_then(|q| q.pop_front());
     match popped {
         None => {
             // Drained: free the queue head (C's TALLOC_FREE) and force the

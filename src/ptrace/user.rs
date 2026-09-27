@@ -57,8 +57,9 @@ const fn convert_user_regs_index(index: usize) -> usize {
 const DEBUGREG64_OFFSET: usize = std::mem::offset_of!(libc::user, u_debugreg);
 
 fn convert_user_debugreg_offset(offset: usize) -> usize {
-    debug_assert!((USER32_DEBUGREG_OFFSET..USER32_DEBUGREG_OFFSET + USER32_DEBUGREG_SIZE)
-        .contains(&offset));
+    debug_assert!(
+        (USER32_DEBUGREG_OFFSET..USER32_DEBUGREG_OFFSET + USER32_DEBUGREG_SIZE).contains(&offset)
+    );
     let index = (offset - USER32_DEBUGREG_OFFSET) / 4;
     DEBUGREG64_OFFSET + index * 8
 }
@@ -118,7 +119,11 @@ pub fn convert_user_offset(offset: Word) -> Word {
 
 /// `convert_user_regs_struct()` — marshal a 32-bit user regs block to/from
 /// a 64-bit `user_regs_struct` (held as a flat u64 slice).
-pub fn convert_user_regs_struct(reverse: bool, user_regs64: &mut [u64], user_regs32: &mut [u32; USER32_NB_REGS]) {
+pub fn convert_user_regs_struct(
+    reverse: bool,
+    user_regs64: &mut [u64],
+    user_regs32: &mut [u32; USER32_NB_REGS],
+) {
     for index32 in 0..USER32_NB_REGS {
         let index64 = convert_user_regs_index(index32);
         if reverse {

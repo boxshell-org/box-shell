@@ -12,9 +12,8 @@ use std::os::unix::ffi::OsStrExt;
 
 use crate::extension::Event;
 use crate::fpath::FixedPath;
-use crate::PATH_MAX;
-use crate::path::{compare_paths, detranslate_path, readlink_proc_pid_fd, Comparison};
 use crate::path::f2fs::should_skip_file_access_due_to_f2fs_bug;
+use crate::path::{compare_paths, detranslate_path, readlink_proc_pid_fd, Comparison};
 use crate::syscall::seccomp::FILTER_SYSEXIT;
 use crate::sysnum::Sysnum;
 use crate::tracee::mem::{read_path, write_data};
@@ -24,6 +23,7 @@ use crate::tracee::reg::{
 use crate::tracee::Tracee;
 use crate::verbose;
 use crate::Word;
+use crate::PATH_MAX;
 
 const PREFIX: &[u8] = b".l2s.";
 const DELETED_SUFFIX: &[u8] = b" (deleted)";
@@ -88,7 +88,11 @@ fn get_l2s_directory() -> Option<Vec<u8>> {
                 }
             }
         }
-        if c.1.is_empty() { None } else { Some(c.1.clone()) }
+        if c.1.is_empty() {
+            None
+        } else {
+            Some(c.1.clone())
+        }
     })
 }
 
@@ -129,10 +133,7 @@ fn l2s_entry(path: &[u8]) -> Result<(i32, &[u8]), i32> {
     let Some(dir) = get_l2s_directory() else {
         return Ok((-1, path));
     };
-    if path.len() <= dir.len()
-        || &path[..dir.len()] != dir.as_slice()
-        || path[dir.len()] != b'/'
-    {
+    if path.len() <= dir.len() || &path[..dir.len()] != dir.as_slice() || path[dir.len()] != b'/' {
         return Ok((-1, path));
     }
     let base = &path[dir.len() + 1..];
@@ -148,7 +149,11 @@ fn l2s_entry(path: &[u8]) -> Result<(i32, &[u8]), i32> {
 
 fn path_errno() -> i32 {
     let e = crate::path::errno();
-    if e > 0 { e } else { libc::ENOENT }
+    if e > 0 {
+        e
+    } else {
+        libc::ENOENT
+    }
 }
 
 /// `l2s_access()` — F_OK check, following symlinks (a dangling
@@ -166,7 +171,11 @@ fn l2s_access(path: &[u8]) -> i32 {
             libc::faccessat(dir_fd, c.as_ptr(), libc::F_OK, 0)
         }
     };
-    if r < 0 { -path_errno() } else { 0 }
+    if r < 0 {
+        -path_errno()
+    } else {
+        0
+    }
 }
 
 fn l2s_symlink(target: &[u8], path: &[u8]) -> i32 {
@@ -183,7 +192,11 @@ fn l2s_symlink(target: &[u8], path: &[u8]) -> i32 {
             libc::symlinkat(t.as_ptr(), dir_fd, n.as_ptr())
         }
     };
-    if r < 0 { -path_errno() } else { 0 }
+    if r < 0 {
+        -path_errno()
+    } else {
+        0
+    }
 }
 
 fn l2s_unlink(path: &[u8]) -> i32 {
@@ -199,7 +212,11 @@ fn l2s_unlink(path: &[u8]) -> i32 {
             libc::unlinkat(dir_fd, c.as_ptr(), 0)
         }
     };
-    if r < 0 { -path_errno() } else { 0 }
+    if r < 0 {
+        -path_errno()
+    } else {
+        0
+    }
 }
 
 fn l2s_rename(old_path: &[u8], new_path: &[u8]) -> i32 {
@@ -227,7 +244,11 @@ fn l2s_rename(old_path: &[u8], new_path: &[u8]) -> i32 {
             )
         }
     };
-    if r < 0 { -path_errno() } else { 0 }
+    if r < 0 {
+        -path_errno()
+    } else {
+        0
+    }
 }
 
 /// `my_readlink()` — copy the contents of `symlink` into `value`.
@@ -342,7 +363,11 @@ fn remember_fd(pid: i32, fd: i32, link: &[u8]) {
                 s
             });
         }
-        cache[slot] = Some(FdEntry { pid, fd, link: link.to_vec() });
+        cache[slot] = Some(FdEntry {
+            pid,
+            fd,
+            link: link.to_vec(),
+        });
     });
 }
 
@@ -651,7 +676,11 @@ fn move_and_symlink_path(
 fn decrement_link_count(tracee: &mut Tracee, sysarg: Reg) -> i32 {
     let mut original = FixedPath::default();
     // Note: this path was already canonicalized.
-    let size = read_path(tracee, &mut original, peek_reg(tracee, RegVersion::Current, sysarg));
+    let size = read_path(
+        tracee,
+        &mut original,
+        peek_reg(tracee, RegVersion::Current, sysarg),
+    );
     if size < 0 {
         return size;
     }
@@ -685,8 +714,13 @@ fn decrement_link_count(tracee: &mut Tracee, sysarg: Reg) -> i32 {
     let final_path = match readlink_to_vec(&intermediate) {
         Ok(v) => v,
         Err(_) => {
-            verbose!(Some(tracee), 1, "Skiping deref of broken link2symlink \"{}\" -> \"{}\"",
-                String::from_utf8_lossy(&original_b), String::from_utf8_lossy(&intermediate));
+            verbose!(
+                Some(tracee),
+                1,
+                "Skiping deref of broken link2symlink \"{}\" -> \"{}\"",
+                String::from_utf8_lossy(&original_b),
+                String::from_utf8_lossy(&intermediate)
+            );
             return 0;
         }
     };
@@ -712,7 +746,10 @@ fn decrement_link_count(tracee: &mut Tracee, sysarg: Reg) -> i32 {
         let new = String::from_utf8_lossy(&new_final).into_owned();
         let status = crate::extension::notify(
             tracee,
-            &mut Event::Link2SymlinkRename { link: &old, target: &new },
+            &mut Event::Link2SymlinkRename {
+                link: &old,
+                target: &new,
+            },
         );
         if status < 0 {
             return status;
@@ -737,8 +774,7 @@ fn decrement_link_count(tracee: &mut Tracee, sysarg: Reg) -> i32 {
             return status;
         }
         let f = String::from_utf8_lossy(&final_path).into_owned();
-        let status =
-            crate::extension::notify(tracee, &mut Event::Link2SymlinkUnlink { link: &f });
+        let status = crate::extension::notify(tracee, &mut Event::Link2SymlinkUnlink { link: &f });
         if status < 0 {
             return status;
         }
@@ -771,8 +807,12 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut L2sConfig) -> i32 {
                 let fd = peek_reg(tracee, RegVersion::Modified, Reg::Sysarg1) as i32;
                 match readlink_proc_pid_fd(tracee.pid, fd, &mut original) {
                     Err(status) => {
-                        verbose!(Some(tracee), 3,
-                            "link2symlink: readlink_proc_pid_fd failed, status={}", status);
+                        verbose!(
+                            Some(tracee),
+                            3,
+                            "link2symlink: readlink_proc_pid_fd failed, status={}",
+                            status
+                        );
                         return 0; // Don't alter syscall result.
                     }
                     _ => {}
@@ -867,7 +907,11 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut L2sConfig) -> i32 {
             } else {
                 stat_bytes.len()
             };
-            write_data(tracee, peek_reg(tracee, RegVersion::Original, sysarg_stat), &stat_bytes[..size])
+            write_data(
+                tracee,
+                peek_reg(tracee, RegVersion::Original, sysarg_stat),
+                &stat_bytes[..size],
+            )
         }
         Sysnum::creat | Sysnum::open | Sysnum::openat | Sysnum::openat2 => {
             // Nothing to do unless this open was redirected to an l2s
@@ -1118,12 +1162,7 @@ impl Link2symlink {
                     }
                     Sysnum::link => {
                         // link(old, new) → move+symlink.
-                        move_and_symlink_path(
-                            tracee,
-                            Reg::Sysarg1,
-                            Reg::Sysarg2,
-                            &self.config,
-                        )
+                        move_and_symlink_path(tracee, Reg::Sysarg1, Reg::Sysarg2, &self.config)
                     }
                     Sysnum::linkat => {
                         // linkat(..., "/proc/X/fd/Y", ..., AT_SYMLINK_FOLLOW)
@@ -1144,12 +1183,7 @@ impl Link2symlink {
                         // linkat old/new paths were already canonicalized:
                         //   olddirfd + oldpath -> oldpath
                         //   newdirfd + newpath -> newpath
-                        move_and_symlink_path(
-                            tracee,
-                            Reg::Sysarg2,
-                            Reg::Sysarg4,
-                            &self.config,
-                        )
+                        move_and_symlink_path(tracee, Reg::Sysarg2, Reg::Sysarg4, &self.config)
                     }
                     _ => 0,
                 }

@@ -36,7 +36,8 @@ pub static PROOT_CLI: Cli = Cli {
     name: "proot",
     subtitle: "chroot, mount --bind, and binfmt_misc without privilege/setup",
     synopsis: "proot [option] ... [command]",
-    colophon: "Visit https://github.com/termux/proot for help, bug reports, suggestions, patches, ...\n\
+    colophon:
+        "Visit https://github.com/termux/proot for help, bug reports, suggestions, patches, ...\n\
 Copyright (C) 2015 STMicroelectronics, licensed under GPL v2 or later.",
     logo: " _____ _____              ___\n\
 |  __ \\  __ \\_____  _____|   |_\n\
@@ -106,8 +107,16 @@ static PROOT_OPTIONS: &[Opt] = &[
     Opt {
         class: "Regular options",
         arguments: &[
-            Argument { name: "-r", separator: ' ', value: Some("path") },
-            Argument { name: "--rootfs", separator: '=', value: Some("path") },
+            Argument {
+                name: "-r",
+                separator: ' ',
+                value: Some("path"),
+            },
+            Argument {
+                name: "--rootfs",
+                separator: '=',
+                value: Some("path"),
+            },
         ],
         handler: handle_option_r,
         description: "Use *path* as the new guest root file-system, default is /.",
@@ -122,10 +131,26 @@ static PROOT_OPTIONS: &[Opt] = &[
     Opt {
         class: "Regular options",
         arguments: &[
-            Argument { name: "-b", separator: ' ', value: Some("path") },
-            Argument { name: "--bind", separator: '=', value: Some("path") },
-            Argument { name: "-m", separator: ' ', value: Some("path") },
-            Argument { name: "--mount", separator: '=', value: Some("path") },
+            Argument {
+                name: "-b",
+                separator: ' ',
+                value: Some("path"),
+            },
+            Argument {
+                name: "--bind",
+                separator: '=',
+                value: Some("path"),
+            },
+            Argument {
+                name: "-m",
+                separator: ' ',
+                value: Some("path"),
+            },
+            Argument {
+                name: "--mount",
+                separator: '=',
+                value: Some("path"),
+            },
         ],
         handler: handle_option_b,
         description: "Make the content of *path* accessible in the guest rootfs.",
@@ -144,8 +169,16 @@ static PROOT_OPTIONS: &[Opt] = &[
     Opt {
         class: "Regular options",
         arguments: &[
-            Argument { name: "-q", separator: ' ', value: Some("command") },
-            Argument { name: "--qemu", separator: '=', value: Some("command") },
+            Argument {
+                name: "-q",
+                separator: ' ',
+                value: Some("command"),
+            },
+            Argument {
+                name: "--qemu",
+                separator: '=',
+                value: Some("command"),
+            },
         ],
         handler: handle_option_q,
         description: "Execute guest programs through QEMU as specified by *command*.",
@@ -159,9 +192,21 @@ static PROOT_OPTIONS: &[Opt] = &[
     Opt {
         class: "Regular options",
         arguments: &[
-            Argument { name: "-w", separator: ' ', value: Some("path") },
-            Argument { name: "--pwd", separator: '=', value: Some("path") },
-            Argument { name: "--cwd", separator: '=', value: Some("path") },
+            Argument {
+                name: "-w",
+                separator: ' ',
+                value: Some("path"),
+            },
+            Argument {
+                name: "--pwd",
+                separator: '=',
+                value: Some("path"),
+            },
+            Argument {
+                name: "--cwd",
+                separator: '=',
+                value: Some("path"),
+            },
         ],
         handler: handle_option_w,
         description: "Set the initial working directory to *path*.",
@@ -171,7 +216,11 @@ static PROOT_OPTIONS: &[Opt] = &[
     },
     Opt {
         class: "Regular options",
-        arguments: &[Argument { name: "--kill-on-exit", separator: '\0', value: None }],
+        arguments: &[Argument {
+            name: "--kill-on-exit",
+            separator: '\0',
+            value: None,
+        }],
         handler: handle_option_kill_on_exit,
         description: "Kill all processes on command exit.",
         detail: "\tWhen the executed command leaves orphean or detached processes\n\
@@ -181,8 +230,16 @@ static PROOT_OPTIONS: &[Opt] = &[
     Opt {
         class: "Regular options",
         arguments: &[
-            Argument { name: "-v", separator: ' ', value: Some("value") },
-            Argument { name: "--verbose", separator: '=', value: Some("value") },
+            Argument {
+                name: "-v",
+                separator: ' ',
+                value: Some("value"),
+            },
+            Argument {
+                name: "--verbose",
+                separator: '=',
+                value: Some("value"),
+            },
         ],
         handler: handle_option_v,
         description: "Set the level of debug information to *value*.",
@@ -193,9 +250,21 @@ static PROOT_OPTIONS: &[Opt] = &[
     Opt {
         class: "Regular options",
         arguments: &[
-            Argument { name: "-V", separator: '\0', value: None },
-            Argument { name: "--version", separator: '\0', value: None },
-            Argument { name: "--about", separator: '\0', value: None },
+            Argument {
+                name: "-V",
+                separator: '\0',
+                value: None,
+            },
+            Argument {
+                name: "--version",
+                separator: '\0',
+                value: None,
+            },
+            Argument {
+                name: "--about",
+                separator: '\0',
+                value: None,
+            },
         ],
         handler: handle_option_v_upper,
         description: "Print version, copyright, license and contact, then exit.",
@@ -204,9 +273,21 @@ static PROOT_OPTIONS: &[Opt] = &[
     Opt {
         class: "Regular options",
         arguments: &[
-            Argument { name: "-h", separator: '\0', value: None },
-            Argument { name: "--help", separator: '\0', value: None },
-            Argument { name: "--usage", separator: '\0', value: None },
+            Argument {
+                name: "-h",
+                separator: '\0',
+                value: None,
+            },
+            Argument {
+                name: "--help",
+                separator: '\0',
+                value: None,
+            },
+            Argument {
+                name: "--usage",
+                separator: '\0',
+                value: None,
+            },
         ],
         handler: handle_option_h,
         description: "Print the version and the command-line usage, then exit.",
@@ -215,8 +296,16 @@ static PROOT_OPTIONS: &[Opt] = &[
     Opt {
         class: "Extension options",
         arguments: &[
-            Argument { name: "-k", separator: ' ', value: Some("string") },
-            Argument { name: "--kernel-release", separator: '=', value: Some("string") },
+            Argument {
+                name: "-k",
+                separator: ' ',
+                value: Some("string"),
+            },
+            Argument {
+                name: "--kernel-release",
+                separator: '=',
+                value: Some("string"),
+            },
         ],
         handler: handle_option_k,
         description: "Make current kernel appear as kernel release *string*.",
@@ -229,8 +318,16 @@ static PROOT_OPTIONS: &[Opt] = &[
     Opt {
         class: "Extension options",
         arguments: &[
-            Argument { name: "-0", separator: '\0', value: None },
-            Argument { name: "--root-id", separator: '\0', value: None },
+            Argument {
+                name: "-0",
+                separator: '\0',
+                value: None,
+            },
+            Argument {
+                name: "--root-id",
+                separator: '\0',
+                value: None,
+            },
         ],
         handler: handle_option_0,
         description: "Make current user appear as \"root\" and fake its privileges.",
@@ -246,8 +343,16 @@ static PROOT_OPTIONS: &[Opt] = &[
     Opt {
         class: "Extension options",
         arguments: &[
-            Argument { name: "-i", separator: ' ', value: Some("string") },
-            Argument { name: "--change-id", separator: '=', value: Some("string") },
+            Argument {
+                name: "-i",
+                separator: ' ',
+                value: Some("string"),
+            },
+            Argument {
+                name: "--change-id",
+                separator: '=',
+                value: Some("string"),
+            },
         ],
         handler: handle_option_i,
         description: "Make current user and group appear as *string* \"uid:gid\".",
@@ -259,8 +364,16 @@ static PROOT_OPTIONS: &[Opt] = &[
     Opt {
         class: "Extension options",
         arguments: &[
-            Argument { name: "--link2symlink", separator: '\0', value: None },
-            Argument { name: "-l", separator: '\0', value: None },
+            Argument {
+                name: "--link2symlink",
+                separator: '\0',
+                value: None,
+            },
+            Argument {
+                name: "-l",
+                separator: '\0',
+                value: None,
+            },
         ],
         handler: handle_option_link2symlink,
         description: "Replace hard links with symlinks, pretending they are really hardlinks",
@@ -269,7 +382,11 @@ static PROOT_OPTIONS: &[Opt] = &[
     },
     Opt {
         class: "Extension options",
-        arguments: &[Argument { name: "--sysvipc", separator: '\0', value: None }],
+        arguments: &[Argument {
+            name: "--sysvipc",
+            separator: '\0',
+            value: None,
+        }],
         handler: handle_option_sysvipc,
         description: "Handle System V IPC syscalls in proot",
         detail: "\tHandles System V IPC syscalls (shmget, semget, msgget, etc.)\n\
@@ -278,7 +395,11 @@ static PROOT_OPTIONS: &[Opt] = &[
     },
     Opt {
         class: "Extension options",
-        arguments: &[Argument { name: "-H", separator: '\0', value: None }],
+        arguments: &[Argument {
+            name: "-H",
+            separator: '\0',
+            value: None,
+        }],
         handler: handle_option_h_upper,
         description: "Hide files and directories starting with '.proot.' .",
         detail: "\tHides helper files from directory listings (getdents) so\n\
@@ -289,7 +410,11 @@ static PROOT_OPTIONS: &[Opt] = &[
     },
     Opt {
         class: "Extension options",
-        arguments: &[Argument { name: "-p", separator: '\0', value: None }],
+        arguments: &[Argument {
+            name: "-p",
+            separator: '\0',
+            value: None,
+        }],
         handler: handle_option_p,
         description: "Modify bindings to protected ports to use a higher port number.",
         detail: "\tPorts below 1024 cannot be bound on kernels with\n\
@@ -300,7 +425,11 @@ static PROOT_OPTIONS: &[Opt] = &[
     },
     Opt {
         class: "Extension options",
-        arguments: &[Argument { name: "-L", separator: '\0', value: None }],
+        arguments: &[Argument {
+            name: "-L",
+            separator: '\0',
+            value: None,
+        }],
         handler: handle_option_l_upper,
         description: "Correct the size returned from lstat for symbolic links.",
         detail: "\tBionic's lstat(2) returns misleading sizes for symlinks.\n\
@@ -309,7 +438,11 @@ static PROOT_OPTIONS: &[Opt] = &[
     },
     Opt {
         class: "Alias options",
-        arguments: &[Argument { name: "-R", separator: ' ', value: Some("path") }],
+        arguments: &[Argument {
+            name: "-R",
+            separator: ' ',
+            value: Some("path"),
+        }],
         handler: handle_option_r_upper,
         description: "Alias: -r *path* + a couple of recommended -b.",
         detail: "\tPrograms isolated in *path*, a guest rootfs, might still need to\n\
@@ -341,7 +474,11 @@ static PROOT_OPTIONS: &[Opt] = &[
     },
     Opt {
         class: "Alias options",
-        arguments: &[Argument { name: "-S", separator: ' ', value: Some("path") }],
+        arguments: &[Argument {
+            name: "-S",
+            separator: ' ',
+            value: Some("path"),
+        }],
         handler: handle_option_s_upper,
         description: "Alias: -0 -r *path* + a couple of recommended -b.",
         detail: "\tThis option is useful to safely create and install packages into\n\
@@ -437,8 +574,16 @@ fn handle_option_h(tracee: &mut Tracee, _value: Option<&str>) -> i32 {
 
 fn handle_option_k(tracee: &mut Tracee, value: Option<&str>) -> i32 {
     if extension::has_extension(tracee, |e| matches!(e, AnyExtension::Kompat(_))) {
-        note(Severity::Warning, Origin::User, format_args!("option -k was already specified"));
-        note(Severity::Info, Origin::User, format_args!("only the last -k option is enabled"));
+        note(
+            Severity::Warning,
+            Origin::User,
+            format_args!("option -k was already specified"),
+        );
+        note(
+            Severity::Info,
+            Origin::User,
+            format_args!("only the last -k option is enabled"),
+        );
         extension::remove_extension(tracee, |e| matches!(e, AnyExtension::Kompat(_)));
     }
     let status = extension::initialize_extension(
@@ -458,8 +603,16 @@ fn handle_option_k(tracee: &mut Tracee, value: Option<&str>) -> i32 {
 
 fn handle_option_i(tracee: &mut Tracee, value: Option<&str>) -> i32 {
     if extension::has_extension(tracee, |e| matches!(e, AnyExtension::FakeId0(_))) {
-        note(Severity::Warning, Origin::User, format_args!("option -i/-0/-S was already specified"));
-        note(Severity::Info, Origin::User, format_args!("only the last -i/-0/-S option is enabled"));
+        note(
+            Severity::Warning,
+            Origin::User,
+            format_args!("option -i/-0/-S was already specified"),
+        );
+        note(
+            Severity::Info,
+            Origin::User,
+            format_args!("only the last -i/-0/-S option is enabled"),
+        );
         extension::remove_extension(tracee, |e| matches!(e, AnyExtension::FakeId0(_)));
     }
     let _ = extension::initialize_extension(
@@ -475,13 +628,14 @@ fn handle_option_0(tracee: &mut Tracee, _value: Option<&str>) -> i32 {
 }
 
 fn handle_option_link2symlink(tracee: &mut Tracee, _value: Option<&str>) -> i32 {
-    let status = extension::initialize_extension(
-        tracee,
-        AnyExtension::Link2Symlink(Default::default()),
-        "",
-    );
+    let status =
+        extension::initialize_extension(tracee, AnyExtension::Link2Symlink(Default::default()), "");
     if status < 0 {
-        note(Severity::Warning, Origin::Internal, format_args!("link2symlink not initialized"));
+        note(
+            Severity::Warning,
+            Origin::Internal,
+            format_args!("link2symlink not initialized"),
+        );
     }
     0
 }
@@ -490,7 +644,11 @@ fn handle_option_sysvipc(tracee: &mut Tracee, _value: Option<&str>) -> i32 {
     let status =
         extension::initialize_extension(tracee, AnyExtension::Sysvipc(Default::default()), "");
     if status < 0 {
-        note(Severity::Warning, Origin::Internal, format_args!("sysvipc not initialized"));
+        note(
+            Severity::Warning,
+            Origin::Internal,
+            format_args!("sysvipc not initialized"),
+        );
     }
     0
 }
@@ -505,20 +663,14 @@ fn handle_option_l_upper(tracee: &mut Tracee, _value: Option<&str>) -> i32 {
 }
 
 fn handle_option_h_upper(tracee: &mut Tracee, _value: Option<&str>) -> i32 {
-    let _ = extension::initialize_extension(
-        tracee,
-        AnyExtension::HiddenFiles(Default::default()),
-        "",
-    );
+    let _ =
+        extension::initialize_extension(tracee, AnyExtension::HiddenFiles(Default::default()), "");
     0
 }
 
 fn handle_option_p(tracee: &mut Tracee, _value: Option<&str>) -> i32 {
-    let _ = extension::initialize_extension(
-        tracee,
-        AnyExtension::PortSwitch(Default::default()),
-        "",
-    );
+    let _ =
+        extension::initialize_extension(tracee, AnyExtension::PortSwitch(Default::default()), "");
     0
 }
 
@@ -610,10 +762,7 @@ pub fn print_usage(tracee: &mut Tracee, cli: &Cli, detailed: bool) {
         }
     }
 
-    let _ = extension::notify(
-        tracee,
-        &mut extension::Event::PrintUsage { detailed },
-    );
+    let _ = extension::notify(tracee, &mut extension::Event::PrintUsage { detailed });
 
     if detailed {
         println!("{}", cli.colophon);
@@ -637,9 +786,13 @@ fn print_execve_help(tracee: &Tracee, argv0: &str, status: i32) {
     if status == -libc::ENOENT {
         if let Ok(ld) = std::env::var("LD_PRELOAD") {
             if ld.contains("libtermux-exec.so") {
-                note(Severity::Info, Origin::User, format_args!(
+                note(
+                    Severity::Info,
+                    Origin::User,
+                    format_args!(
 "It seems that termux-exec is active and is prepending /data/data/com.termux/... to executable paths
-If this is path is not available inside proot, please \"unset LD_PRELOAD\""));
+If this is path is not available inside proot, please \"unset LD_PRELOAD\""),
+                );
                 let _ = tracee;
                 return;
             }
@@ -653,13 +806,18 @@ To workaround it, set the env. variable PROOT_NO_SECCOMP to 1."));
         return;
     }
 
-    note(Severity::Info, Origin::User, format_args!(
-"possible causes:
+    note(
+        Severity::Info,
+        Origin::User,
+        format_args!(
+            "possible causes:
   * the program is a script but its interpreter (eg. /bin/sh) was not found;
   * the program is an ELF but its interpreter (eg. ld-linux.so) was not found;
   * the program is a foreign binary but qemu was not specified;
   * qemu does not work correctly (if specified);
-  * the loader was not found or doesn't work."));
+  * the loader was not found or doesn't work."
+        ),
+    );
 }
 
 fn print_argv(tracee: &Tracee, prompt: &str, argv: &[String]) {
@@ -682,10 +840,18 @@ fn print_config(tracee: &Tracee, argv: &[String]) {
         return;
     }
     if tracee.qemu.is_some() {
-        note(Severity::Info, Origin::User, format_args!("host rootfs = {}", HOST_ROOTFS));
+        note(
+            Severity::Info,
+            Origin::User,
+            format_args!("host rootfs = {}", HOST_ROOTFS),
+        );
     }
     if let Some(glue) = &tracee.glue {
-        note(Severity::Info, Origin::User, format_args!("glue rootfs = {}", glue));
+        note(
+            Severity::Info,
+            Origin::User,
+            format_args!("glue rootfs = {}", glue),
+        );
     }
     if let Some(exe) = &tracee.exe {
         note(Severity::Info, Origin::User, format_args!("exe = {}", exe));
@@ -699,7 +865,11 @@ fn print_config(tracee: &Tracee, argv: &[String]) {
         Origin::User,
         format_args!("initial cwd = {}", tracee.fs.borrow().cwd),
     );
-    note(Severity::Info, Origin::User, format_args!("verbose level = {}", tracee.verbose));
+    note(
+        Severity::Info,
+        Origin::User,
+        format_args!("verbose level = {}", tracee.verbose),
+    );
 }
 
 /* ------------------------------------------------------------------ */
@@ -713,7 +883,10 @@ fn initialize_cwd(tracee: &mut Tracee) -> Result<(), i32> {
     let mut base = FixedPath::new();
     if cwd.as_bytes().first() != Some(&b'/') {
         // Relative cwd: resolved against the (reconfigured) tracee's cwd.
-        match tracee.reconf_tracee.and_then(|id| tracee::get_tracee(id as i32, false)) {
+        match tracee
+            .reconf_tracee
+            .and_then(|id| tracee::get_tracee(id as i32, false))
+        {
             Some(rc) => {
                 let t = rc.borrow();
                 path::getcwd2(Some(&t), &mut base)?;
@@ -741,13 +914,23 @@ fn initialize_cwd(tracee: &mut Tracee) -> Result<(), i32> {
                 crate::path::binding::io_error_string(-e)
             ),
         );
-        note(Severity::Info, Origin::User, format_args!("default working directory is now \"/\""));
+        note(
+            Severity::Info,
+            Origin::User,
+            format_args!("default working directory is now \"/\""),
+        );
         path.set(b"/");
     }
     path.chop_finality();
 
     tracee.fs.borrow_mut().cwd = path.clone();
-    unsafe { libc::setenv(b"PWD\0".as_ptr() as *const _, path.as_c_bytes().as_ptr() as *const _, 1) };
+    unsafe {
+        libc::setenv(
+            b"PWD\0".as_ptr() as *const _,
+            path.as_c_bytes().as_ptr() as *const _,
+            1,
+        )
+    };
     Ok(())
 }
 
@@ -763,7 +946,9 @@ fn initialize_exe(tracee: &mut Tracee, exe: Option<&str>) -> Result<(), i32> {
         exe.as_bytes(),
     )?;
     path::detranslate_path(tracee, &mut path, None)?;
-    tracee.exe = Some(std::rc::Rc::new(String::from_utf8_lossy(path.as_bytes()).into_owned()));
+    tracee.exe = Some(std::rc::Rc::new(
+        String::from_utf8_lossy(path.as_bytes()).into_owned(),
+    ));
     Ok(())
 }
 
@@ -776,10 +961,18 @@ fn post_initialize_exe(tracee: &mut Tracee) -> Result<(), i32> {
     let reconf_paths = tracee.reconf_paths.clone();
     let mut path = FixedPath::new();
     // With no sub-reconfiguration, resolve against the host namespace.
-    match tracee.reconf_tracee.and_then(|id| tracee::get_tracee(id as i32, false)) {
+    match tracee
+        .reconf_tracee
+        .and_then(|id| tracee::get_tracee(id as i32, false))
+    {
         Some(rc) => {
             let mut t = rc.borrow_mut();
-            path::which(Some(&mut t), reconf_paths.as_deref(), &mut path, qemu0.as_bytes())?;
+            path::which(
+                Some(&mut t),
+                reconf_paths.as_deref(),
+                &mut path,
+                qemu0.as_bytes(),
+            )?;
             path::detranslate_path(&mut t, &mut path, None)?;
         }
         None => {
@@ -797,7 +990,7 @@ fn post_initialize_exe(tracee: &mut Tracee) -> Result<(), i32> {
 /// `pre_initialize_bindings()` — default -w "." and -r "/".
 fn pre_initialize_bindings(tracee: &mut Tracee) -> Result<(), i32> {
     if tracee.fs.borrow().cwd.is_empty() {
-        handle_option_w(tracee, Some(".")) ;
+        handle_option_w(tracee, Some("."));
     }
     if binding::get_root(tracee).is_empty() {
         handle_option_r(tracee, Some("/"));
@@ -889,7 +1082,11 @@ pub fn parse_config(tracee: &mut Tracee, args: &[String]) -> Result<usize, i32> 
             }
         }
 
-        note(Severity::Error, Origin::User, format_args!("unknown option '{}'.", arg));
+        note(
+            Severity::Error,
+            Origin::User,
+            format_args!("unknown option '{}'.", arg),
+        );
         return Err(-1);
     }
     let argc_offset = i;
@@ -911,7 +1108,11 @@ pub fn parse_config(tracee: &mut Tracee, args: &[String]) -> Result<usize, i32> 
 fn print_error_separator(tracee: &Tracee, argument: &Argument) {
     let _ = tracee;
     if argument.separator == '\0' {
-        note(Severity::Error, Origin::User, format_args!("option '{}' expects no value.", argument.name));
+        note(
+            Severity::Error,
+            Origin::User,
+            format_args!("option '{}' expects no value.", argument.name),
+        );
     } else {
         note(
             Severity::Error,

@@ -45,8 +45,7 @@ pub fn build_glue(
         (libc::S_IFDIR, 0o777)
     };
 
-    let skip_create =
-        std::env::var_os("PROOT_DONT_POLLUTE_ROOTFS").is_some() && !belongs_to_gluefs;
+    let skip_create = std::env::var_os("PROOT_DONT_POLLUTE_ROOTFS").is_some() && !belongs_to_gluefs;
 
     if !skip_create {
         let c = std::ffi::CString::new(host_path.as_bytes()).unwrap();

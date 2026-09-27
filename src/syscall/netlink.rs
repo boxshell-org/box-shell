@@ -124,7 +124,11 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
     }
 
     let fd = unsafe {
-        libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, 0 /* NETLINK_ROUTE */)
+        libc::socket(
+            libc::AF_NETLINK,
+            libc::SOCK_RAW | libc::SOCK_CLOEXEC,
+            0, /* NETLINK_ROUTE */
+        )
     };
     if fd < 0 {
         let e = crate::path::errno();
@@ -171,7 +175,7 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
     req[2..4].copy_from_slice(&RTM_NEWADDR.to_ne_bytes());
     req[4..6].copy_from_slice(&(NLM_F_REQUEST | NLM_F_ACK).to_ne_bytes());
     req[8..12].copy_from_slice(&1u32.to_ne_bytes()); // seq
-    // ifa_family = AF_UNSPEC already zeroed.
+                                                     // ifa_family = AF_UNSPEC already zeroed.
 
     let rc = unsafe {
         libc::sendto(
@@ -239,13 +243,7 @@ pub fn msghdr_first_iovec(tracee: &Tracee, msghdr_addr: Word) -> Option<(Word, W
 /* ================================================================== */
 
 /// `nl_add_attr()`.
-fn nl_add_attr(
-    buf: &mut [u8],
-    off: usize,
-    max: usize,
-    ty: u16,
-    data: &[u8],
-) -> usize {
+fn nl_add_attr(buf: &mut [u8], off: usize, max: usize, ty: u16, data: &[u8]) -> usize {
     let space = rta_space(data.len());
     if off + space > max {
         return off;
@@ -294,7 +292,12 @@ fn nl_build_link(
     let mut ifi = [0u8; 16];
     ifi[2..4].copy_from_slice(&iftype.to_ne_bytes());
     ifi[4..8].copy_from_slice(&ifindex.to_ne_bytes());
-    let flags = ifflags | if (ifflags & IFF_RUNNING) != 0 { IFF_LOWER_UP } else { 0 };
+    let flags = ifflags
+        | if (ifflags & IFF_RUNNING) != 0 {
+            IFF_LOWER_UP
+        } else {
+            0
+        };
     ifi[8..12].copy_from_slice(&flags.to_ne_bytes());
     // ifi_change = 0
 
@@ -310,7 +313,11 @@ fn nl_build_link(
     let operstate: u8 = if (ifflags & IFF_UP) != 0 { 6 } else { 2 };
     off = nl_add_attr(buf, off, max, IFLA_OPERSTATE, &[operstate]);
     if !hwaddr.is_empty() {
-        let fill = if iftype == ARPHRD_LOOPBACK { 0x00 } else { 0xff };
+        let fill = if iftype == ARPHRD_LOOPBACK {
+            0x00
+        } else {
+            0xff
+        };
         let mut brd = vec![fill; hwaddr.len().max(8)];
         brd.truncate(hwaddr.len());
         off = nl_add_attr(buf, off, max, IFLA_ADDRESS, hwaddr);
@@ -530,10 +537,27 @@ fn nl_addr_scope(family: i32, addr: &[u8]) -> u8 {
     }
 }
 
-fn nl_build_loopback_link(buf: &mut [u8], off: usize, max: usize, seq: u32, pid: u32, nlflags: u16) -> usize {
+fn nl_build_loopback_link(
+    buf: &mut [u8],
+    off: usize,
+    max: usize,
+    seq: u32,
+    pid: u32,
+    nlflags: u16,
+) -> usize {
     nl_build_link(
-        buf, off, max, seq, pid, nlflags, 1, ARPHRD_LOOPBACK,
-        IFF_UP | IFF_LOOPBACK | IFF_RUNNING, 65536, b"lo", &[0; 6],
+        buf,
+        off,
+        max,
+        seq,
+        pid,
+        nlflags,
+        1,
+        ARPHRD_LOOPBACK,
+        IFF_UP | IFF_LOOPBACK | IFF_RUNNING,
+        65536,
+        b"lo",
+        &[0; 6],
     )
 }
 
@@ -549,9 +573,35 @@ fn nl_build_loopback_addr(
     let v4 = [127, 0, 0, 1u8];
     let v6 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1u8];
     if family == libc::AF_INET6 {
-        nl_build_addr(buf, off, max, seq, pid, nlflags, libc::AF_INET6, 1, &v6, 128, RT_SCOPE_HOST, None)
+        nl_build_addr(
+            buf,
+            off,
+            max,
+            seq,
+            pid,
+            nlflags,
+            libc::AF_INET6,
+            1,
+            &v6,
+            128,
+            RT_SCOPE_HOST,
+            None,
+        )
     } else {
-        nl_build_addr(buf, off, max, seq, pid, nlflags, libc::AF_INET, 1, &v4, 8, RT_SCOPE_HOST, Some(b"lo"))
+        nl_build_addr(
+            buf,
+            off,
+            max,
+            seq,
+            pid,
+            nlflags,
+            libc::AF_INET,
+            1,
+            &v4,
+            8,
+            RT_SCOPE_HOST,
+            Some(b"lo"),
+        )
     }
 }
 
@@ -574,9 +624,7 @@ fn host_interfaces() -> Vec<HostIf> {
     if unsafe { libc::getifaddrs(&mut ifaddr) } != 0 {
         return Vec::new();
     }
-    let sock = unsafe {
-        libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0)
-    };
+    let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
 
     let mut out: Vec<HostIf> = Vec::new();
     let mut cur = ifaddr;
@@ -604,7 +652,11 @@ fn host_interfaces() -> Vec<HostIf> {
                         ARPHRD_ETHER
                     },
                     ifindex: unsafe { libc::if_nametoindex(ifa.ifa_name) } as i32,
-                    mtu: if (ifflags & IFF_LOOPBACK) != 0 { 65536 } else { 1500 },
+                    mtu: if (ifflags & IFF_LOOPBACK) != 0 {
+                        65536
+                    } else {
+                        1500
+                    },
                     hwaddr: Vec::new(),
                     addrs: Vec::new(),
                 });
@@ -801,9 +853,7 @@ fn relay_route_dump(req: &[u8], out: &mut [u8], max: usize, seq: u32, pid: u32) 
         0
     };
 
-    let fd = unsafe {
-        libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, 0)
-    };
+    let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
         return 0;
     }
@@ -854,17 +904,14 @@ fn relay_route_dump(req: &[u8], out: &mut [u8], max: usize, seq: u32, pid: u32) 
     while !done && rounds < 64 {
         rounds += 1;
         let mut buf = [0u8; 8192];
-        let n = unsafe {
-            libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0)
-        };
+        let n = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
         if n <= 0 {
             break;
         }
         let mut len = n as usize;
         let mut pos = 0usize;
         while pos + NLMSG_HDR_LEN <= len {
-            let mlen =
-                u32::from_ne_bytes(buf[pos..pos + 4].try_into().unwrap()) as usize;
+            let mlen = u32::from_ne_bytes(buf[pos..pos + 4].try_into().unwrap()) as usize;
             if mlen < NLMSG_HDR_LEN || mlen > len - pos {
                 break;
             }

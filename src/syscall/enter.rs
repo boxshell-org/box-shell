@@ -7,12 +7,10 @@
 
 use crate::fpath::FixedPath;
 use crate::path::{binding, compare_paths, join_paths2, Comparison, Side};
-use crate::sysnum::Sysnum;
 use crate::syscall::{get_sysarg_path, netlink, set_sysarg_path};
+use crate::sysnum::Sysnum;
 use crate::tracee::mem::{peek_word, poke_word, read_data, read_string, write_data};
-use crate::tracee::reg::{
-    get_sysnum, peek_reg, poke_reg, set_sysnum, Reg, RegVersion,
-};
+use crate::tracee::reg::{get_sysnum, peek_reg, poke_reg, set_sysnum, Reg, RegVersion};
 use crate::tracee::Tracee;
 use crate::Word;
 
@@ -52,13 +50,7 @@ fn force_fork_sysexit(tracee: &mut Tracee) {
 
 /// `translate_path2()` — translate `path` and write the host path back into
 /// the tracee's `reg` argument.
-fn translate_path2(
-    tracee: &mut Tracee,
-    dir_fd: i32,
-    path: &FixedPath,
-    reg: Reg,
-    ty: PType,
-) -> i32 {
+fn translate_path2(tracee: &mut Tracee, dir_fd: i32, path: &FixedPath, reg: Reg, ty: PType) -> i32 {
     if path.is_empty() {
         return 0;
     }
@@ -95,9 +87,13 @@ fn translate_path2_parent(tracee: &mut Tracee, dir_fd: i32, path: &FixedPath, re
         return translate_path2(tracee, dir_fd, path, reg, PType::Symlink);
     }
     let mut translated_parent = FixedPath::new();
-    if let Err(e) =
-        crate::path::translate_path(tracee, &mut translated_parent, dir_fd, parent.as_bytes(), true)
-    {
+    if let Err(e) = crate::path::translate_path(
+        tracee,
+        &mut translated_parent,
+        dir_fd,
+        parent.as_bytes(),
+        true,
+    ) {
         return e;
     }
     let mut translated_path = FixedPath::new();
@@ -208,7 +204,8 @@ fn emulate_pivot_root(tracee: &mut Tracee, new_root_user: &[u8], put_old_user: &
     } else {
         put_old_guest.set(new_root_guest.as_bytes());
     }
-    if crate::path::canon::canonicalize(tracee, put_old_user, true, &mut put_old_guest, 0).is_err() {
+    if crate::path::canon::canonicalize(tracee, put_old_user, true, &mut put_old_guest, 0).is_err()
+    {
         return;
     }
 
@@ -224,7 +221,9 @@ fn emulate_pivot_root(tracee: &mut Tracee, new_root_user: &[u8], put_old_user: &
     let mut put_old_after = FixedPath::new();
     let mut have_put_old = false;
     if new_root_len > 0
-        && put_old_guest.as_bytes().starts_with(new_root_guest.as_bytes())
+        && put_old_guest
+            .as_bytes()
+            .starts_with(new_root_guest.as_bytes())
         && (put_old_guest.as_bytes().get(new_root_len) == Some(&b'/')
             || (new_root_len == 1 && new_root_guest.as_bytes() == b"/"))
     {
@@ -243,7 +242,8 @@ fn emulate_pivot_root(tracee: &mut Tracee, new_root_user: &[u8], put_old_user: &
     binding::remove_binding_from_all_lists(tracee, &root_binding);
     let _ = binding::insort_binding3(tracee, new_root_host.as_bytes(), b"/");
     if have_put_old {
-        let _ = binding::insort_binding3(tracee, old_root_host.as_bytes(), put_old_after.as_bytes());
+        let _ =
+            binding::insort_binding3(tracee, old_root_host.as_bytes(), put_old_after.as_bytes());
     }
 
     for b in &snapshot {
@@ -476,13 +476,9 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
             }
 
             if status >= 0 {
-                if let Err(e) = crate::path::translate_path(
-                    tracee,
-                    &mut path,
-                    dirfd,
-                    oldpath.as_bytes(),
-                    true,
-                ) {
+                if let Err(e) =
+                    crate::path::translate_path(tracee, &mut path, dirfd, oldpath.as_bytes(), true)
+                {
                     status = e;
                 } else {
                     let c = std::ffi::CString::new(path.as_bytes()).unwrap();
@@ -564,7 +560,9 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
         Sysnum::socket => {
             let domain = peek_reg(tracee, RegVersion::Current, Reg::Sysarg1);
             let protocol = peek_reg(tracee, RegVersion::Current, Reg::Sysarg3);
-            if domain == libc::AF_NETLINK as Word && protocol == 0 /* NETLINK_ROUTE */ {
+            if domain == libc::AF_NETLINK as Word && protocol == 0
+            /* NETLINK_ROUTE */
+            {
                 if netlink::host_blocks_af_netlink(tracee) {
                     let ty = peek_reg(tracee, RegVersion::Current, Reg::Sysarg2);
                     poke_reg(tracee, Reg::Sysarg1, libc::AF_UNIX as Word);
@@ -612,8 +610,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                 }
                 None => {
                     if netlink::is_netns_netlink_fd(tracee, fd) {
-                        if let Some((base, len)) =
-                            netlink::msghdr_first_iovec(tracee, msghdr_addr)
+                        if let Some((base, len)) = netlink::msghdr_first_iovec(tracee, msghdr_addr)
                         {
                             netlink::note_netns_netlink_request(tracee, fd, base, len);
                         }
@@ -634,9 +631,8 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
 
                     // Copy reply slice out before borrowing mutably.
                     let (datagram, reply): (usize, Vec<u8>) = {
-                        match netlink::pending_fake_netlink_datagram(
-                            &tracee.fake_netlink_fds[idx],
-                        ) {
+                        match netlink::pending_fake_netlink_datagram(&tracee.fake_netlink_fds[idx])
+                        {
                             Some((r, l)) => (l, r[..l].to_vec()),
                             None => (0, Vec::new()),
                         }
@@ -645,9 +641,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                         let mut copied = 0usize;
                         if buf != 0 {
                             copied = (len as usize).min(datagram);
-                            if copied > 0
-                                && write_data(tracee, buf, &reply[..copied]) < 0
-                            {
+                            if copied > 0 && write_data(tracee, buf, &reply[..copied]) < 0 {
                                 copied = 0;
                             }
                         }
@@ -663,9 +657,8 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                             copied
                         };
                         if addr_ptr != 0 && size_ptr != 0 {
-                            let _ = netlink::write_fake_netlink_sockname(
-                                tracee, addr_ptr, size_ptr, 0,
-                            );
+                            let _ =
+                                netlink::write_fake_netlink_sockname(tracee, addr_ptr, size_ptr, 0);
                         }
                         unsafe { *libc::__errno_location() = 0 };
                         poke_reg(tracee, Reg::SysargResult, result as Word);
@@ -685,9 +678,8 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                     let w = crate::tracee::reg::sizeof_word(tracee) as Word;
 
                     let (datagram, reply): (usize, Vec<u8>) = {
-                        match netlink::pending_fake_netlink_datagram(
-                            &tracee.fake_netlink_fds[idx],
-                        ) {
+                        match netlink::pending_fake_netlink_datagram(&tracee.fake_netlink_fds[idx])
+                        {
                             Some((r, l)) => (l, r[..l].to_vec()),
                             None => (0, Vec::new()),
                         }
@@ -734,15 +726,11 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                         // sockaddr_nl (nl_pid == 0) source for getifaddrs.
                         if msg_name != 0 && msghdr_addr != 0 {
                             unsafe { *libc::__errno_location() = 0 };
-                            let in_namelen = crate::tracee::mem::peek_uint32(
-                                tracee,
-                                msghdr_addr + w,
-                            );
+                            let in_namelen =
+                                crate::tracee::mem::peek_uint32(tracee, msghdr_addr + w);
                             if crate::path::errno() == 0 && in_namelen > 0 {
                                 let mut snl = [0u8; 12];
-                                snl[0..2].copy_from_slice(
-                                    &(libc::AF_NETLINK as u16).to_ne_bytes(),
-                                );
+                                snl[0..2].copy_from_slice(&(libc::AF_NETLINK as u16).to_ne_bytes());
                                 let copy = (in_namelen as usize).min(snl.len());
                                 let _ = write_data(tracee, msg_name, &snl[..copy]);
                                 crate::tracee::mem::poke_uint32(
@@ -780,18 +768,35 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
             status = socketcall_enter(tracee, special);
         }
 
-        Sysnum::access | Sysnum::acct | Sysnum::chmod | Sysnum::chown | Sysnum::chown32
-        | Sysnum::chroot | Sysnum::getxattr | Sysnum::listxattr | Sysnum::mknod
-        | Sysnum::oldstat | Sysnum::creat | Sysnum::removexattr | Sysnum::setxattr
-        | Sysnum::stat | Sysnum::stat64 | Sysnum::statfs | Sysnum::statfs64 | Sysnum::swapoff
-        | Sysnum::swapon | Sysnum::truncate | Sysnum::truncate64 | Sysnum::uselib
-        | Sysnum::utime | Sysnum::utimes => {
+        Sysnum::access
+        | Sysnum::acct
+        | Sysnum::chmod
+        | Sysnum::chown
+        | Sysnum::chown32
+        | Sysnum::chroot
+        | Sysnum::getxattr
+        | Sysnum::listxattr
+        | Sysnum::mknod
+        | Sysnum::oldstat
+        | Sysnum::creat
+        | Sysnum::removexattr
+        | Sysnum::setxattr
+        | Sysnum::stat
+        | Sysnum::stat64
+        | Sysnum::statfs
+        | Sysnum::statfs64
+        | Sysnum::swapoff
+        | Sysnum::swapon
+        | Sysnum::truncate
+        | Sysnum::truncate64
+        | Sysnum::uselib
+        | Sysnum::utime
+        | Sysnum::utimes => {
             path_arg!(Reg::Sysarg1, PType::Regular);
         }
 
         Sysnum::unshare => {
-            if (peek_reg(tracee, RegVersion::Current, Reg::Sysarg1)
-                & libc::CLONE_NEWNET as Word)
+            if (peek_reg(tracee, RegVersion::Current, Reg::Sysarg1) & libc::CLONE_NEWNET as Word)
                 != 0
             {
                 tracee.fake_netns = true;
@@ -887,7 +892,10 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                 maybe_redirect_userns_file(tracee, Reg::Sysarg1);
             }
         }
-        Sysnum::fchownat | Sysnum::fstatat64 | Sysnum::newfstatat | Sysnum::utimensat
+        Sysnum::fchownat
+        | Sysnum::fstatat64
+        | Sysnum::newfstatat
+        | Sysnum::utimensat
         | Sysnum::name_to_handle_at => {
             let dirfd = peek_reg(tracee, RegVersion::Current, Reg::Sysarg1) as i32;
             status = get_sysarg_path(tracee, &mut path, Reg::Sysarg2);
@@ -907,7 +915,10 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                 status = translate_path2(tracee, dirfd, &path, Reg::Sysarg2, ty);
             }
         }
-        Sysnum::fchmodat | Sysnum::faccessat | Sysnum::faccessat2 | Sysnum::futimesat
+        Sysnum::fchmodat
+        | Sysnum::faccessat
+        | Sysnum::faccessat2
+        | Sysnum::futimesat
         | Sysnum::mknodat => {
             let dirfd = peek_reg(tracee, RegVersion::Current, Reg::Sysarg1) as i32;
             status = get_sysarg_path(tracee, &mut path, Reg::Sysarg2);
@@ -924,9 +935,18 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
             };
             status = translate_sysarg(tracee, Reg::Sysarg2, ty);
         }
-        Sysnum::readlink | Sysnum::lchown | Sysnum::lchown32 | Sysnum::lgetxattr
-        | Sysnum::llistxattr | Sysnum::lremovexattr | Sysnum::lsetxattr | Sysnum::lstat
-        | Sysnum::lstat64 | Sysnum::oldlstat | Sysnum::unlink | Sysnum::rmdir => {
+        Sysnum::readlink
+        | Sysnum::lchown
+        | Sysnum::lchown32
+        | Sysnum::lgetxattr
+        | Sysnum::llistxattr
+        | Sysnum::lremovexattr
+        | Sysnum::lsetxattr
+        | Sysnum::lstat
+        | Sysnum::lstat64
+        | Sysnum::oldlstat
+        | Sysnum::unlink
+        | Sysnum::rmdir => {
             status = translate_sysarg(tracee, Reg::Sysarg1, PType::Symlink);
         }
         Sysnum::mkdir => {
@@ -1002,12 +1022,8 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                 if syscall_number == Sysnum::link {
                     status = get_sysarg_path(tracee, &mut path, Reg::Sysarg2);
                     if status >= 0 {
-                        status = translate_path2_parent(
-                            tracee,
-                            libc::AT_FDCWD,
-                            &path,
-                            Reg::Sysarg2,
-                        );
+                        status =
+                            translate_path2_parent(tracee, libc::AT_FDCWD, &path, Reg::Sysarg2);
                     }
                 } else {
                     status = translate_sysarg(tracee, Reg::Sysarg2, PType::Symlink);
@@ -1032,8 +1048,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
             // SYSARG_1 is the link's *contents*, not a path.
             status = get_sysarg_path(tracee, &mut newpath, Reg::Sysarg2);
             if status >= 0 {
-                status =
-                    translate_path2_parent(tracee, libc::AT_FDCWD, &newpath, Reg::Sysarg2);
+                status = translate_path2_parent(tracee, libc::AT_FDCWD, &newpath, Reg::Sysarg2);
             }
         }
         Sysnum::symlinkat => {
@@ -1158,7 +1173,11 @@ fn sockname_size_capture(tracee: &mut Tracee, special: bool) -> i32 {
     let size_addr = peek_reg(tracee, RegVersion::Original, Reg::Sysarg3);
     let size = peek_word(tracee, size_addr) as i32;
     if crate::path::errno() != 0 {
-        return if special { -libc::EINVAL } else { -crate::path::errno() };
+        return if special {
+            -libc::EINVAL
+        } else {
+            -crate::path::errno()
+        };
     }
     poke_reg(tracee, Reg::Sysarg6, size as Word);
     0
@@ -1272,10 +1291,8 @@ fn socketcall_enter(tracee: &mut Tracee, mut special: bool) -> i32 {
 }
 
 fn end(tracee: &mut Tracee, mut status: i32) -> i32 {
-    let status2 = crate::extension::notify(
-        tracee,
-        &mut crate::extension::Event::SysEnterEnd { status },
-    );
+    let status2 =
+        crate::extension::notify(tracee, &mut crate::extension::Event::SysEnterEnd { status });
     if status2 < 0 {
         status = status2;
     }

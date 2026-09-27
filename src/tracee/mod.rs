@@ -29,8 +29,6 @@ pub struct FileSystemNameSpace {
     pub cwd: crate::fpath::FixedPath,
 }
 
-
-
 /// ptrace emulation: this tracee acting as a tracer.
 #[derive(Default)]
 pub struct AsPtracer {
@@ -306,9 +304,11 @@ pub fn with_tracee_mut<R>(pid: i32, f: impl FnOnce(&mut Tracee) -> R) -> Option<
 /// tracee's `RefCell` is already borrowed (it is a raw pointer in C, where
 /// aliasing is fine; here we must degrade gracefully).
 pub fn with_tracee_mut_try<R>(pid: i32, f: impl FnOnce(&mut Tracee) -> R) -> Option<R> {
-    TRACEES.try_with(|t| t.borrow().get(&pid).cloned()).ok().flatten().and_then(|rc| {
-        rc.try_borrow_mut().ok().map(|mut t| f(&mut t))
-    })
+    TRACEES
+        .try_with(|t| t.borrow().get(&pid).cloned())
+        .ok()
+        .flatten()
+        .and_then(|rc| rc.try_borrow_mut().ok().map(|mut t| f(&mut t)))
 }
 
 /// Get an `Rc` handle on the tracee with @pid, creating+registering a fresh
@@ -340,7 +340,11 @@ pub fn get_tracee(pid: i32, create: bool) -> Option<Rc<RefCell<Tracee>>> {
             *v += 1;
             cur
         });
-        let t = Tracee { pid, vpid, ..Tracee::default() };
+        let t = Tracee {
+            pid,
+            vpid,
+            ..Tracee::default()
+        };
         let rc = Rc::new(RefCell::new(t));
         map.borrow_mut().insert(pid, rc.clone());
         TRACEE_ORDER.with(|o| o.borrow_mut().push(pid));
@@ -501,9 +505,7 @@ fn remove_tracee(tracee_rc: &Rc<RefCell<Tracee>>) {
     {
         let t = tracee_rc.borrow();
         let ev = t.as_ptracee.event4.ptracer.value;
-        if t.as_ptracee.event4.ptracer.pending
-            && (libc::WIFEXITED(ev) || libc::WIFSIGNALED(ev))
-        {
+        if t.as_ptracee.event4.ptracer.pending && (libc::WIFEXITED(ev) || libc::WIFSIGNALED(ev)) {
             if let Some(ptracer_rc) = get_tracee(ptracer_pid, false) {
                 let zombie = Rc::new(RefCell::new(Tracee {
                     pid: dead_pid,
@@ -557,8 +559,7 @@ fn remove_tracee(tracee_rc: &Rc<RefCell<Tracee>>) {
 /// `detach_from_ptracer()` — clear the ptracee's tracer and decrement
 /// the tracer's ptracee count (no-op when the tracer is gone).
 pub fn detach_from_ptracer(ptracee_pid: i32) {
-    let ptracer_pid = with_tracee(ptracee_pid, |t| t.as_ptracee.ptracer)
-        .unwrap_or(0);
+    let ptracer_pid = with_tracee(ptracee_pid, |t| t.as_ptracee.ptracer).unwrap_or(0);
     with_tracee_mut_try(ptracee_pid, |t| t.as_ptracee.ptracer = 0);
     if ptracer_pid != 0 {
         with_tracee_mut_try(ptracer_pid, |p| {

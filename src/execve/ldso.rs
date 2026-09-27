@@ -394,8 +394,7 @@ pub fn rebuild_host_ldso_paths(
     write_xpointee_string(envp, index, &var);
 
     if tracee.host_ldso_paths.is_none() {
-        tracee.host_ldso_paths =
-            Some(std::rc::Rc::new(String::from_utf8_lossy(&var).into_owned()));
+        tracee.host_ldso_paths = Some(std::rc::Rc::new(String::from_utf8_lossy(&var).into_owned()));
     }
     rpath_found as i32
 }

@@ -3,8 +3,8 @@
 use std::os::unix::ffi::OsStrExt;
 
 use crate::execve::aoxp::{
-    fetch_array_of_xpointers, push_array_of_xpointers, resize_array_of_xpointers,
-    write_xpointees, XPointerArray,
+    fetch_array_of_xpointers, push_array_of_xpointers, resize_array_of_xpointers, write_xpointees,
+    XPointerArray,
 };
 use crate::fpath::FixedPath;
 use crate::tracee::reg::{sysarg, Reg};
@@ -27,7 +27,8 @@ pub fn translate_and_check_exec(
     if user_path.is_empty() {
         return -libc::ENOEXEC;
     }
-    if let Err(e) = crate::path::translate_path(tracee, host_path, libc::AT_FDCWD, user_path, true) {
+    if let Err(e) = crate::path::translate_path(tracee, host_path, libc::AT_FDCWD, user_path, true)
+    {
         return e;
     }
     let c = match std::ffi::CString::new(host_path.as_bytes()) {

@@ -8,8 +8,8 @@
 
 use crate::fpath::FixedPath;
 use crate::path::{compare_paths, Comparison};
-use crate::sysnum::{detranslate_sysnum, Sysnum};
 use crate::syscall::set_sysarg_data;
+use crate::sysnum::{detranslate_sysnum, Sysnum};
 use crate::tracee::mem::{alloc_mem, poke_word, read_data, read_string, write_data};
 use crate::tracee::reg::{
     fetch_regs, get_abi, get_sysnum, get_systrap_size, peek_reg, poke_reg, push_specific_regs,
@@ -149,8 +149,16 @@ fn handle_seccomp_event_common(tracee: &mut Tracee) -> i32 {
                 set_result_after_seccomp(tracee, ret as Word);
             } else {
                 set_sysnum(tracee, Sysnum::openat);
-                poke_reg(tracee, Reg::Sysarg3, u64::from_ne_bytes(how[0..8].try_into().unwrap()));
-                poke_reg(tracee, Reg::Sysarg4, u64::from_ne_bytes(how[8..16].try_into().unwrap()));
+                poke_reg(
+                    tracee,
+                    Reg::Sysarg3,
+                    u64::from_ne_bytes(how[0..8].try_into().unwrap()),
+                );
+                poke_reg(
+                    tracee,
+                    Reg::Sysarg4,
+                    u64::from_ne_bytes(how[8..16].try_into().unwrap()),
+                );
                 restart_syscall_after_seccomp(tracee);
             }
         }
@@ -348,10 +356,30 @@ fn handle_seccomp_event_common(tracee: &mut Tracee) -> i32 {
             // Convert to socketcall(SYS_SENDMMSG) — 32-bit bionic path.
             let w = crate::tracee::reg::sizeof_word(tracee);
             let mut args = vec![0u8; w * 4];
-            write_word(&mut args, 0, w, peek_reg(tracee, RegVersion::Current, Reg::Sysarg1));
-            write_word(&mut args, w, w, peek_reg(tracee, RegVersion::Current, Reg::Sysarg2));
-            write_word(&mut args, 2 * w, w, peek_reg(tracee, RegVersion::Current, Reg::Sysarg3));
-            write_word(&mut args, 3 * w, w, peek_reg(tracee, RegVersion::Current, Reg::Sysarg4));
+            write_word(
+                &mut args,
+                0,
+                w,
+                peek_reg(tracee, RegVersion::Current, Reg::Sysarg1),
+            );
+            write_word(
+                &mut args,
+                w,
+                w,
+                peek_reg(tracee, RegVersion::Current, Reg::Sysarg2),
+            );
+            write_word(
+                &mut args,
+                2 * w,
+                w,
+                peek_reg(tracee, RegVersion::Current, Reg::Sysarg3),
+            );
+            write_word(
+                &mut args,
+                3 * w,
+                w,
+                peek_reg(tracee, RegVersion::Current, Reg::Sysarg4),
+            );
             let targs = alloc_mem(tracee, (w * 4) as i64);
             let _ = write_data(tracee, targs, &args);
             set_sysnum(tracee, Sysnum::socketcall);
@@ -459,7 +487,13 @@ fn handle_seccomp_event_common(tracee: &mut Tracee) -> i32 {
             let mut failed = false;
             if ms_arg >= 0 {
                 let mut ts = vec![0u8; w * 2];
-                write_2words(&mut ts, 0, w, (ms_arg / 1000) as u64, ((ms_arg % 1000) * 1_000_000) as u64);
+                write_2words(
+                    &mut ts,
+                    0,
+                    w,
+                    (ms_arg / 1000) as u64,
+                    ((ms_arg % 1000) * 1_000_000) as u64,
+                );
                 timespec_arg = alloc_mem(tracee, (w * 2) as i64);
                 if write_data(tracee, timespec_arg, &ts) != 0 {
                     set_result_after_seccomp(tracee, (-(libc::EFAULT as i64)) as Word);
@@ -566,13 +600,8 @@ fn statfs_via_sigsys(tracee: &mut Tracee) {
     original.set(&buf[..size as usize]);
 
     let mut path = FixedPath::new();
-    let _ = crate::path::translate_path(
-        tracee,
-        &mut path,
-        libc::AT_FDCWD,
-        original.as_bytes(),
-        true,
-    );
+    let _ =
+        crate::path::translate_path(tracee, &mut path, libc::AT_FDCWD, original.as_bytes(), true);
 
     let c = std::ffi::CString::new(path.as_bytes()).unwrap();
     // statfs64 exposes f_flags and f_spare publicly on this libc target;

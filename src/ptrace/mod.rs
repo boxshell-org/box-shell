@@ -8,12 +8,9 @@ pub mod wait;
 
 use crate::sysnum::Sysnum;
 use crate::tracee::mem::{peek_word, poke_word, read_data, write_data};
-use crate::tracee::reg::{
-    is_32on64_mode, peek_reg, set_sysnum, Reg, RegVersion,
-};
+use crate::tracee::reg::{is_32on64_mode, peek_reg, set_sysnum, Reg, RegVersion};
 use crate::tracee::{get_tracee, Seccomp, Tracee, WaitsIn};
 use crate::Word;
-
 
 /// PTrace request/option constants as `i32` (libc exposes them as `u32`
 /// on Linux/glibc, while all our bookkeeping is `i32`/`Word`), plus the
@@ -140,10 +137,9 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
         attach_to_ptracer(ptracer, ptracer_pid);
 
         // Wake a ptracer that entered wait before we attached.
-        let waiting = crate::tracee::with_tracee(ptracer_pid, |p| {
-            p.as_ptracer.waits_in == WaitsIn::Kernel
-        })
-        .unwrap_or(false);
+        let waiting =
+            crate::tracee::with_tracee(ptracer_pid, |p| p.as_ptracer.waits_in == WaitsIn::Kernel)
+                .unwrap_or(false);
         if waiting {
             let status = unsafe { libc::kill(ptracer_pid, libc::SIGSTOP) };
             if status < 0 {
@@ -188,28 +184,26 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
 
     // Every other request needs a stopped ptracee owned by this ptracer.
     let ptracer_pid = ptracer.pid;
-    let ptracee_rc = match wait::get_stopped_ptracee(ptracer, pid as i32, false, libc::__WALL as Word)
-    {
-        Some(t) => t,
-        None => {
-            // Report the odd case of a still-initializing tracee.
-            if let Some(other) = get_tracee(pid as i32, false) {
-                if other.borrow().exe.is_none() {
-                    crate::note!(
-                        Some(ptracer),
-                        crate::note::Severity::Warning,
-                        crate::note::Origin::Internal,
-                        "ptrace request to an unexpected ptracee"
-                    );
+    let ptracee_rc =
+        match wait::get_stopped_ptracee(ptracer, pid as i32, false, libc::__WALL as Word) {
+            Some(t) => t,
+            None => {
+                // Report the odd case of a still-initializing tracee.
+                if let Some(other) = get_tracee(pid as i32, false) {
+                    if other.borrow().exe.is_none() {
+                        crate::note!(
+                            Some(ptracer),
+                            crate::note::Severity::Warning,
+                            crate::note::Origin::Internal,
+                            "ptrace request to an unexpected ptracee"
+                        );
+                    }
                 }
+                return -libc::ESRCH;
             }
-            return -libc::ESRCH;
-        }
-    };
+        };
     let mut ptracee = ptracee_rc.borrow_mut();
-    if ptracee.as_ptracee.is_zombie
-        || ptracee.as_ptracee.ptracer != ptracer_pid
-        || pid == Word::MAX
+    if ptracee.as_ptracee.is_zombie || ptracee.as_ptracee.ptracer != ptracer_pid || pid == Word::MAX
     {
         return -libc::ESRCH;
     }
@@ -591,9 +585,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
 
 fn peek_data(ptracer: &mut Tracee, request: Word, pid: i32, address: Word, data: Word) -> i32 {
     unsafe { *libc::__errno_location() = 0 };
-    let result = unsafe {
-        libc::ptrace(request as u32, pid, address as usize, 0usize)
-    } as Word;
+    let result = unsafe { libc::ptrace(request as u32, pid, address as usize, 0usize) } as Word;
     let e = crate::path::errno();
     if e != 0 {
         return -e;

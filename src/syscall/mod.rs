@@ -108,13 +108,10 @@ pub fn translate_syscall(tracee: &mut Tracee) {
             status = enter::translate_syscall_enter(tracee);
             save_current_regs(tracee, RegVersion::Modified);
         } else {
-            if tracee.chain.sysnum_workaround_state
-                != chain::SysnumWorkaround::ProcessReplacedCall
+            if tracee.chain.sysnum_workaround_state != chain::SysnumWorkaround::ProcessReplacedCall
             {
-                let _ = crate::extension::notify(
-                    tracee,
-                    &mut crate::extension::Event::ChainedEnter,
-                );
+                let _ =
+                    crate::extension::notify(tracee, &mut crate::extension::Event::ChainedEnter);
             }
             tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
         }
@@ -128,9 +125,7 @@ pub fn translate_syscall(tracee: &mut Tracee) {
             tracee.status = 1;
             // A voided syscall whose avoider reaches the kernel may have its
             // faked result clobbered — force the exit stage to restore it.
-            if is_voided_syscall(tracee, RegVersion::Current)
-                && !kernel_cancels_voided_syscall()
-            {
+            if is_voided_syscall(tracee, RegVersion::Current) && !kernel_cancels_voided_syscall() {
                 tracee.sysexit_pending = true;
                 tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
             }
@@ -149,21 +144,15 @@ pub fn translate_syscall(tracee: &mut Tracee) {
         crate::tracee::reg::print_current_regs(tracee, 5, "sysexit start");
 
         if tracee.chain.syscalls.is_none()
-            || tracee.chain.sysnum_workaround_state
-                == chain::SysnumWorkaround::ProcessReplacedCall
+            || tracee.chain.sysnum_workaround_state == chain::SysnumWorkaround::ProcessReplacedCall
         {
             tracee.chain.sysnum_workaround_state = chain::SysnumWorkaround::Inactive;
             exit::translate_syscall_exit(tracee);
-        } else if tracee.chain.sysnum_workaround_state
-            == chain::SysnumWorkaround::ProcessFaultyCall
+        } else if tracee.chain.sysnum_workaround_state == chain::SysnumWorkaround::ProcessFaultyCall
         {
-            tracee.chain.sysnum_workaround_state =
-                chain::SysnumWorkaround::ProcessReplacedCall;
+            tracee.chain.sysnum_workaround_state = chain::SysnumWorkaround::ProcessReplacedCall;
         } else {
-            let _ = crate::extension::notify(
-                tracee,
-                &mut crate::extension::Event::ChainedExit,
-            );
+            let _ = crate::extension::notify(tracee, &mut crate::extension::Event::ChainedExit);
         }
 
         tracee.status = 0;

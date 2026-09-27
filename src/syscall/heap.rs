@@ -1,10 +1,10 @@
 //! Virtual heap — port of syscall/heap.c.  brk() is rewritten in place into
 //! mmap/mremap against a private anonymous mapping at a controlled address.
 
+use crate::arch::SYSCALL_AVOIDER;
 use crate::sysnum::{detranslate_sysnum, Sysnum};
 use crate::tracee::reg::{get_abi, get_sysnum, peek_reg, poke_reg, set_sysnum, Reg, RegVersion};
 use crate::tracee::Tracee;
-use crate::arch::SYSCALL_AVOIDER;
 use crate::Word;
 
 /// The size of the heap can be zero, unlike a memory mapping: the first page
@@ -78,7 +78,11 @@ pub fn translate_brk_enter(tracee: &mut Tracee) {
         set_sysnum(tracee, sysnum);
         poke_reg(tracee, Reg::Sysarg1, new_brk_address);
         poke_reg(tracee, Reg::Sysarg2, offset);
-        poke_reg(tracee, Reg::Sysarg3, (libc::PROT_READ | libc::PROT_WRITE) as Word);
+        poke_reg(
+            tracee,
+            Reg::Sysarg3,
+            (libc::PROT_READ | libc::PROT_WRITE) as Word,
+        );
         poke_reg(
             tracee,
             Reg::Sysarg4,
@@ -145,8 +149,7 @@ pub fn translate_brk_exit(tracee: &mut Tracee) {
                 poke_reg(tracee, Reg::SysargResult, base + size);
                 return;
             }
-            let new_size =
-                peek_reg(tracee, RegVersion::Modified, Reg::Sysarg3) - offset;
+            let new_size = peek_reg(tracee, RegVersion::Modified, Reg::Sysarg3) - offset;
             tracee.heap.borrow_mut().size = new_size as usize;
             let r = base + new_size;
             poke_reg(tracee, Reg::SysargResult, r);

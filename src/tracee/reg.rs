@@ -191,7 +191,8 @@ pub fn save_current_regs(tracee: &mut Tracee, version: RegVersion) {
 /// `fetch_regs()` — refresh the CURRENT bank from the kernel.
 pub fn fetch_regs(tracee: &mut Tracee) -> i32 {
     let status = unsafe {
-        libc::ptrace(crate::ptrace::ptc::PTRACE_GETREGS as u32,
+        libc::ptrace(
+            crate::ptrace::ptc::PTRACE_GETREGS as u32,
             tracee.pid,
             std::ptr::null_mut::<libc::c_void>(),
             &mut tracee.regs[RegVersion::Current.idx()] as *mut _ as *mut libc::c_void,
@@ -219,8 +220,14 @@ pub fn push_specific_regs(tracee: &mut Tracee, including_sysnum: bool) -> i32 {
             // On x86_64 the sysarg regs never alias the result register; on
             // x32/i386 they don't either (result is rax).  Just restore all.
             for r in [
-                Reg::SysargNum, Reg::Sysarg1, Reg::Sysarg2, Reg::Sysarg3, Reg::Sysarg4,
-                Reg::Sysarg5, Reg::Sysarg6, Reg::StackPointer,
+                Reg::SysargNum,
+                Reg::Sysarg1,
+                Reg::Sysarg2,
+                Reg::Sysarg3,
+                Reg::Sysarg4,
+                Reg::Sysarg5,
+                Reg::Sysarg6,
+                Reg::StackPointer,
             ] {
                 let src_off = reg_offsets(tracee, from)[r as usize];
                 let dst_off = reg_offsets(tracee, RegVersion::Current)[r as usize];
@@ -232,7 +239,8 @@ pub fn push_specific_regs(tracee: &mut Tracee, including_sysnum: bool) -> i32 {
         // register set pushed by PTRACE_SETREGS anyway.
         let _ = including_sysnum;
         let status = unsafe {
-            libc::ptrace(crate::ptrace::ptc::PTRACE_SETREGS as u32,
+            libc::ptrace(
+                crate::ptrace::ptc::PTRACE_SETREGS as u32,
                 tracee.pid,
                 std::ptr::null_mut::<libc::c_void>(),
                 &tracee.regs[RegVersion::Current.idx()] as *const _ as *const libc::c_void,

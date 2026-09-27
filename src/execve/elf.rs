@@ -135,7 +135,11 @@ impl ElfHeader {
     }
     /// `ELF_FIELD()` — 64-bit when class64.
     #[inline]
-    pub fn field64(&self, f32: impl Fn(&ElfHeader32) -> u32, f64: impl Fn(&ElfHeader64) -> u64) -> u64 {
+    pub fn field64(
+        &self,
+        f32: impl Fn(&ElfHeader32) -> u32,
+        f64: impl Fn(&ElfHeader64) -> u64,
+    ) -> u64 {
         unsafe {
             if self.is_class64() {
                 f64(&self.class64)
@@ -169,7 +173,12 @@ impl ElfHeader {
 
 impl ProgramHeader {
     #[inline]
-    pub fn field(&self, ehdr: &ElfHeader, f32: impl Fn(&ProgramHeader32) -> u32, f64: impl Fn(&ProgramHeader64) -> u64) -> u64 {
+    pub fn field(
+        &self,
+        ehdr: &ElfHeader,
+        f32: impl Fn(&ProgramHeader32) -> u32,
+        f64: impl Fn(&ProgramHeader64) -> u64,
+    ) -> u64 {
         unsafe {
             if ehdr.is_class64() {
                 f64(&self.class64)
@@ -200,7 +209,12 @@ impl ProgramHeader {
 
 impl DynamicEntry {
     #[inline]
-    pub fn field(&self, ehdr: &ElfHeader, f32: impl Fn(&DynamicEntry32) -> u32, f64: impl Fn(&DynamicEntry64) -> u64) -> u64 {
+    pub fn field(
+        &self,
+        ehdr: &ElfHeader,
+        f32: impl Fn(&DynamicEntry32) -> u32,
+        f64: impl Fn(&DynamicEntry64) -> u64,
+    ) -> u64 {
         unsafe {
             if ehdr.is_class64() {
                 f64(&self.class64)
@@ -242,7 +256,10 @@ pub fn open_elf(t_path: &[u8]) -> Result<(RawFd, ElfHeader), i32> {
         unsafe { libc::close(fd) };
         return Err(-libc::ENOEXEC);
     }
-    if ehdr.ident(0) != 0x7f || ehdr.ident(1) != b'E' || ehdr.ident(2) != b'L' || ehdr.ident(3) != b'F'
+    if ehdr.ident(0) != 0x7f
+        || ehdr.ident(1) != b'E'
+        || ehdr.ident(2) != b'L'
+        || ehdr.ident(3) != b'F'
     {
         unsafe { libc::close(fd) };
         return Err(-libc::ENOEXEC);

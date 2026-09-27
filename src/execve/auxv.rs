@@ -93,7 +93,10 @@ pub fn fetch_elf_aux_vectors(tracee: &Tracee, address: Word) -> Option<Vec<ElfAu
 pub fn push_elf_aux_vectors(tracee: &Tracee, vectors: &[ElfAuxVector], address: Word) -> i32 {
     let w = sizeof_word(tracee) as Word;
     let mut address = address;
-    for v in vectors.iter().chain(std::iter::once(&ElfAuxVector::default())) {
+    for v in vectors
+        .iter()
+        .chain(std::iter::once(&ElfAuxVector::default()))
+    {
         unsafe { *libc::__errno_location() = 0 };
         poke_word(tracee, address, v.atype);
         if crate::path::errno() != 0 {

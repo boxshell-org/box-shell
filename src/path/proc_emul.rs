@@ -42,11 +42,13 @@ pub fn readlink_proc(
     let base_bytes: Vec<u8>;
     let tail = &base.as_bytes()[b"/proc/".len()..];
     let normalized: Vec<u8>;
-    let base: &[u8] = if tail.starts_with(b"self")
-        && (tail.len() == 4 || tail[4] == b'/')
-    {
-        normalized = format!("/proc/{}{}", tracee.pid, String::from_utf8_lossy(&tail[4..]))
-            .into_bytes();
+    let base: &[u8] = if tail.starts_with(b"self") && (tail.len() == 4 || tail[4] == b'/') {
+        normalized = format!(
+            "/proc/{}{}",
+            tracee.pid,
+            String::from_utf8_lossy(&tail[4..])
+        )
+        .into_bytes();
         &normalized
     } else {
         base.as_bytes()
@@ -69,7 +71,11 @@ pub fn readlink_proc(
             // the caller — use `tracee` directly in that case.
             let (exe_bytes, cwd_bytes, root_bytes);
             if pid == tracee.pid {
-                exe_bytes = tracee.exe.as_ref().map(|s| s.as_bytes().to_vec()).unwrap_or_default();
+                exe_bytes = tracee
+                    .exe
+                    .as_ref()
+                    .map(|s| s.as_bytes().to_vec())
+                    .unwrap_or_default();
                 cwd_bytes = tracee.fs.borrow().cwd.as_bytes().to_vec();
                 root_bytes = crate::path::binding::get_root(tracee).as_bytes().to_vec();
             } else {
@@ -78,7 +84,11 @@ pub fn readlink_proc(
                     None => return Ok(Action::Default),
                 };
                 let known = known.borrow();
-                exe_bytes = known.exe.as_ref().map(|s| s.as_bytes().to_vec()).unwrap_or_default();
+                exe_bytes = known
+                    .exe
+                    .as_ref()
+                    .map(|s| s.as_bytes().to_vec())
+                    .unwrap_or_default();
                 cwd_bytes = known.fs.borrow().cwd.as_bytes().to_vec();
                 root_bytes = crate::path::binding::get_root(&known).as_bytes().to_vec();
             }

@@ -49,9 +49,7 @@ fn probe_f2fs_bug(tracee: &Tracee) -> bool {
                     .mode(0o600)
                     .open(&file3);
                 match r {
-                    Err(e) if e.raw_os_error() == Some(libc::EEXIST) => unsafe {
-                        libc::_exit(1)
-                    },
+                    Err(e) if e.raw_os_error() == Some(libc::EEXIST) => unsafe { libc::_exit(1) },
                     Err(_) => unsafe { libc::_exit(2) },
                     Ok(_) => unsafe { libc::_exit(0) },
                 }

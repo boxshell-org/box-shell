@@ -3,9 +3,7 @@
 //! `sockaddr_un` has the same layout on every architecture.
 
 use crate::fpath::FixedPath;
-use crate::tracee::mem::{
-    alloc_mem, peek_int32, poke_int32, read_data, write_data,
-};
+use crate::tracee::mem::{alloc_mem, peek_int32, poke_int32, read_data, write_data};
 use crate::tracee::Tracee;
 use crate::Word;
 
@@ -47,9 +45,8 @@ fn read_sockaddr_un(
     }
 
     // sun_path doesn't have to be NUL-terminated.
-    let sun: &[u8] = unsafe {
-        std::slice::from_raw_parts(sockaddr.sun_path.as_ptr() as *const u8, SIZEOF_PATH)
-    };
+    let sun: &[u8] =
+        unsafe { std::slice::from_raw_parts(sockaddr.sun_path.as_ptr() as *const u8, SIZEOF_PATH) };
     let end = sun.iter().position(|&c| c == 0).unwrap_or(SIZEOF_PATH);
     let mut p = [0u8; crate::PATH_MAX];
     p[..end].copy_from_slice(&sun[..end]);
@@ -112,12 +109,8 @@ pub fn translate_socketcall_enter(tracee: &mut Tracee, address: &mut Word, size:
             return -libc::EINVAL;
         }
 
-        if crate::path::binding::insort_binding3(
-            tracee,
-            shorter.as_bytes(),
-            guest.as_bytes(),
-        )
-        .is_none()
+        if crate::path::binding::insort_binding3(tracee, shorter.as_bytes(), guest.as_bytes())
+            .is_none()
         {
             return -libc::EINVAL;
         }

@@ -32,7 +32,14 @@ fn next_component(cursor: &mut &[u8]) -> Result<(Vec<u8>, Finality), i32> {
         *cursor = &cursor[1..];
     }
     if cursor.is_empty() {
-        Ok((component, if want_dir { Finality::Slash } else { Finality::Normal }))
+        Ok((
+            component,
+            if want_dir {
+                Finality::Slash
+            } else {
+                Finality::Normal
+            },
+        ))
     } else {
         Ok((component, Finality::NotFinal))
     }
@@ -93,7 +100,11 @@ fn substitute_binding_stat(
         && (st.st_mode & libc::S_IFMT) != libc::S_IFDIR
         && (st.st_mode & libc::S_IFMT) != libc::S_IFLNK
     {
-        return Err(if status < 0 { -libc::ENOENT } else { -libc::ENOTDIR });
+        return Err(if status < 0 {
+            -libc::ENOENT
+        } else {
+            -libc::ENOTDIR
+        });
     }
 
     Ok((st.st_mode & libc::S_IFMT) == libc::S_IFLNK)
@@ -171,8 +182,7 @@ pub fn canonicalize(
         {
             let mut proc_base = guest_path.clone();
             let mut comparison = compare_paths(b"/proc", guest_path.as_bytes());
-            if comparison != Comparison::PathsAreEqual && comparison != Comparison::Path1IsPrefix
-            {
+            if comparison != Comparison::PathsAreEqual && comparison != Comparison::Path1IsPrefix {
                 // Check whether guest_path aliases /proc via a binding.
                 let mut alias_base = guest_path.clone();
                 let _ = substitute_binding(tracee, Side::Guest, &mut alias_base);
@@ -209,10 +219,8 @@ pub fn canonicalize(
         if !canonicalize_now {
             let mut buf = vec![0u8; PATH_MAX];
             let n = {
-                let c = std::ffi::CString::new(host_path.as_bytes())
-                    .map_err(|_| -libc::EINVAL)?;
-                let r =
-                    unsafe { libc::readlink(c.as_ptr(), buf.as_mut_ptr() as *mut _, PATH_MAX) };
+                let c = std::ffi::CString::new(host_path.as_bytes()).map_err(|_| -libc::EINVAL)?;
+                let r = unsafe { libc::readlink(c.as_ptr(), buf.as_mut_ptr() as *mut _, PATH_MAX) };
                 if r < 0 {
                     return Err(-crate::path::errno());
                 }

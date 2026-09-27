@@ -104,11 +104,7 @@ pub fn semget(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
 /// `sysvipc_sem_check()` — 1 if the tracee should still wait, otherwise
 /// the result semop shall return. `out_wait_type` receives 'n'/'z' for
 /// GETNCNT/GETZCNT accounting.
-fn sem_check(
-    config: &Sysvipc,
-    semaphore: &mut Semaphore,
-    out_wait_type: Option<&mut u8>,
-) -> i32 {
+fn sem_check(config: &Sysvipc, semaphore: &mut Semaphore, out_wait_type: Option<&mut u8>) -> i32 {
     debug_assert!(config.wait_reason == WaitReason::Semop);
     let sops = config.semop_sops.as_ref().unwrap();
 
@@ -286,13 +282,17 @@ pub fn semctl(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
         }
         IPC_RMID => {
             let ns_ptr = ns.clone();
-            for_each_tracee_in_ns(Some(&ns_ptr), tracee.pid, |waiting_tracee, waiting_config| {
-                if waiting_config.wait_reason == WaitReason::Semop
-                    && waiting_config.waiting_object_index == semaphore_index
-                {
-                    wake_tracee(waiting_tracee, waiting_config, -libc::EIDRM);
-                }
-            });
+            for_each_tracee_in_ns(
+                Some(&ns_ptr),
+                tracee.pid,
+                |waiting_tracee, waiting_config| {
+                    if waiting_config.wait_reason == WaitReason::Semop
+                        && waiting_config.waiting_object_index == semaphore_index
+                    {
+                        wake_tracee(waiting_tracee, waiting_config, -libc::EIDRM);
+                    }
+                },
+            );
             let mut nsb = ns.borrow_mut();
             let semaphore = &mut nsb.semaphores[semaphore_index];
             semaphore.valid = false;

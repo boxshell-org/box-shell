@@ -51,11 +51,12 @@ fn writer_would_block(fd: i32) -> bool {
     if unsafe { libc::ioctl(fd, libc::FIONREAD, &mut buffered) } < 0 {
         return false;
     }
-    buffered as i64 > if capacity as i64 > libc::PIPE_BUF as i64 {
-        capacity as i64 - libc::PIPE_BUF as i64
-    } else {
-        0
-    }
+    buffered as i64
+        > if capacity as i64 > libc::PIPE_BUF as i64 {
+            capacity as i64 - libc::PIPE_BUF as i64
+        } else {
+            0
+        }
 }
 
 /// `shadow_pipe_read_end()` — open a tracer-side read reference to the
@@ -73,13 +74,11 @@ pub fn shadow_pipe_read_end(tracee_pid: i32, tracee_fd: i32) {
         }
 
         // Read end only (O_RDONLY in O_ACCMODE).
-        let info = match std::fs::read_to_string(format!(
-            "/proc/{}/fdinfo/{}",
-            tracee_pid, tracee_fd
-        )) {
-            Ok(t) => t,
-            Err(_) => return,
-        };
+        let info =
+            match std::fs::read_to_string(format!("/proc/{}/fdinfo/{}", tracee_pid, tracee_fd)) {
+                Ok(t) => t,
+                Err(_) => return,
+            };
         let mut flags: u64 = 1;
         for line in info.lines() {
             if let Some(v) = line.strip_prefix("flags:") {
@@ -91,7 +90,10 @@ pub fn shadow_pipe_read_end(tracee_pid: i32, tracee_fd: i32) {
             return;
         }
 
-        let slot = match (*std::ptr::addr_of!(SHADOWS)).iter().position(|s| s.fd == -1) {
+        let slot = match (*std::ptr::addr_of!(SHADOWS))
+            .iter()
+            .position(|s| s.fd == -1)
+        {
             Some(s) => s,
             None => return,
         };
@@ -102,7 +104,10 @@ pub fn shadow_pipe_read_end(tracee_pid: i32, tracee_fd: i32) {
             return;
         }
         SHADOWS[slot].fd = fd;
-        let _ = libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut (*std::ptr::addr_of_mut!(SHADOWS))[slot].birth);
+        let _ = libc::clock_gettime(
+            libc::CLOCK_MONOTONIC,
+            &mut (*std::ptr::addr_of_mut!(SHADOWS))[slot].birth,
+        );
         SHADOWS_HELD += 1;
     }
 }
@@ -116,7 +121,10 @@ pub fn reap() {
         if elapsed_ms(&*std::ptr::addr_of!(LAST_REAP)) < SHADOW_REAP_INTERVAL_MS {
             return;
         }
-        let _ = libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut *std::ptr::addr_of_mut!(LAST_REAP));
+        let _ = libc::clock_gettime(
+            libc::CLOCK_MONOTONIC,
+            &mut *std::ptr::addr_of_mut!(LAST_REAP),
+        );
 
         for i in 0..MAX_SHADOW_PIPES {
             if SHADOWS[i].fd < 0 {
@@ -127,9 +135,11 @@ pub fn reap() {
                 events: 0,
                 revents: 0,
             };
-            let hup = libc::poll(&mut pfd, 1, 0) > 0
-                && (pfd.revents & libc::POLLHUP) != 0;
-            if hup || writer_would_block(SHADOWS[i].fd) || elapsed_ms(&SHADOWS[i].birth) >= SHADOW_MAX_AGE_MS {
+            let hup = libc::poll(&mut pfd, 1, 0) > 0 && (pfd.revents & libc::POLLHUP) != 0;
+            if hup
+                || writer_would_block(SHADOWS[i].fd)
+                || elapsed_ms(&SHADOWS[i].birth) >= SHADOW_MAX_AGE_MS
+            {
                 libc::close(SHADOWS[i].fd);
                 SHADOWS[i].fd = -1;
                 SHADOWS_HELD -= 1;

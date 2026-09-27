@@ -17,7 +17,10 @@ pub struct FixedPath {
 
 impl FixedPath {
     pub fn new() -> Self {
-        FixedPath { buf: [0; PATH_MAX], len: 0 }
+        FixedPath {
+            buf: [0; PATH_MAX],
+            len: 0,
+        }
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
@@ -108,12 +111,10 @@ impl FixedPath {
     /// Append a component, inserting a '/' separator when needed
     /// (join_paths() semantics for a single pair).
     pub fn push_component(&mut self, component: &[u8]) -> Result<(), i32> {
-        let need_sep = self.len > 0
-            && self.buf[self.len - 1] != b'/'
-            && component.first() != Some(&b'/');
-        let skip_first = self.len > 0
-            && self.buf[self.len - 1] == b'/'
-            && component.first() == Some(&b'/');
+        let need_sep =
+            self.len > 0 && self.buf[self.len - 1] != b'/' && component.first() != Some(&b'/');
+        let skip_first =
+            self.len > 0 && self.buf[self.len - 1] == b'/' && component.first() == Some(&b'/');
         let add = component.len() + usize::from(need_sep) - usize::from(skip_first);
         if self.len + add + 1 >= PATH_MAX {
             return Err(-libc::ENAMETOOLONG);
@@ -122,7 +123,11 @@ impl FixedPath {
             self.buf[self.len] = b'/';
             self.len += 1;
         }
-        let src = if skip_first { &component[1..] } else { component };
+        let src = if skip_first {
+            &component[1..]
+        } else {
+            component
+        };
         self.buf[self.len..self.len + src.len()].copy_from_slice(src);
         self.len += src.len();
         self.buf[self.len] = 0;
@@ -163,7 +168,11 @@ impl FixedPath {
 
     /// Replace the first `old_prefix_len` bytes by `new_prefix`
     /// (`substitute_path_prefix()` semantics).
-    pub fn substitute_prefix(&mut self, old_prefix_len: usize, new_prefix: &[u8]) -> Result<usize, i32> {
+    pub fn substitute_prefix(
+        &mut self,
+        old_prefix_len: usize,
+        new_prefix: &[u8],
+    ) -> Result<usize, i32> {
         let path_len = self.len;
         let mut new_len: usize;
         if new_prefix.len() == 1 {
@@ -194,7 +203,8 @@ impl FixedPath {
             if new_len >= PATH_MAX {
                 return Err(-libc::ENAMETOOLONG);
             }
-            self.buf.copy_within(old_prefix_len..path_len, new_prefix.len());
+            self.buf
+                .copy_within(old_prefix_len..path_len, new_prefix.len());
             self.buf[..new_prefix.len()].copy_from_slice(new_prefix);
         }
         self.len = new_len;

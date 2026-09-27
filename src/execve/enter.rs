@@ -23,7 +23,7 @@ use crate::syscall::{get_sysarg_path, set_sysarg_path};
 use crate::sysnum::Sysnum;
 use crate::tracee::reg::{set_sysnum, sysarg, Reg};
 use crate::tracee::Tracee;
-use crate::{HOST_ROOTFS, Word};
+use crate::{Word, HOST_ROOTFS};
 
 /// Loader ELF embedded at build time (see build.rs).
 const LOADER_EXE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/loader.exe"));
@@ -53,9 +53,19 @@ fn add_mapping(load_info: &mut LoadInfo, elf_header: &ElfHeader, ph: &ProgramHea
     let start_address = vaddr & mask;
     let end_address = (vaddr + filesz + page) & mask;
 
-    let prot = (if flags & PF_R != 0 { libc::PROT_READ } else { 0 }
-        | if flags & PF_W != 0 { libc::PROT_WRITE } else { 0 }
-        | if flags & PF_X != 0 { libc::PROT_EXEC } else { 0 }) as Word;
+    let prot = (if flags & PF_R != 0 {
+        libc::PROT_READ
+    } else {
+        0
+    } | if flags & PF_W != 0 {
+        libc::PROT_WRITE
+    } else {
+        0
+    } | if flags & PF_X != 0 {
+        libc::PROT_EXEC
+    } else {
+        0
+    }) as Word;
 
     let mut m = Mapping {
         fd: Word::MAX, // -1, unknown yet
@@ -128,11 +138,8 @@ fn add_interp(
     }
 
     let mut host_path = FixedPath::new();
-    let status = crate::execve::shebang::translate_and_check_exec(
-        tracee,
-        &mut host_path,
-        &user_path,
-    );
+    let status =
+        crate::execve::shebang::translate_and_check_exec(tracee, &mut host_path, &user_path);
     if status < 0 {
         return status;
     }
@@ -207,8 +214,11 @@ fn add_load_base(load_info: &mut LoadInfo, load_base: Word) {
             load_info.elf_header.class64.e_entry =
                 load_info.elf_header.class64.e_entry.wrapping_add(load_base);
         } else {
-            load_info.elf_header.class32.e_entry =
-                load_info.elf_header.class32.e_entry.wrapping_add(load_base as u32);
+            load_info.elf_header.class32.e_entry = load_info
+                .elf_header
+                .class32
+                .e_entry
+                .wrapping_add(load_base as u32);
         }
     }
 }
@@ -312,8 +322,12 @@ fn extract_loader(tracee: &Tracee) -> Option<String> {
     let (mut file, _path) = crate::path::temp::open_temp_file("prooted")?;
     use std::io::Write;
     if file.write_all(LOADER_EXE).is_err() {
-        crate::note!(Some(tracee), crate::note::Severity::Error, crate::note::Origin::System,
-                     "can't write the loader");
+        crate::note!(
+            Some(tracee),
+            crate::note::Severity::Error,
+            crate::note::Origin::System,
+            "can't write the loader"
+        );
         return None;
     }
     unsafe {
@@ -323,8 +337,12 @@ fn extract_loader(tracee: &Tracee) -> Option<String> {
     if crate::path::readlink_proc_pid_fd(std::process::id() as i32, file.as_raw_fd(), &mut path)
         .is_err()
     {
-        crate::note!(Some(tracee), crate::note::Severity::Error, crate::note::Origin::Internal,
-                     "can't retrieve loader path (/proc/self/fd/)");
+        crate::note!(
+            Some(tracee),
+            crate::note::Severity::Error,
+            crate::note::Origin::Internal,
+            "can't retrieve loader path (/proc/self/fd/)"
+        );
         return None;
     }
     let c = std::ffi::CString::new(path.as_bytes()).ok()?;
@@ -335,8 +353,13 @@ fn extract_loader(tracee: &Tracee) -> Option<String> {
         return None;
     }
     if tracee.verbose >= 2 {
-        crate::note!(Some(tracee), crate::note::Severity::Info, crate::note::Origin::Internal,
-                     "loader: {}", path);
+        crate::note!(
+            Some(tracee),
+            crate::note::Severity::Info,
+            crate::note::Origin::Internal,
+            "loader: {}",
+            path
+        );
     }
     Some(path.to_string())
 }

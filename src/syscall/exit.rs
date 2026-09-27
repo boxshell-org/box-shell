@@ -7,11 +7,11 @@
 
 use crate::fpath::FixedPath;
 use crate::path::{compare_paths, Comparison};
-use crate::sysnum::Sysnum;
 use crate::syscall::{is_voided_syscall, netlink, ReadlinkProcFdState};
+use crate::sysnum::Abi;
+use crate::sysnum::Sysnum;
 use crate::tracee::mem::{peek_word, poke_word, read_data, read_path, read_string, write_data};
 use crate::tracee::reg::{get_sysnum, peek_reg, poke_reg, Reg, RegVersion};
-use crate::sysnum::Abi;
 use crate::tracee::Tracee;
 use crate::Word;
 
@@ -65,8 +65,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
                 Flow::Result(-libc::EINVAL)
             } else {
                 let mut p = FixedPath::new();
-                match crate::path::translate_path(tracee, &mut p, libc::AT_FDCWD, b".", false)
-                {
+                match crate::path::translate_path(tracee, &mut p, libc::AT_FDCWD, b".", false) {
                     Err(e) => Flow::Result(e),
                     Ok(()) => {
                         let cwd = tracee.fs.borrow().cwd.clone();
@@ -96,8 +95,14 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
         Sysnum::getsockname | Sysnum::getpeername => sockname_exit(tracee, syscall_result),
         Sysnum::socketcall => socketcall_exit(tracee, syscall_result),
 
-        Sysnum::fchdir | Sysnum::chdir | Sysnum::unshare | Sysnum::setns | Sysnum::mount
-        | Sysnum::umount | Sysnum::umount2 | Sysnum::pivot_root => {
+        Sysnum::fchdir
+        | Sysnum::chdir
+        | Sysnum::unshare
+        | Sysnum::setns
+        | Sysnum::mount
+        | Sysnum::umount
+        | Sysnum::umount2
+        | Sysnum::pivot_root => {
             // Fully emulated at enter; keep the fake result even when the
             // avoider leaks -ENOSYS.
             Flow::Result(0)
@@ -117,9 +122,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
         Sysnum::uname => {
             // 32-bit-on-64 tracees see "i686" — some 32-bit tools are
             // confused by "x86_64".
-            if crate::tracee::reg::get_abi(tracee) != Abi::Abi2
-                || (syscall_result as i64) < 0
-            {
+            if crate::tracee::reg::get_abi(tracee) != Abi::Abi2 || (syscall_result as i64) < 0 {
                 Flow::End
             } else {
                 let address = peek_reg(tracee, RegVersion::Original, Reg::Sysarg1);
@@ -219,9 +222,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
             }
         }
 
-        Sysnum::ptrace => {
-            Flow::Result(crate::ptrace::translate_ptrace_exit(tracee))
-        }
+        Sysnum::ptrace => Flow::Result(crate::ptrace::translate_ptrace_exit(tracee)),
 
         Sysnum::wait4 | Sysnum::waitpid => {
             if tracee.as_ptracer.waits_in != crate::tracee::WaitsIn::Proot {
@@ -300,9 +301,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
             }
         }
 
-        Sysnum::statx => Flow::Result(crate::tracee::statx::handle_statx_syscall(
-            tracee, false,
-        )),
+        Sysnum::statx => Flow::Result(crate::tracee::statx::handle_statx_syscall(tracee, false)),
 
         Sysnum::ioctl => {
             // FICLONE denied by the host (Android) → EOPNOTSUPP so cp(1)
@@ -326,8 +325,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
             if tracee.pending_fake_netlink_socket {
                 let fd = peek_reg(tracee, RegVersion::Current, Reg::SysargResult) as i32;
                 if fd >= 0
-                    && tracee.fake_netlink_fds.len()
-                        < crate::tracee::MAX_FAKE_NETLINK_FDS
+                    && tracee.fake_netlink_fds.len() < crate::tracee::MAX_FAKE_NETLINK_FDS
                     && !tracee.fake_netlink_fds.iter().any(|s| s.fd == fd)
                 {
                     netlink::mark_fake_netlink_fd(tracee, fd);
@@ -336,9 +334,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
             }
             if tracee.pending_real_netlink_socket {
                 let fd = peek_reg(tracee, RegVersion::Current, Reg::SysargResult) as i32;
-                if fd >= 0
-                    && tracee.netlink_route_fds.len()
-                        < crate::tracee::MAX_NETLINK_ROUTE_FDS
+                if fd >= 0 && tracee.netlink_route_fds.len() < crate::tracee::MAX_NETLINK_ROUTE_FDS
                 {
                     netlink::mark_netlink_route_fd(tracee, fd);
                 }
@@ -363,7 +359,10 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
 }
 
 fn end(tracee: &mut Tracee) {
-    let status = crate::extension::notify(tracee, &mut crate::extension::Event::SysExitEnd { status: 0 });
+    let status = crate::extension::notify(
+        tracee,
+        &mut crate::extension::Event::SysExitEnd { status: 0 },
+    );
     if status < 0 {
         poke_reg(tracee, Reg::SysargResult, status as Word);
     }
@@ -596,7 +595,8 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
     if old_size == max_size {
         let c = std::ffi::CString::new(referer.as_bytes()).unwrap();
         let mut rbuf = vec![0u8; crate::PATH_MAX];
-        let full = unsafe { libc::readlink(c.as_ptr(), rbuf.as_mut_ptr() as *mut _, rbuf.len() - 1) };
+        let full =
+            unsafe { libc::readlink(c.as_ptr(), rbuf.as_mut_ptr() as *mut _, rbuf.len() - 1) };
         if full > 0 {
             referee.set(&rbuf[..full as usize]);
         }

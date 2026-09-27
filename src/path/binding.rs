@@ -9,7 +9,9 @@
 use std::rc::Rc;
 
 use crate::fpath::FixedPath;
-use crate::path::{compare_paths2, compare_paths, getcwd2, join_paths2, realpath2, Comparison, Side};
+use crate::path::{
+    compare_paths, compare_paths2, getcwd2, join_paths2, realpath2, Comparison, Side,
+};
 use crate::tracee::Tracee;
 
 pub struct Binding {
@@ -26,8 +28,6 @@ impl Binding {
         }
     }
 }
-
-
 
 /// `get_binding()` — find the binding covering `path` on `side`.
 pub fn get_binding(tracee: &Tracee, side: Side, path: &[u8]) -> Option<Rc<Binding>> {
@@ -124,8 +124,7 @@ fn insort_binding(tracee: &Tracee, side: Side, binding: Rc<Binding>) {
                     previous = Some(i);
                     continue;
                 }
-                if tracee.verbose > 0
-                    && std::env::var_os("PROOT_IGNORE_MISSING_BINDINGS").is_none()
+                if tracee.verbose > 0 && std::env::var_os("PROOT_IGNORE_MISSING_BINDINGS").is_none()
                 {
                     crate::note!(
                         crate::note::Severity::Warning,
@@ -168,8 +167,8 @@ fn insort_binding(tracee: &Tracee, side: Side, binding: Rc<Binding>) {
 
 /// `insort_binding2` — set need_substitution and insert into guest+host lists.
 pub fn insort_binding2(tracee: &Tracee, binding: &mut Binding) -> Rc<Binding> {
-    binding.need_substitution =
-        compare_paths(binding.host.as_bytes(), binding.guest.as_bytes()) != Comparison::PathsAreEqual;
+    binding.need_substitution = compare_paths(binding.host.as_bytes(), binding.guest.as_bytes())
+        != Comparison::PathsAreEqual;
     let rc = Rc::new(std::mem::replace(
         binding,
         Binding {
@@ -184,7 +183,11 @@ pub fn insort_binding2(tracee: &Tracee, binding: &mut Binding) -> Rc<Binding> {
 }
 
 /// `insort_binding3` — allocate + insert `host_path:guest_path`.
-pub fn insort_binding3(tracee: &Tracee, host_path: &[u8], guest_path: &[u8]) -> Option<Rc<Binding>> {
+pub fn insort_binding3(
+    tracee: &Tracee,
+    host_path: &[u8],
+    guest_path: &[u8],
+) -> Option<Rc<Binding>> {
     let mut b = Binding {
         host: FixedPath::from_bytes(host_path),
         guest: FixedPath::from_bytes(guest_path),
@@ -342,10 +345,9 @@ pub fn initialize_binding(tracee: &mut Tracee, binding: &Rc<Binding>) {
                     guest: new_guest,
                     need_substitution: binding.need_substitution,
                 };
-                updated.need_substitution = compare_paths(
-                    updated.host.as_bytes(),
-                    updated.guest.as_bytes(),
-                ) != Comparison::PathsAreEqual;
+                updated.need_substitution =
+                    compare_paths(updated.host.as_bytes(), updated.guest.as_bytes())
+                        != Comparison::PathsAreEqual;
                 insort_binding2(tracee, &mut updated);
             }
             Err(e) => {
@@ -365,10 +367,9 @@ pub fn initialize_binding(tracee: &mut Tracee, binding: &Rc<Binding>) {
             guest: binding.guest.clone(),
             need_substitution: binding.need_substitution,
         };
-        updated.need_substitution = compare_paths(
-            updated.host.as_bytes(),
-            updated.guest.as_bytes(),
-        ) != Comparison::PathsAreEqual;
+        updated.need_substitution =
+            compare_paths(updated.host.as_bytes(), updated.guest.as_bytes())
+                != Comparison::PathsAreEqual;
         insort_binding2(tracee, &mut updated);
     }
 }

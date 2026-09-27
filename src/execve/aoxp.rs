@@ -183,11 +183,7 @@ pub fn resize_array_of_xpointers(array: &mut XPointerArray, index: usize, delta:
 
 /// `push_array_of_xpointers()` — write the pointer table + modified
 /// pointees to a fresh tracer-allocated block and update `reg`.
-pub fn push_array_of_xpointers(
-    tracee: &mut Tracee,
-    array: &mut XPointerArray,
-    reg: Reg,
-) -> i32 {
+pub fn push_array_of_xpointers(tracee: &mut Tracee, array: &mut XPointerArray, reg: Reg) -> i32 {
     let w = sizeof_word(tracee);
     let n = array.entries.len();
 

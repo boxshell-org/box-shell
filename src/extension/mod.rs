@@ -24,37 +24,74 @@ pub const CLONE_RECONF: Word = Word::MAX;
 /// Typed extension events (extension.h `ExtensionEvent`).
 pub enum Event<'a> {
     /// data1 = base (cwd) — may be replaced; data2 = user path.
-    GuestPath { base: &'a mut FixedPath, path: &'a [u8] },
+    GuestPath {
+        base: &'a mut FixedPath,
+        path: &'a [u8],
+    },
     /// data1 = canonicalized host path; data2 = last iteration.
-    HostPath { path: &'a mut FixedPath, is_final: bool },
+    HostPath {
+        path: &'a mut FixedPath,
+        is_final: bool,
+    },
     /// data1 = link host path; data2 = link content (mutable).
-    SymlinkDeref { link: &'a FixedPath, referree: &'a mut FixedPath },
+    SymlinkDeref {
+        link: &'a FixedPath,
+        referree: &'a mut FixedPath,
+    },
     /// data1 = translated host path (mutable).
-    TranslatedPath { path: &'a mut FixedPath },
+    TranslatedPath {
+        path: &'a mut FixedPath,
+    },
     SysEnterStart,
-    SysEnterEnd { status: i32 },
+    SysEnterEnd {
+        status: i32,
+    },
     SysExitStart,
-    SysExitEnd { status: i32 },
+    SysExitEnd {
+        status: i32,
+    },
     /// data1 = new waitpid status.
-    NewStatus { status: i32 },
+    NewStatus {
+        status: i32,
+    },
     /// data1 = child tracee pid; data2 = clone flags.  Return <0 not
     /// inheritable, 0 shared config, >0 call InheritChild.
-    InheritParent { child_pid: i32, clone_flags: Word },
+    InheritParent {
+        child_pid: i32,
+        clone_flags: Word,
+    },
     /// data1 = parent's extension config, data2 = clone flags.
-    InheritChild { clone_flags: Word },
+    InheritChild {
+        clone_flags: Word,
+    },
     ChainedEnter,
     ChainedExit,
     /// data1 = CLI argument.
-    Initialization { arg: &'a str },
+    Initialization {
+        arg: &'a str,
+    },
     Removed,
     PrintConfig,
-    PrintUsage { detailed: bool },
+    PrintUsage {
+        detailed: bool,
+    },
     SigsysOcc,
-    Link2SymlinkRename { link: &'a str, target: &'a str },
-    Link2SymlinkUnlink { link: &'a str },
-    StatxSyscall { state: &'a mut crate::tracee::statx::StatxSyscallState },
-    ReadlinkProcFd { state: &'a mut crate::syscall::ReadlinkProcFdState },
-    ExecveProcExe { state: &'a mut crate::execve::ExecveProcExeState },
+    Link2SymlinkRename {
+        link: &'a str,
+        target: &'a str,
+    },
+    Link2SymlinkUnlink {
+        link: &'a str,
+    },
+    StatxSyscall {
+        state: &'a mut crate::tracee::statx::StatxSyscallState,
+    },
+    ReadlinkProcFd {
+        state: &'a mut crate::syscall::ReadlinkProcFdState,
+    },
+    ExecveProcExe {
+        state: &'a mut crate::execve::ExecveProcExeState,
+    },
 }
 
 /// `AnyExtension` — one variant per built-in extension.
@@ -109,16 +146,12 @@ impl AnyExtension {
             AnyExtension::HiddenFiles(e) => {
                 AnyExtension::HiddenFiles(e.clone_for_child(clone_flags))
             }
-            AnyExtension::PortSwitch(e) => {
-                AnyExtension::PortSwitch(e.clone_for_child(clone_flags))
-            }
+            AnyExtension::PortSwitch(e) => AnyExtension::PortSwitch(e.clone_for_child(clone_flags)),
             AnyExtension::FixSymlinkSize(e) => {
                 AnyExtension::FixSymlinkSize(e.clone_for_child(clone_flags))
             }
             AnyExtension::Kompat(e) => AnyExtension::Kompat(e.clone_for_child(clone_flags)),
-            AnyExtension::Mountinfo(e) => {
-                AnyExtension::Mountinfo(e.clone_for_child(clone_flags))
-            }
+            AnyExtension::Mountinfo(e) => AnyExtension::Mountinfo(e.clone_for_child(clone_flags)),
             AnyExtension::Sysvipc(e) => AnyExtension::Sysvipc(e.clone_for_child(clone_flags)),
         }
     }
@@ -151,7 +184,7 @@ pub fn notify_guest_path(tracee: &mut Tracee, base: &mut FixedPath, path: &[u8])
 }
 
 pub fn notify_host_path(tracee: &mut Tracee, path: &mut FixedPath, is_final: bool) -> i32 {
-    notify(tracee, &mut Event::HostPath { path, is_final }) 
+    notify(tracee, &mut Event::HostPath { path, is_final })
 }
 
 pub fn notify_symlink_deref(
@@ -189,7 +222,10 @@ pub fn has_extension(tracee: &Tracee, pred: impl Fn(&AnyExtension) -> bool) -> b
 /// them from `tracee.extensions`.
 pub fn remove_extension(tracee: &mut Tracee, pred: impl Fn(&AnyExtension) -> bool) {
     for i in 0..tracee.extensions.len() {
-        let matches = tracee.extensions[i].as_ref().map(|e| pred(e)).unwrap_or(false);
+        let matches = tracee.extensions[i]
+            .as_ref()
+            .map(|e| pred(e))
+            .unwrap_or(false);
         if matches {
             if let Some(mut ext) = tracee.extensions[i].take() {
                 ext.notify(tracee, &mut Event::Removed);

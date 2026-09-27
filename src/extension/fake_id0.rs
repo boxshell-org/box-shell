@@ -11,15 +11,15 @@ use std::ffi::CString;
 use crate::extension::Event;
 use crate::fpath::FixedPath;
 use crate::path::{belongs_to_guestfs, compare_paths, Comparison};
+use crate::syscall::chain::register_chained_syscall;
+use crate::syscall::set_sysarg_data;
 use crate::sysnum::Sysnum;
 use crate::tracee::mem::{
     alloc_mem, peek_uint32, poke_uint32, read_data, read_path, read_string, write_data,
 };
-use crate::tracee::reg::{is_32on64_mode, peek_reg, poke_reg, Reg, RegVersion};
 use crate::tracee::reg::{get_sysnum, set_sysnum};
+use crate::tracee::reg::{is_32on64_mode, peek_reg, poke_reg, Reg, RegVersion};
 use crate::tracee::Tracee;
-use crate::syscall::chain::register_chained_syscall;
-use crate::syscall::set_sysarg_data;
 use crate::Word;
 use crate::PATH_MAX;
 
@@ -373,7 +373,13 @@ fn read_sysarg_path(
             );
             if size >= 0 {
                 original.sync_len_from_nul();
-                crate::path::translate_path(tracee, path, libc::AT_FDCWD, original.as_bytes(), true)?;
+                crate::path::translate_path(
+                    tracee,
+                    path,
+                    libc::AT_FDCWD,
+                    original.as_bytes(),
+                    true,
+                )?;
             }
         }
         _ => {
@@ -425,7 +431,8 @@ fn handle_open_enter(
     };
 
     // No metafile + not creating → nothing to do.
-    if !path_exists(meta_path.as_bytes()) && (flags & libc::O_CREAT as Word) != libc::O_CREAT as Word
+    if !path_exists(meta_path.as_bytes())
+        && (flags & libc::O_CREAT as Word) != libc::O_CREAT as Word
     {
         return 0;
     }
@@ -441,8 +448,13 @@ fn handle_open_enter(
             // File exists already → check its perms instead.
             return open_check(tracee, &meta_path, &rel_path, flags, config);
         }
-        if let Err(e) = check_dir_perms(tracee, b'w', meta_path.as_bytes(), rel_path.as_bytes(), config)
-        {
+        if let Err(e) = check_dir_perms(
+            tracee,
+            b'w',
+            meta_path.as_bytes(),
+            rel_path.as_bytes(),
+            config,
+        ) {
             return e;
         }
         let mode = peek_reg(tracee, RegVersion::Original, mode_sysarg) as u32;
@@ -471,8 +483,13 @@ fn open_check(
     flags: Word,
     config: &Config,
 ) -> i32 {
-    if let Err(e) = check_dir_perms(tracee, b'r', meta_path.as_bytes(), rel_path.as_bytes(), config)
-    {
+    if let Err(e) = check_dir_perms(
+        tracee,
+        b'r',
+        meta_path.as_bytes(),
+        rel_path.as_bytes(),
+        config,
+    ) {
         return e;
     }
     let perms = match get_permissions(meta_path.as_bytes(), config, false) {
@@ -517,14 +534,26 @@ fn handle_mk_enter(
     if let Err(e) = get_fd_path(tracee, &mut rel_path, fd_sysarg, RegVersion::Current) {
         return e;
     }
-    if let Err(e) = check_dir_perms(tracee, b'w', orig_path.as_bytes(), rel_path.as_bytes(), config)
-    {
+    if let Err(e) = check_dir_perms(
+        tracee,
+        b'w',
+        orig_path.as_bytes(),
+        rel_path.as_bytes(),
+        config,
+    ) {
         return e;
     }
 
     let mode = peek_reg(tracee, RegVersion::Original, mode_sysarg) as u32;
     poke_reg(tracee, mode_sysarg, (mode | 0o700) as Word);
-    match write_meta_file(meta_path.as_bytes(), mode, config.euid, config.egid, true, config) {
+    match write_meta_file(
+        meta_path.as_bytes(),
+        mode,
+        config.euid,
+        config.egid,
+        true,
+        config,
+    ) {
         Ok(()) => 0,
         Err(e) => e,
     }
@@ -553,8 +582,13 @@ fn handle_unlink_enter(
     if let Err(e) = get_fd_path(tracee, &mut rel_path, fd_sysarg, RegVersion::Current) {
         return e;
     }
-    if let Err(e) = check_dir_perms(tracee, b'w', orig_path.as_bytes(), rel_path.as_bytes(), config)
-    {
+    if let Err(e) = check_dir_perms(
+        tracee,
+        b'w',
+        orig_path.as_bytes(),
+        rel_path.as_bytes(),
+        config,
+    ) {
         return e;
     }
 
@@ -595,12 +629,22 @@ fn handle_rename_enter(
     if let Err(e) = get_fd_path(tracee, &mut rel_newpath, newfd_sysarg, RegVersion::Current) {
         return e;
     }
-    if let Err(e) = check_dir_perms(tracee, b'w', oldpath.as_bytes(), rel_oldpath.as_bytes(), config)
-    {
+    if let Err(e) = check_dir_perms(
+        tracee,
+        b'w',
+        oldpath.as_bytes(),
+        rel_oldpath.as_bytes(),
+        config,
+    ) {
         return e;
     }
-    if let Err(e) = check_dir_perms(tracee, b'w', newpath.as_bytes(), rel_newpath.as_bytes(), config)
-    {
+    if let Err(e) = check_dir_perms(
+        tracee,
+        b'w',
+        newpath.as_bytes(),
+        rel_newpath.as_bytes(),
+        config,
+    ) {
         return e;
     }
 
@@ -908,19 +952,39 @@ fn handle_link_enter(
         _ => {}
     }
     let mut rel_oldpath = FixedPath::new();
-    if let Err(e) = get_fd_path(tracee, &mut rel_oldpath, olddirfd_sysarg, RegVersion::Original) {
+    if let Err(e) = get_fd_path(
+        tracee,
+        &mut rel_oldpath,
+        olddirfd_sysarg,
+        RegVersion::Original,
+    ) {
         return e;
     }
     let mut rel_newpath = FixedPath::new();
-    if let Err(e) = get_fd_path(tracee, &mut rel_newpath, newdirfd_sysarg, RegVersion::Original) {
+    if let Err(e) = get_fd_path(
+        tracee,
+        &mut rel_newpath,
+        newdirfd_sysarg,
+        RegVersion::Original,
+    ) {
         return e;
     }
-    if let Err(e) = check_dir_perms(tracee, b'r', oldpath.as_bytes(), rel_oldpath.as_bytes(), config)
-    {
+    if let Err(e) = check_dir_perms(
+        tracee,
+        b'r',
+        oldpath.as_bytes(),
+        rel_oldpath.as_bytes(),
+        config,
+    ) {
         return e;
     }
-    if let Err(e) = check_dir_perms(tracee, b'w', newpath.as_bytes(), rel_newpath.as_bytes(), config)
-    {
+    if let Err(e) = check_dir_perms(
+        tracee,
+        b'w',
+        newpath.as_bytes(),
+        rel_newpath.as_bytes(),
+        config,
+    ) {
         return e;
     }
     0
@@ -945,11 +1009,21 @@ fn handle_symlink_enter(
         _ => {}
     }
     let mut rel_newpath = FixedPath::new();
-    if let Err(e) = get_fd_path(tracee, &mut rel_newpath, newdirfd_sysarg, RegVersion::Current) {
+    if let Err(e) = get_fd_path(
+        tracee,
+        &mut rel_newpath,
+        newdirfd_sysarg,
+        RegVersion::Current,
+    ) {
         return e;
     }
-    if let Err(e) = check_dir_perms(tracee, b'w', newpath.as_bytes(), rel_newpath.as_bytes(), config)
-    {
+    if let Err(e) = check_dir_perms(
+        tracee,
+        b'w',
+        newpath.as_bytes(),
+        rel_newpath.as_bytes(),
+        config,
+    ) {
         return e;
     }
     0
@@ -1345,12 +1419,7 @@ fn handle_chroot_exit(tracee: &mut Tracee, config: &Config, from_sigsys: bool) -
         tracee.fs = std::rc::Rc::new(std::cell::RefCell::new(
             crate::tracee::FileSystemNameSpace::default(),
         ));
-        crate::path::binding::new_binding(
-            tracee,
-            path_host_absolute.as_bytes(),
-            Some(b"/"),
-            true,
-        );
+        crate::path::binding::new_binding(tracee, path_host_absolute.as_bytes(), Some(b"/"), true);
         crate::path::binding::initialize_bindings(tracee);
 
         // Restore current dir.
@@ -1462,8 +1531,12 @@ fn override_permissions(tracee: &mut Tracee, path: &[u8], is_final: bool) {
         perms.st_mode
     } else {
         match get_sysnum(tracee, RegVersion::Original) {
-            Sysnum::chmod if USERLAND => peek_reg(tracee, RegVersion::Original, Reg::Sysarg2) as u32,
-            Sysnum::fchmodat if USERLAND => peek_reg(tracee, RegVersion::Original, Reg::Sysarg3) as u32,
+            Sysnum::chmod if USERLAND => {
+                peek_reg(tracee, RegVersion::Original, Reg::Sysarg2) as u32
+            }
+            Sysnum::fchmodat if USERLAND => {
+                peek_reg(tracee, RegVersion::Original, Reg::Sysarg3) as u32
+            }
             Sysnum::fstatat64
             | Sysnum::lstat
             | Sysnum::lstat64
@@ -1691,12 +1764,8 @@ fn setfsxid(tracee: &mut Tracee, config: &mut Config, which: u8) -> i32 {
         ),
     };
     let old = *fs;
-    let allowed = *e == 0
-        || config.caps_active
-        || fsid == *fs
-        || fsid == *r
-        || fsid == *e
-        || fsid == *s;
+    let allowed =
+        *e == 0 || config.caps_active || fsid == *fs || fsid == *r || fsid == *e || fsid == *s;
     if allowed {
         *fs = fsid;
     }
@@ -1740,8 +1809,7 @@ fn handle_stat_exit(tracee: &mut Tracee, config: &Config, sysnum: Sysnum) -> i32
 
     // If the meta file exists, merge its mode/uid/gid into the stat.
     let mut meta_path = FixedPath::new();
-    if get_meta_path(path.as_bytes(), &mut meta_path).is_ok() && path_exists(meta_path.as_bytes())
-    {
+    if get_meta_path(path.as_bytes(), &mut meta_path).is_ok() && path_exists(meta_path.as_bytes()) {
         let (mode, uid, gid) = read_meta_file(meta_path.as_bytes(), config);
         let mut buf = [0u8; std::mem::size_of::<libc::stat>()];
         let addr = peek_reg(tracee, RegVersion::Original, sysarg);
@@ -1761,10 +1829,18 @@ fn handle_stat_exit(tracee: &mut Tracee, config: &Config, sysnum: Sysnum) -> i32
     let uid = peek_uint32(tracee, address + offsetof_stat_uid(tracee) as Word);
     let gid = peek_uint32(tracee, address + offsetof_stat_gid(tracee) as Word);
     if uid == unsafe { libc::getuid() } {
-        poke_uint32(tracee, address + offsetof_stat_uid(tracee) as Word, config.suid);
+        poke_uint32(
+            tracee,
+            address + offsetof_stat_uid(tracee) as Word,
+            config.suid,
+        );
     }
     if gid == unsafe { libc::getgid() } {
-        poke_uint32(tracee, address + offsetof_stat_gid(tracee) as Word, config.sgid);
+        poke_uint32(
+            tracee,
+            address + offsetof_stat_gid(tracee) as Word,
+            config.sgid,
+        );
     }
     0
 }
@@ -1775,7 +1851,12 @@ fn handle_stat_exit(tracee: &mut Tracee, config: &Config, sysnum: Sysnum) -> i32
 
 /// `handle_chown_enter_end()` (non-USERLAND) — swap the emulated ids in
 /// chown arguments back to the real ones so the kernel accepts the call.
-fn handle_chown_swap(tracee: &mut Tracee, config: &Config, uid_sysarg: Reg, gid_sysarg: Reg) -> i32 {
+fn handle_chown_swap(
+    tracee: &mut Tracee,
+    config: &Config,
+    uid_sysarg: Reg,
+    gid_sysarg: Reg,
+) -> i32 {
     let uid = peek_reg(tracee, RegVersion::Original, uid_sysarg) as u32;
     let gid = peek_reg(tracee, RegVersion::Original, gid_sysarg) as u32;
     if uid == config.ruid {
@@ -1798,10 +1879,18 @@ fn handle_stat_exit_simple(tracee: &mut Tracee, config: &Config, stat_sysarg: Re
     let uid = peek_uint32(tracee, address + offsetof_stat_uid(tracee) as Word);
     let gid = peek_uint32(tracee, address + offsetof_stat_gid(tracee) as Word);
     if uid == unsafe { libc::getuid() } {
-        poke_uint32(tracee, address + offsetof_stat_uid(tracee) as Word, config.suid);
+        poke_uint32(
+            tracee,
+            address + offsetof_stat_uid(tracee) as Word,
+            config.suid,
+        );
     }
     if gid == unsafe { libc::getgid() } {
-        poke_uint32(tracee, address + offsetof_stat_gid(tracee) as Word, config.sgid);
+        poke_uint32(
+            tracee,
+            address + offsetof_stat_gid(tracee) as Word,
+            config.sgid,
+        );
     }
     0
 }
@@ -1882,15 +1971,23 @@ fn handle_sysenter_end(tracee: &mut Tracee, config: &mut Config) -> i32 {
         }
 
         // mkdir/mkdirat, mknod/mknodat
-        Sysnum::mkdirat if USERLAND => {
-            handle_mk_enter(tracee, Some(Reg::Sysarg1), Reg::Sysarg2, Reg::Sysarg3, config)
-        }
+        Sysnum::mkdirat if USERLAND => handle_mk_enter(
+            tracee,
+            Some(Reg::Sysarg1),
+            Reg::Sysarg2,
+            Reg::Sysarg3,
+            config,
+        ),
         Sysnum::mkdir if USERLAND => {
             handle_mk_enter(tracee, IGNORE, Reg::Sysarg1, Reg::Sysarg2, config)
         }
-        Sysnum::mknodat if USERLAND => {
-            handle_mk_enter(tracee, Some(Reg::Sysarg1), Reg::Sysarg2, Reg::Sysarg3, config)
-        }
+        Sysnum::mknodat if USERLAND => handle_mk_enter(
+            tracee,
+            Some(Reg::Sysarg1),
+            Reg::Sysarg2,
+            Reg::Sysarg3,
+            config,
+        ),
         Sysnum::mknod if USERLAND => {
             handle_mk_enter(tracee, IGNORE, Reg::Sysarg1, Reg::Sysarg2, config)
         }
@@ -1912,14 +2009,9 @@ fn handle_sysenter_end(tracee: &mut Tracee, config: &mut Config) -> i32 {
             Reg::Sysarg4,
             config,
         ),
-        Sysnum::rename if USERLAND => handle_rename_enter(
-            tracee,
-            IGNORE,
-            Reg::Sysarg1,
-            IGNORE,
-            Reg::Sysarg2,
-            config,
-        ),
+        Sysnum::rename if USERLAND => {
+            handle_rename_enter(tracee, IGNORE, Reg::Sysarg1, IGNORE, Reg::Sysarg2, config)
+        }
 
         // chmod/fchmod/fchmodat
         Sysnum::chmod => handle_chmod_enter(
@@ -1986,34 +2078,29 @@ fn handle_sysenter_end(tracee: &mut Tracee, config: &mut Config) -> i32 {
         ),
 
         // utimensat
-        Sysnum::utimensat if USERLAND => handle_utimensat_enter(
-            tracee,
-            Reg::Sysarg1,
-            Reg::Sysarg2,
-            Reg::Sysarg3,
-            config,
-        ),
+        Sysnum::utimensat if USERLAND => {
+            handle_utimensat_enter(tracee, Reg::Sysarg1, Reg::Sysarg2, Reg::Sysarg3, config)
+        }
 
         // access/faccessat
         Sysnum::access if USERLAND => {
             handle_access_enter(tracee, Reg::Sysarg1, Reg::Sysarg2, IGNORE, config)
         }
-        Sysnum::faccessat | Sysnum::faccessat2 if USERLAND => {
-            handle_access_enter(tracee, Reg::Sysarg2, Reg::Sysarg3, Some(Reg::Sysarg1), config)
-        }
+        Sysnum::faccessat | Sysnum::faccessat2 if USERLAND => handle_access_enter(
+            tracee,
+            Reg::Sysarg2,
+            Reg::Sysarg3,
+            Some(Reg::Sysarg1),
+            config,
+        ),
 
         // execve
         Sysnum::execve if USERLAND => handle_exec_enter(tracee, Reg::Sysarg1, config),
 
         // link/linkat
-        Sysnum::link if USERLAND => handle_link_enter(
-            tracee,
-            IGNORE,
-            Reg::Sysarg1,
-            IGNORE,
-            Reg::Sysarg2,
-            config,
-        ),
+        Sysnum::link if USERLAND => {
+            handle_link_enter(tracee, IGNORE, Reg::Sysarg1, IGNORE, Reg::Sysarg2, config)
+        }
         Sysnum::linkat if USERLAND => handle_link_enter(
             tracee,
             Some(Reg::Sysarg1),
@@ -2113,10 +2200,18 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut Config) -> i32 {
         let uid = peek_uint32(tracee, address + offsetof_stat_uid(tracee) as Word);
         let gid = peek_uint32(tracee, address + offsetof_stat_gid(tracee) as Word);
         if uid == unsafe { libc::getuid() } {
-            poke_uint32(tracee, address + offsetof_stat_uid(tracee) as Word, config.suid);
+            poke_uint32(
+                tracee,
+                address + offsetof_stat_uid(tracee) as Word,
+                config.suid,
+            );
         }
         if gid == unsafe { libc::getgid() } {
-            poke_uint32(tracee, address + offsetof_stat_gid(tracee) as Word, config.sgid);
+            poke_uint32(
+                tracee,
+                address + offsetof_stat_gid(tracee) as Word,
+                config.sgid,
+            );
         }
         return 0;
     }
@@ -2154,11 +2249,15 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut Config) -> i32 {
             let buf = peek_reg(tracee, RegVersion::Original, Reg::Sysarg2);
             register_chained_syscall(tracee, sysnum, [fd, buf, 0, 0, 0, 0]);
         } else {
-            write_data(tracee, peek_reg(tracee, RegVersion::Modified, Reg::Sysarg3), &{
-                let mut b = [0u8; PATH_MAX];
-                b[..path.len()].copy_from_slice(path.as_bytes());
-                b
-            });
+            write_data(
+                tracee,
+                peek_reg(tracee, RegVersion::Modified, Reg::Sysarg3),
+                &{
+                    let mut b = [0u8; PATH_MAX];
+                    b[..path.len()].copy_from_slice(path.as_bytes());
+                    b
+                },
+            );
             let buf = peek_reg(tracee, RegVersion::Original, Reg::Sysarg2);
             let path_addr = peek_reg(tracee, RegVersion::Modified, Reg::Sysarg3);
             register_chained_syscall(

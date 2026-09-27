@@ -47,15 +47,7 @@ pub fn translate_setrlimit_exit(tracee: &Tracee, is_prlimit: bool) -> i32 {
         rlim_cur: 0,
         rlim_max: 0,
     };
-    if unsafe {
-        libc::prlimit64(
-            0,
-            libc::RLIMIT_STACK,
-            std::ptr::null(),
-            &mut proot_stack,
-        )
-    } < 0
-    {
+    if unsafe { libc::prlimit64(0, libc::RLIMIT_STACK, std::ptr::null(), &mut proot_stack) } < 0 {
         crate::verbose!(Some(tracee), 1, "can't get stack limit.");
         return 0; // Not fatal.
     }
@@ -65,15 +57,7 @@ pub fn translate_setrlimit_exit(tracee: &Tracee, is_prlimit: bool) -> i32 {
     }
     proot_stack.rlim_cur = tracee_stack_limit;
 
-    if unsafe {
-        libc::prlimit64(
-            0,
-            libc::RLIMIT_STACK,
-            &proot_stack,
-            std::ptr::null_mut(),
-        )
-    } < 0
-    {
+    if unsafe { libc::prlimit64(0, libc::RLIMIT_STACK, &proot_stack, std::ptr::null_mut()) } < 0 {
         crate::verbose!(Some(tracee), 1, "can't set stack limit.");
         return 0; // Not fatal.
     }

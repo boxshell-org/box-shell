@@ -260,12 +260,12 @@ pub fn handle_ptracee_event(ptracee_rc: &TraceeRef, event: i32) -> bool {
                 _ => None,
             };
             if sig == libc::SIGTRAP | 0x80 {
-                if ptracee.as_ptracee.ignore_syscalls
-                    || ptracee.as_ptracee.ignore_loader_syscalls
-                {
+                if ptracee.as_ptracee.ignore_syscalls || ptracee.as_ptracee.ignore_loader_syscalls {
                     return false;
                 }
-                if (ptracee.as_ptracee.options & crate::ptrace::ptc::PTRACE_O_TRACESYSGOOD as Word) == 0 {
+                if (ptracee.as_ptracee.options & crate::ptrace::ptc::PTRACE_O_TRACESYSGOOD as Word)
+                    == 0
+                {
                     event &= !(0x80 << 8);
                 }
                 handled_by_proot_first = crate::tracee::is_in_sysexit(&ptracee);

@@ -25,9 +25,18 @@ struct Sysnums {
 
 fn get_sysnums(abi: Abi) -> Sysnums {
     match abi {
-        Abi::Default => Sysnums { table: &SYSNUMS_X86_64, offset: 0 },
-        Abi::Abi2 => Sysnums { table: &SYSNUMS_I386, offset: 0 },
-        Abi::Abi3 => Sysnums { table: &SYSNUMS_X32, offset: 0x4000_0000 },
+        Abi::Default => Sysnums {
+            table: &SYSNUMS_X86_64,
+            offset: 0,
+        },
+        Abi::Abi2 => Sysnums {
+            table: &SYSNUMS_I386,
+            offset: 0,
+        },
+        Abi::Abi3 => Sysnums {
+            table: &SYSNUMS_X32,
+            offset: 0x4000_0000,
+        },
     }
 }
 

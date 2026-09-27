@@ -104,7 +104,11 @@ fn generate_sysnums(manifest_dir: &Path, out_dir: &Path) {
             max + 1
         ));
         for (num, name) in entries {
-            src.push_str(&format!("    t[{}] = Sysnum::{};\n", num, rust_ident(&name)));
+            src.push_str(&format!(
+                "    t[{}] = Sysnum::{};\n",
+                num,
+                rust_ident(&name)
+            ));
         }
         src.push_str("    t\n};\n\n");
     }
@@ -116,16 +120,14 @@ fn rust_ident(name: &str) -> String {
     // Keep the original name as a snake_case-ish variant identifier.
     // Rust permits leading underscores; uppercase variants warn but work.
     const KEYWORDS: &[&str] = &[
-        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else",
-        "enum", "extern", "false", "fn", "for", "gen", "if", "impl", "in", "let",
-        "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self",
-        "Self", "static", "struct", "super", "trait", "true", "try", "type",
-        "union", "unsafe", "use", "where", "while", "yield",
+        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+        "extern", "false", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "match", "mod",
+        "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
+        "trait", "true", "try", "type", "union", "unsafe", "use", "where", "while", "yield",
     ];
     if name == "void" {
         "Void".to_string()
-    } else if name.chars().next().map_or(false, |c| c.is_ascii_digit())
-        || KEYWORDS.contains(&name)
+    } else if name.chars().next().map_or(false, |c| c.is_ascii_digit()) || KEYWORDS.contains(&name)
     {
         format!("_{}", name)
     } else {
@@ -162,19 +164,27 @@ fn build_loader(manifest_dir: &Path, out_dir: &Path) {
         .args([
             "--edition=2021",
             "--crate-type=bin",
-            "-C", "panic=abort",
-            "-C", "opt-level=2",
-            "-C", "relocation-model=static",
+            "-C",
+            "panic=abort",
+            "-C",
+            "opt-level=2",
+            "-C",
+            "relocation-model=static",
             // The loader runs at a fixed 48-bit address: 32-bit relocations
             // would overflow.
-            "-C", "code-model=large",
-            "-C", "codegen-units=1",
-            "-C", "debuginfo=0",
-            "-C", &format!(
+            "-C",
+            "code-model=large",
+            "-C",
+            "codegen-units=1",
+            "-C",
+            "debuginfo=0",
+            "-C",
+            &format!(
                 "link-args=-static -nostdlib -Wl,--build-id=none,-z,noexecstack,-Ttext=0x{:x}",
                 text_addr
             ),
-            "--target", rustc_target,
+            "--target",
+            rustc_target,
             "-o",
         ])
         .arg(&loader_out)

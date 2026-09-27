@@ -8,9 +8,9 @@
 use crate::extension::Event;
 use crate::fpath::FixedPath;
 use crate::path::belongs_to_guestfs;
-use crate::sysnum::Sysnum;
 use crate::syscall::chain::register_chained_syscall;
 use crate::syscall::seccomp::FILTER_SYSEXIT;
+use crate::sysnum::Sysnum;
 use crate::tracee::mem::{read_data, write_data};
 use crate::tracee::reg::{get_sysnum, peek_reg, poke_reg, Reg, RegVersion};
 use crate::tracee::Tracee;
@@ -78,7 +78,11 @@ fn handle_getdents(tracee: &mut Tracee) -> i32 {
     if copy.is_empty() {
         // Everything was hidden: re-issue the syscall for the next batch.
         let fd = peek_reg(tracee, RegVersion::Original, Reg::Sysarg1);
-        let s = if is_64 { Sysnum::getdents64 } else { Sysnum::getdents };
+        let s = if is_64 {
+            Sysnum::getdents64
+        } else {
+            Sysnum::getdents
+        };
         register_chained_syscall(tracee, s, [fd, orig_start, count, 0, 0, 0]);
     } else {
         if write_data(tracee, orig_start, &copy) < 0 {

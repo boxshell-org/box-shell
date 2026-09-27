@@ -69,7 +69,9 @@ impl Utsname {
 
 impl Default for Utsname {
     fn default() -> Self {
-        Self { fields: [[0; 65]; 6] }
+        Self {
+            fields: [[0; 65]; 6],
+        }
     }
 }
 
@@ -190,7 +192,10 @@ const F_DUPFD: Word = libc::F_DUPFD as Word;
 const FUTEX_PRIVATE_FLAG: Word = 128;
 
 /// `handle_sysenter_end()` — the per-syscall rewrite switch.
-fn handle_sysenter_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefCell<Config>>) -> i32 {
+fn handle_sysenter_end(
+    tracee: &mut Tracee,
+    config: &std::rc::Rc<std::cell::RefCell<Config>>,
+) -> i32 {
     let config = &mut *config.borrow_mut();
     match get_sysnum(tracee, RegVersion::Original) {
         Sysnum::accept4 => {
@@ -255,7 +260,11 @@ fn handle_sysenter_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefC
                 expected_release: kernel_version(2, 6, 16),
                 new_sysnum: Some(Sysnum::access),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 2, offset: -1 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 2,
+                        offset: -1,
+                    },
                     Shift::default(),
                 ],
             };
@@ -267,7 +276,11 @@ fn handle_sysenter_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefC
                 expected_release: kernel_version(2, 6, 16),
                 new_sysnum: Some(Sysnum::chmod),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 2, offset: -1 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 2,
+                        offset: -1,
+                    },
                     Shift::default(),
                 ],
             };
@@ -278,7 +291,11 @@ fn handle_sysenter_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefC
             let mut modif = Modif {
                 expected_release: kernel_version(2, 6, 16),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 3, offset: -1 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 3,
+                        offset: -1,
+                    },
                     Shift::default(),
                 ],
                 ..Default::default()
@@ -306,7 +323,11 @@ fn handle_sysenter_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefC
             let mut modif = Modif {
                 expected_release: kernel_version(2, 6, 16),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 2, offset: -1 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 2,
+                        offset: -1,
+                    },
                     Shift::default(),
                 ],
                 ..Default::default()
@@ -323,12 +344,14 @@ fn handle_sysenter_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefC
             let nofollow = get_abi(tracee) != Abi::Abi2;
             #[cfg(not(target_arch = "x86_64"))]
             let nofollow = false;
-            modif.new_sysnum = Some(match (nofollow, flags & (libc::AT_SYMLINK_NOFOLLOW as Word)) {
-                (true, 0) => Sysnum::stat,
-                (true, _) => Sysnum::lstat,
-                (false, 0) => Sysnum::stat64,
-                (false, _) => Sysnum::lstat64,
-            });
+            modif.new_sysnum = Some(
+                match (nofollow, flags & (libc::AT_SYMLINK_NOFOLLOW as Word)) {
+                    (true, 0) => Sysnum::stat,
+                    (true, _) => Sysnum::lstat,
+                    (false, 0) => Sysnum::stat64,
+                    (false, _) => Sysnum::lstat64,
+                },
+            );
             modify_syscall(tracee, config, &modif);
             0
         }
@@ -342,9 +365,12 @@ fn handle_sysenter_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefC
             }
             if !config.warned_futex {
                 config.warned_futex = true;
-                note!(Severity::Warning, Origin::User,
+                note!(
+                    Severity::Warning,
+                    Origin::User,
                     "kompat: this kernel doesn't support private futexes \
-and PRoot can't emulate them.  Expect some troubles...");
+and PRoot can't emulate them.  Expect some troubles..."
+                );
             }
             poke_reg(tracee, Reg::Sysarg2, operation & !FUTEX_PRIVATE_FLAG);
             0
@@ -354,7 +380,11 @@ and PRoot can't emulate them.  Expect some troubles...");
                 expected_release: kernel_version(2, 6, 16),
                 new_sysnum: Some(Sysnum::utimes),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 2, offset: -1 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 2,
+                        offset: -1,
+                    },
                     Shift::default(),
                 ],
             };
@@ -379,8 +409,16 @@ and PRoot can't emulate them.  Expect some troubles...");
                 expected_release: kernel_version(2, 6, 16),
                 new_sysnum: Some(Sysnum::link),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 1, offset: -1 },
-                    Shift { sysarg: 4, nb_args: 1, offset: -2 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 1,
+                        offset: -1,
+                    },
+                    Shift {
+                        sysarg: 4,
+                        nb_args: 1,
+                        offset: -2,
+                    },
                 ],
             };
             modify_syscall(tracee, config, &modif);
@@ -391,7 +429,11 @@ and PRoot can't emulate them.  Expect some troubles...");
                 expected_release: kernel_version(2, 6, 16),
                 new_sysnum: Some(Sysnum::mkdir),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 2, offset: -1 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 2,
+                        offset: -1,
+                    },
                     Shift::default(),
                 ],
             };
@@ -403,7 +445,11 @@ and PRoot can't emulate them.  Expect some troubles...");
                 expected_release: kernel_version(2, 6, 16),
                 new_sysnum: Some(Sysnum::mknod),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 3, offset: -1 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 3,
+                        offset: -1,
+                    },
                     Shift::default(),
                 ],
             };
@@ -415,7 +461,11 @@ and PRoot can't emulate them.  Expect some troubles...");
                 expected_release: kernel_version(2, 6, 16),
                 new_sysnum: Some(Sysnum::open),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 3, offset: -1 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 3,
+                        offset: -1,
+                    },
                     Shift::default(),
                 ],
             };
@@ -466,7 +516,11 @@ and PRoot can't emulate them.  Expect some troubles...");
                 expected_release: kernel_version(2, 6, 16),
                 new_sysnum: Some(Sysnum::readlink),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 3, offset: -1 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 3,
+                        offset: -1,
+                    },
                     Shift::default(),
                 ],
             };
@@ -478,8 +532,16 @@ and PRoot can't emulate them.  Expect some troubles...");
                 expected_release: kernel_version(2, 6, 16),
                 new_sysnum: Some(Sysnum::rename),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 1, offset: -1 },
-                    Shift { sysarg: 4, nb_args: 1, offset: -2 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 1,
+                        offset: -1,
+                    },
+                    Shift {
+                        sysarg: 4,
+                        nb_args: 1,
+                        offset: -2,
+                    },
                 ],
             };
             modify_syscall(tracee, config, &modif);
@@ -512,7 +574,11 @@ and PRoot can't emulate them.  Expect some troubles...");
                 expected_release: kernel_version(2, 6, 16),
                 new_sysnum: Some(Sysnum::symlink),
                 shifts: [
-                    Shift { sysarg: 3, nb_args: 1, offset: -1 },
+                    Shift {
+                        sysarg: 3,
+                        nb_args: 1,
+                        offset: -1,
+                    },
                     Shift::default(),
                 ],
             };
@@ -523,7 +589,11 @@ and PRoot can't emulate them.  Expect some troubles...");
             let mut modif = Modif {
                 expected_release: kernel_version(2, 6, 16),
                 shifts: [
-                    Shift { sysarg: 2, nb_args: 1, offset: -1 },
+                    Shift {
+                        sysarg: 2,
+                        nb_args: 1,
+                        offset: -1,
+                    },
                     Shift::default(),
                 ],
                 ..Default::default()
@@ -620,7 +690,10 @@ fn adjust_elf_auxv(tracee: &mut Tracee, config: &Config) {
 }
 
 /// `handle_sysexit_end()` — adjust results of modified syscalls.
-fn handle_sysexit_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefCell<Config>>) -> i32 {
+fn handle_sysexit_end(
+    tracee: &mut Tracee,
+    config: &std::rc::Rc<std::cell::RefCell<Config>>,
+) -> i32 {
     let config = &mut *config.borrow_mut();
     let result = peek_reg(tracee, RegVersion::Current, Reg::SysargResult);
     let sysnum = get_sysnum(tracee, RegVersion::Original);
@@ -663,7 +736,12 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefCe
         }
         Sysnum::accept4 => {
             if needs_kompat(config, kernel_version(2, 6, 28)) {
-                emulate_fd_flags(tracee, result, 4, (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word);
+                emulate_fd_flags(
+                    tracee,
+                    result,
+                    4,
+                    (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word,
+                );
             }
             0
         }
@@ -676,13 +754,23 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefCe
         }
         Sysnum::epoll_create1 => {
             if needs_kompat(config, kernel_version(2, 6, 27)) {
-                emulate_fd_flags(tracee, result, 1, (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word);
+                emulate_fd_flags(
+                    tracee,
+                    result,
+                    1,
+                    (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word,
+                );
             }
             0
         }
         Sysnum::eventfd2 => {
             if needs_kompat(config, kernel_version(2, 6, 27)) {
-                emulate_fd_flags(tracee, result, 2, (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word);
+                emulate_fd_flags(
+                    tracee,
+                    result,
+                    2,
+                    (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word,
+                );
             }
             0
         }
@@ -697,7 +785,14 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefCe
             register_chained_syscall(
                 tracee,
                 Sysnum::fcntl,
-                [result, libc::F_SETFD as Word, libc::FD_CLOEXEC as Word, 0, 0, 0],
+                [
+                    result,
+                    libc::F_SETFD as Word,
+                    libc::FD_CLOEXEC as Word,
+                    0,
+                    0,
+                    0,
+                ],
             );
             let r = peek_reg(tracee, RegVersion::Current, Reg::SysargResult);
             force_chain_final_result(tracee, r);
@@ -705,7 +800,12 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefCe
         }
         Sysnum::inotify_init1 => {
             if needs_kompat(config, kernel_version(2, 6, 27)) {
-                emulate_fd_flags(tracee, result, 1, (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word);
+                emulate_fd_flags(
+                    tracee,
+                    result,
+                    1,
+                    (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word,
+                );
             }
             0
         }
@@ -739,13 +839,23 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &std::rc::Rc<std::cell::RefCe
         }
         Sysnum::signalfd4 => {
             if needs_kompat(config, kernel_version(2, 6, 27)) {
-                emulate_fd_flags(tracee, result, 4, (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word);
+                emulate_fd_flags(
+                    tracee,
+                    result,
+                    4,
+                    (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word,
+                );
             }
             0
         }
         Sysnum::socket | Sysnum::timerfd_create => {
             if needs_kompat(config, kernel_version(2, 6, 27)) {
-                emulate_fd_flags(tracee, result, 2, (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word);
+                emulate_fd_flags(
+                    tracee,
+                    result,
+                    2,
+                    (libc::O_CLOEXEC | libc::O_NONBLOCK) as Word,
+                );
             }
             0
         }
@@ -795,14 +905,24 @@ fn parse_utsname(config: &mut Config, string: &str) -> i32 {
         // Complex format (not for direct user consumption):
         //     \sysname\nodename\release\version\machine\domainname\hwcap\
         let names = [
-            "sysname", "nodename", "release", "version", "machine", "domainname",
+            "sysname",
+            "nodename",
+            "release",
+            "version",
+            "machine",
+            "domainname",
         ];
         let mut cursor: &[u8] = bytes;
         for (i, name) in names.iter().enumerate() {
             let rest = &cursor[1..];
             let Some(p) = rest.iter().position(|&b| b == b'\\') else {
-                note!(Severity::Error, Origin::User,
-                    "can't find {} field in '{}'", name, string);
+                note!(
+                    Severity::Error,
+                    Origin::User,
+                    "can't find {} field in '{}'",
+                    name,
+                    string
+                );
                 return -1;
             };
             config.utsname.set(i, &rest[..p]);
@@ -812,8 +932,12 @@ fn parse_utsname(config: &mut Config, string: &str) -> i32 {
         // accepts an empty field as 0 when followed by the '\'.
         let rest = &cursor[1..];
         let Some(p) = rest.iter().position(|&b| b == b'\\') else {
-            note!(Severity::Error, Origin::User,
-                "can't find hwcap field in '{}'", string);
+            note!(
+                Severity::Error,
+                Origin::User,
+                "can't find hwcap field in '{}'",
+                string
+            );
             return -1;
         };
         let hex = std::str::from_utf8(&rest[..p]).unwrap_or("");
@@ -823,8 +947,12 @@ fn parse_utsname(config: &mut Config, string: &str) -> i32 {
             match Word::from_str_radix(hex, 16) {
                 Ok(v) => v,
                 Err(_) => {
-                    note!(Severity::Error, Origin::User,
-                        "can't find hwcap field in '{}'", string);
+                    note!(
+                        Severity::Error,
+                        Origin::User,
+                        "can't find hwcap field in '{}'",
+                        string
+                    );
                     return -1;
                 }
             }
@@ -873,7 +1001,8 @@ impl Kompat {
                 // This can be done only before PRoot pushes the load
                 // script into the tracee's stack.
                 let result = peek_reg(tracee, RegVersion::Current, Reg::SysargResult);
-                if (result as i64) >= 0 && get_sysnum(tracee, RegVersion::Original) == Sysnum::execve
+                if (result as i64) >= 0
+                    && get_sysnum(tracee, RegVersion::Original) == Sysnum::execve
                 {
                     if let Some(config) = &self.config {
                         adjust_elf_auxv(tracee, &config.borrow());
@@ -926,7 +1055,6 @@ impl Kompat {
     pub fn clone_for_child(&self, _clone_flags: Word) -> Self {
         Self {
             config: self.config.clone(),
-
         }
     }
 }

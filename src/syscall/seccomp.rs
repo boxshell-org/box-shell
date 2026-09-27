@@ -39,7 +39,12 @@ struct SockFilter {
 }
 
 fn stmt(code: u16, k: u32) -> SockFilter {
-    SockFilter { code, jt: 0, jf: 0, k }
+    SockFilter {
+        code,
+        jt: 0,
+        jf: 0,
+        k,
+    }
 }
 
 fn jump(code: u16, k: u32, jt: u8, jf: u8) -> SockFilter {
@@ -56,104 +61,398 @@ struct FilteredSysnum {
 /// `proot_sysnums[]` — every syscall PRoot translates (must match
 /// enter.c/exit.c coverage).
 static PROOT_SYSNUMS: &[FilteredSysnum] = &[
-    FilteredSysnum { value: Sysnum::accept, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::accept4, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::access, flags: 0 },
-    FilteredSysnum { value: Sysnum::acct, flags: 0 },
-    FilteredSysnum { value: Sysnum::bind, flags: 0 },
-    FilteredSysnum { value: Sysnum::brk, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::chdir, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::chmod, flags: 0 },
-    FilteredSysnum { value: Sysnum::chown, flags: 0 },
-    FilteredSysnum { value: Sysnum::chown32, flags: 0 },
-    FilteredSysnum { value: Sysnum::chroot, flags: 0 },
-    FilteredSysnum { value: Sysnum::clone, flags: 0 },
-    FilteredSysnum { value: Sysnum::clone3, flags: 0 },
-    FilteredSysnum { value: Sysnum::close, flags: 0 },
-    FilteredSysnum { value: Sysnum::connect, flags: 0 },
-    FilteredSysnum { value: Sysnum::creat, flags: 0 },
-    FilteredSysnum { value: Sysnum::recvfrom, flags: 0 },
-    FilteredSysnum { value: Sysnum::recvmsg, flags: 0 },
-    FilteredSysnum { value: Sysnum::sendmsg, flags: 0 },
-    FilteredSysnum { value: Sysnum::sendto, flags: 0 },
-    FilteredSysnum { value: Sysnum::socket, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::execve, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::execveat, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::faccessat, flags: 0 },
-    FilteredSysnum { value: Sysnum::faccessat2, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::fchdir, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::fchmodat, flags: 0 },
-    FilteredSysnum { value: Sysnum::fchownat, flags: 0 },
-    FilteredSysnum { value: Sysnum::fstatat64, flags: 0 },
-    FilteredSysnum { value: Sysnum::futimesat, flags: 0 },
-    FilteredSysnum { value: Sysnum::getcwd, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::getpeername, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::getsockname, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::getxattr, flags: 0 },
-    FilteredSysnum { value: Sysnum::inotify_add_watch, flags: 0 },
-    FilteredSysnum { value: Sysnum::ioctl, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::lchown, flags: 0 },
-    FilteredSysnum { value: Sysnum::lchown32, flags: 0 },
-    FilteredSysnum { value: Sysnum::lgetxattr, flags: 0 },
-    FilteredSysnum { value: Sysnum::link, flags: 0 },
-    FilteredSysnum { value: Sysnum::linkat, flags: 0 },
-    FilteredSysnum { value: Sysnum::listxattr, flags: 0 },
-    FilteredSysnum { value: Sysnum::llistxattr, flags: 0 },
-    FilteredSysnum { value: Sysnum::lremovexattr, flags: 0 },
-    FilteredSysnum { value: Sysnum::lsetxattr, flags: 0 },
-    FilteredSysnum { value: Sysnum::lstat, flags: 0 },
-    FilteredSysnum { value: Sysnum::lstat64, flags: 0 },
-    FilteredSysnum { value: Sysnum::memfd_create, flags: 0 },
-    FilteredSysnum { value: Sysnum::mkdir, flags: 0 },
-    FilteredSysnum { value: Sysnum::mkdirat, flags: 0 },
-    FilteredSysnum { value: Sysnum::mknod, flags: 0 },
-    FilteredSysnum { value: Sysnum::mknodat, flags: 0 },
-    FilteredSysnum { value: Sysnum::mount, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::name_to_handle_at, flags: 0 },
-    FilteredSysnum { value: Sysnum::newfstatat, flags: 0 },
-    FilteredSysnum { value: Sysnum::oldlstat, flags: 0 },
-    FilteredSysnum { value: Sysnum::oldstat, flags: 0 },
-    FilteredSysnum { value: Sysnum::open, flags: 0 },
-    FilteredSysnum { value: Sysnum::openat, flags: 0 },
-    FilteredSysnum { value: Sysnum::openat2, flags: 0 },
-    FilteredSysnum { value: Sysnum::pivot_root, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::prctl, flags: 0 },
-    FilteredSysnum { value: Sysnum::prlimit64, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::ptrace, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::readlink, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::readlinkat, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::removexattr, flags: 0 },
-    FilteredSysnum { value: Sysnum::rename, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::renameat, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::renameat2, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::rmdir, flags: 0 },
-    FilteredSysnum { value: Sysnum::setrlimit, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::setxattr, flags: 0 },
-    FilteredSysnum { value: Sysnum::socketcall, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::stat, flags: 0 },
-    FilteredSysnum { value: Sysnum::stat64, flags: 0 },
-    FilteredSysnum { value: Sysnum::statfs, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::statfs64, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::statx, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::swapoff, flags: 0 },
-    FilteredSysnum { value: Sysnum::swapon, flags: 0 },
-    FilteredSysnum { value: Sysnum::symlink, flags: 0 },
-    FilteredSysnum { value: Sysnum::symlinkat, flags: 0 },
-    FilteredSysnum { value: Sysnum::truncate, flags: 0 },
-    FilteredSysnum { value: Sysnum::truncate64, flags: 0 },
-    FilteredSysnum { value: Sysnum::umount, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::umount2, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::uname, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::unshare, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::setns, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::unlink, flags: 0 },
-    FilteredSysnum { value: Sysnum::unlinkat, flags: 0 },
-    FilteredSysnum { value: Sysnum::uselib, flags: 0 },
-    FilteredSysnum { value: Sysnum::utime, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::utimensat, flags: 0 },
-    FilteredSysnum { value: Sysnum::utimes, flags: 0 },
-    FilteredSysnum { value: Sysnum::wait4, flags: FILTER_SYSEXIT },
-    FilteredSysnum { value: Sysnum::waitpid, flags: FILTER_SYSEXIT },
+    FilteredSysnum {
+        value: Sysnum::accept,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::accept4,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::access,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::acct,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::bind,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::brk,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::chdir,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::chmod,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::chown,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::chown32,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::chroot,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::clone,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::clone3,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::close,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::connect,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::creat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::recvfrom,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::recvmsg,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::sendmsg,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::sendto,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::socket,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::execve,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::execveat,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::faccessat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::faccessat2,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::fchdir,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::fchmodat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::fchownat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::fstatat64,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::futimesat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::getcwd,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::getpeername,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::getsockname,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::getxattr,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::inotify_add_watch,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::ioctl,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::lchown,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::lchown32,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::lgetxattr,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::link,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::linkat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::listxattr,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::llistxattr,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::lremovexattr,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::lsetxattr,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::lstat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::lstat64,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::memfd_create,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::mkdir,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::mkdirat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::mknod,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::mknodat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::mount,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::name_to_handle_at,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::newfstatat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::oldlstat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::oldstat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::open,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::openat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::openat2,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::pivot_root,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::prctl,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::prlimit64,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::ptrace,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::readlink,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::readlinkat,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::removexattr,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::rename,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::renameat,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::renameat2,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::rmdir,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::setrlimit,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::setxattr,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::socketcall,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::stat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::stat64,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::statfs,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::statfs64,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::statx,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::swapoff,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::swapon,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::symlink,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::symlinkat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::truncate,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::truncate64,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::umount,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::umount2,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::uname,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::unshare,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::setns,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::unlink,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::unlinkat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::uselib,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::utime,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::utimensat,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::utimes,
+        flags: 0,
+    },
+    FilteredSysnum {
+        value: Sysnum::wait4,
+        flags: FILTER_SYSEXIT,
+    },
+    FilteredSysnum {
+        value: Sysnum::waitpid,
+        flags: FILTER_SYSEXIT,
+    },
 ];
 
 /// `merge_filtered_sysnums()`.
@@ -175,7 +474,10 @@ fn start_arch_section(prog: &mut Vec<SockFilter>, arch: u32, nb_traced: usize) {
 
     prog.push(stmt(BPF_LD + BPF_W + BPF_ABS, arch_offset));
     prog.push(jump(BPF_JMP + BPF_JEQ + BPF_K, arch, 1, 0));
-    prog.push(stmt(BPF_JMP + 0x20 /* JA */ + BPF_K, (section_length + 1) as u32));
+    prog.push(stmt(
+        BPF_JMP + 0x20 /* JA */ + BPF_K,
+        (section_length + 1) as u32,
+    ));
     prog.push(stmt(BPF_LD + BPF_W + BPF_ABS, nr_offset));
 }
 

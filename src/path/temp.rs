@@ -72,7 +72,10 @@ pub fn create_temp_directory(_context: Option<&str>, prefix: &str) -> Option<Str
     let name = create_temp_name(prefix)?;
     match std::fs::create_dir(&name) {
         Ok(()) => {
-            TEMP_PATHS.lock().unwrap().push(std::path::PathBuf::from(&name));
+            TEMP_PATHS
+                .lock()
+                .unwrap()
+                .push(std::path::PathBuf::from(&name));
             Some(name)
         }
         Err(_) => {
@@ -96,7 +99,10 @@ pub fn create_temp_file(prefix: &str) -> Option<String> {
     let name = create_temp_name(prefix)?;
     match std::fs::File::create(&name) {
         Ok(_) => {
-            TEMP_PATHS.lock().unwrap().push(std::path::PathBuf::from(&name));
+            TEMP_PATHS
+                .lock()
+                .unwrap()
+                .push(std::path::PathBuf::from(&name));
             Some(name)
         }
         Err(_) => {
@@ -120,7 +126,10 @@ pub fn open_temp_file(prefix: &str) -> Option<(std::fs::File, String)> {
     let name = create_temp_name(prefix)?;
     match std::fs::File::create(&name) {
         Ok(f) => {
-            TEMP_PATHS.lock().unwrap().push(std::path::PathBuf::from(&name));
+            TEMP_PATHS
+                .lock()
+                .unwrap()
+                .push(std::path::PathBuf::from(&name));
             Some((f, name))
         }
         Err(_) => {
@@ -137,10 +146,9 @@ pub fn open_temp_file(prefix: &str) -> Option<(std::fs::File, String)> {
 /// `set_placeholder_destructor()` — remove the path (if still an empty file
 /// or dir) at exit.
 pub fn set_placeholder_destructor(path: &FixedPath) {
-    PLACEHOLDERS
-        .lock()
-        .unwrap()
-        .push(std::path::PathBuf::from(String::from_utf8_lossy(path.as_bytes()).into_owned()));
+    PLACEHOLDERS.lock().unwrap().push(std::path::PathBuf::from(
+        String::from_utf8_lossy(path.as_bytes()).into_owned(),
+    ));
 }
 
 /// `remove_placeholder` destructor.
@@ -166,7 +174,14 @@ pub fn cleanup() {
     for p in PLACEHOLDERS.lock().unwrap().iter().rev() {
         remove_placeholder(p);
     }
-    for p in TEMP_PATHS.lock().unwrap().drain(..).collect::<Vec<_>>().into_iter().rev() {
+    for p in TEMP_PATHS
+        .lock()
+        .unwrap()
+        .drain(..)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         let meta = std::fs::symlink_metadata(&p);
         match meta {
             Ok(m) if m.is_dir() => {

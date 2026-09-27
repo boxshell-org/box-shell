@@ -6,8 +6,8 @@
 //! rewritten for localhost destinations.
 
 use crate::extension::Event;
-use crate::sysnum::Sysnum;
 use crate::syscall::seccomp::FILTER_SYSEXIT;
+use crate::sysnum::Sysnum;
 use crate::tracee::mem::{read_data, write_data};
 use crate::tracee::reg::{get_sysnum, peek_reg, Reg, RegVersion};
 use crate::tracee::Tracee;
@@ -56,8 +56,14 @@ fn mod_port(
     }
     let new_port = port + PORT_ADDITION;
     if is_bind {
-        println!("\nATTENTION: A bind system call was requested on port: {}", port);
-        println!("The port has been changed. If connecting from outside Termux, use: {}\n", new_port);
+        println!(
+            "\nATTENTION: A bind system call was requested on port: {}",
+            port
+        );
+        println!(
+            "The port has been changed. If connecting from outside Termux, use: {}\n",
+            new_port
+        );
     }
     sa[2..4].copy_from_slice(&new_port.to_be_bytes());
 
@@ -79,7 +85,11 @@ fn mod_port(
         for (i, v) in a.iter().enumerate() {
             buf[i * 8..i * 8 + 8].copy_from_slice(&v.to_ne_bytes());
         }
-        write_data(tracee, peek_reg(tracee, RegVersion::Current, Reg::Sysarg2), &buf);
+        write_data(
+            tracee,
+            peek_reg(tracee, RegVersion::Current, Reg::Sysarg2),
+            &buf,
+        );
     }
 }
 
@@ -126,7 +136,11 @@ fn handle_sysenter_end(tracee: &mut Tracee) -> i32 {
         Sysnum::socketcall => {
             let call = peek_reg(tracee, RegVersion::Original, Reg::Sysarg1) as i32;
             let mut raw = [0u8; 48];
-            if read_data(tracee, &mut raw, peek_reg(tracee, RegVersion::Original, Reg::Sysarg2)) < 0
+            if read_data(
+                tracee,
+                &mut raw,
+                peek_reg(tracee, RegVersion::Original, Reg::Sysarg2),
+            ) < 0
             {
                 return 0;
             }
