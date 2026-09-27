@@ -537,20 +537,18 @@ fn set_seccomp_filters(sysnums: &[FilteredSysnum]) -> i32 {
         filter: prog.as_ptr() as *const _ as *mut libc::sock_filter,
     };
 
-    unsafe {
-        if libc::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 {
-            return -crate::path::errno();
-        }
-        if libc::prctl(
-            PR_SET_SECCOMP,
-            SECCOMP_MODE_FILTER,
-            &mut fprog as *mut _ as usize,
-            0,
-            0,
-        ) < 0
-        {
-            return -crate::path::errno();
-        }
+    if crate::sys::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 {
+        return -crate::sys::errno();
+    }
+    if crate::sys::prctl(
+        PR_SET_SECCOMP,
+        SECCOMP_MODE_FILTER as usize,
+        &mut fprog as *mut _ as usize,
+        0,
+        0,
+    ) < 0
+    {
+        return -crate::sys::errno();
     }
     0
 }

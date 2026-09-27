@@ -390,9 +390,9 @@ fn socketcall_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
 
     macro_rules! peekw {
         ($addr:expr_2021) => {{
-            unsafe { *libc::__errno_location() = 0 };
+            crate::sys::clear_errno();
             let v = peek_word(tracee, $addr);
-            let e = crate::path::errno();
+            let e = crate::sys::errno();
             if e != 0 {
                 return Flow::Result(-e);
             }
@@ -401,9 +401,9 @@ fn socketcall_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
     }
     macro_rules! pokew {
         ($addr:expr_2021, $val:expr_2021) => {{
-            unsafe { *libc::__errno_location() = 0 };
+            crate::sys::clear_errno();
             poke_word(tracee, $addr, $val);
-            let e = crate::path::errno();
+            let e = crate::sys::errno();
             if e != 0 {
                 return Flow::Result(-e);
             }
@@ -590,8 +590,8 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
     if old_size == max_size {
         let c = std::ffi::CString::new(referer.as_bytes()).unwrap();
         let mut rbuf = vec![0u8; crate::PATH_MAX];
-        let full =
-            unsafe { libc::readlink(c.as_ptr(), rbuf.as_mut_ptr() as *mut _, rbuf.len() - 1) };
+        let end = rbuf.len() - 1;
+        let full = crate::sys::readlink(&c, &mut rbuf[..end]);
         if full > 0 {
             referee.set(&rbuf[..full as usize]);
         }
@@ -685,9 +685,9 @@ fn patch_execfn_in_auxv(tracee: &mut Tracee, result: Word) {
     let entry = 2 * w;
     let mut offset: Word = 0;
     while offset + entry <= result {
-        unsafe { *libc::__errno_location() = 0 };
+        crate::sys::clear_errno();
         let ty = peek_word(tracee, buf_addr + offset);
-        if crate::path::errno() != 0 {
+        if crate::sys::errno() != 0 {
             break;
         }
         if ty == AT_NULL {

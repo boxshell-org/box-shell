@@ -32,7 +32,7 @@ fn page_size() -> Word {
     static PAGE: Mutex<Word> = Mutex::new(0);
     let mut g = PAGE.lock().unwrap();
     if *g == 0 {
-        let v = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        let v = crate::sys::sysconf(libc::_SC_PAGESIZE);
         *g = if v > 0 { v as Word } else { 0x1000 };
     }
     *g
@@ -114,14 +114,7 @@ fn add_interp(
     let offset = ph.p_offset(elf_header);
 
     let mut buf = vec![0u8; filesz as usize + 1];
-    let n = unsafe {
-        libc::pread(
-            fd,
-            buf.as_mut_ptr() as *mut libc::c_void,
-            filesz as usize,
-            offset as i64,
-        )
-    };
+    let n = crate::sys::pread(fd, &mut buf[..filesz as usize], offset as i64);
     if n != filesz as isize {
         return -libc::EACCES;
     }
@@ -149,7 +142,7 @@ fn add_interp(
         user_path: String::from_utf8_lossy(&user_path).into_owned(),
         raw_path: String::new(),
         mappings: Vec::new(),
-        elf_header: unsafe { std::mem::zeroed() },
+        elf_header: crate::sys::zeroed(),
         needs_executable_stack: false,
         interp: None,
     }));
@@ -173,20 +166,16 @@ fn extract_load_info(tracee: &mut Tracee, load_info: &mut LoadInfo) -> i32 {
     if status == 0 {
         // Iterate program headers; `error` captures callback failures.
         let mut error: i32 = 0;
-        let tracee_ptr = tracee as *mut Tracee;
-        let load_info_ptr = load_info as *mut LoadInfo;
-        status = iterate_program_headers(fd, &header, move |eh, ph| {
-            let li = unsafe { &mut *load_info_ptr };
-            let t = unsafe { &mut *tracee_ptr };
+        status = iterate_program_headers(fd, &header, |eh, ph| {
             match ph.p_type(eh) as u32 {
                 PT_LOAD => {
-                    error = add_mapping(li, eh, ph);
+                    error = add_mapping(load_info, eh, ph);
                 }
                 PT_INTERP => {
-                    error = add_interp(t, fd, li, eh, ph);
+                    error = add_interp(tracee, fd, load_info, eh, ph);
                 }
                 PT_GNU_STACK => {
-                    li.needs_executable_stack |= (ph.p_flags(eh) as u32) & PF_X != 0;
+                    load_info.needs_executable_stack |= (ph.p_flags(eh) as u32) & PF_X != 0;
                 }
                 _ => {}
             }
@@ -196,7 +185,7 @@ fn extract_load_info(tracee: &mut Tracee, load_info: &mut LoadInfo) -> i32 {
             status = error;
         }
     }
-    unsafe { libc::close(fd) };
+    crate::sys::close(fd);
     status
 }
 
@@ -205,18 +194,7 @@ fn add_load_base(load_info: &mut LoadInfo, load_base: Word) {
     for m in load_info.mappings.iter_mut() {
         m.addr = m.addr.wrapping_add(load_base);
     }
-    unsafe {
-        if load_info.elf_header.is_class64() {
-            load_info.elf_header.class64.e_entry =
-                load_info.elf_header.class64.e_entry.wrapping_add(load_base);
-        } else {
-            load_info.elf_header.class32.e_entry = load_info
-                .elf_header
-                .class32
-                .e_entry
-                .wrapping_add(load_base as u32);
-        }
-    }
+    load_info.elf_header.set_entry_bias(load_base);
 }
 
 /// `compute_load_addresses()` — fixed PIC load addresses (no ASLR, like C).
@@ -326,9 +304,7 @@ fn extract_loader(tracee: &Tracee) -> Option<String> {
         );
         return None;
     }
-    unsafe {
-        libc::fchmod(file.as_raw_fd(), libc::S_IRUSR | libc::S_IXUSR);
-    }
+    crate::sys::fchmod(file.as_raw_fd(), libc::S_IRUSR | libc::S_IXUSR);
     let mut path = FixedPath::new();
     if crate::path::readlink_proc_pid_fd(std::process::id() as i32, file.as_raw_fd(), &mut path)
         .is_err()
@@ -342,7 +318,7 @@ fn extract_loader(tracee: &Tracee) -> Option<String> {
         return None;
     }
     let c = std::ffi::CString::new(path.as_bytes()).ok()?;
-    if unsafe { libc::access(c.as_ptr(), libc::X_OK) } < 0 {
+    if crate::sys::access(&c, libc::X_OK) < 0 {
         crate::note!(
             Some(tracee),
             crate::note::Severity::Error,
@@ -461,7 +437,7 @@ pub fn translate_execve_enter(tracee: &mut Tracee) -> i32 {
             None => user_path.to_string(),
         },
         mappings: Vec::new(),
-        elf_header: unsafe { std::mem::zeroed() },
+        elf_header: crate::sys::zeroed(),
         needs_executable_stack: false,
         interp: None,
     });

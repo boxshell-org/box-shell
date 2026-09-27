@@ -18,7 +18,7 @@ const MSG_EXCEPT: i32 = 0o20000;
 const MSG_COPY: i32 = 0o40000;
 
 fn now() -> i64 {
-    unsafe { libc::time(std::ptr::null_mut()) }
+    crate::sys::time()
 }
 
 pub fn msgget(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
@@ -336,12 +336,7 @@ pub fn msgctl(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
         c if c == IPC_STAT || c == IPC_STAT | SYSVIPC_IPC_64 => {
             let nsb = ns.borrow();
             let stats = &nsb.queues[queue_index].stats;
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    stats as *const MsqidDs as *const u8,
-                    std::mem::size_of::<MsqidDs>(),
-                )
-            };
+            let bytes = crate::sys::as_bytes(stats);
             write_data(tracee, buf, bytes)
         }
         _ => -libc::EINVAL,

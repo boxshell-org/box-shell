@@ -186,7 +186,7 @@ fn handle_seccomp_event_common(tracee: &mut Tracee) -> i32 {
             set_result_after_seccomp(tracee, 0);
         }
         Sysnum::getpgrp => {
-            let r = unsafe { libc::getpgid(tracee.pid) };
+            let r = crate::sys::getpgid(tracee.pid);
             set_result_after_seccomp(tracee, r as Word);
         }
         Sysnum::symlink => {
@@ -515,13 +515,13 @@ fn handle_seccomp_event_common(tracee: &mut Tracee) -> i32 {
             restart_syscall_after_seccomp(tracee);
         }
         Sysnum::time => {
-            let t = unsafe { libc::time(std::ptr::null_mut()) } as Word;
+            let t = crate::sys::time() as Word;
             let addr = peek_reg(tracee, RegVersion::Current, Reg::Sysarg1);
-            unsafe { *libc::__errno_location() = 0 };
+            crate::sys::clear_errno();
             if addr != 0 {
                 poke_word(tracee, addr, t);
             }
-            let e = crate::path::errno();
+            let e = crate::sys::errno();
             set_result_after_seccomp(
                 tracee,
                 if e != 0 {
@@ -554,14 +554,12 @@ fn handle_seccomp_event_common(tracee: &mut Tracee) -> i32 {
             let exid = peek_reg(tracee, RegVersion::Current, Reg::Sysarg2) as i64;
             let sxid = peek_reg(tracee, RegVersion::Current, Reg::Sysarg3) as i64;
             let (mut r_, mut e_, mut s_) = (0u32, 0u32, 0u32);
-            let ret = unsafe {
-                if sysnum == Sysnum::setresuid {
-                    libc::getresuid(&mut r_, &mut e_, &mut s_)
-                } else {
-                    libc::getresgid(&mut r_, &mut e_, &mut s_)
-                }
+            let ret = if sysnum == Sysnum::setresuid {
+                crate::sys::getresuid().map(|(r, e, s)| (r_, e_, s_) = (r, e, s))
+            } else {
+                crate::sys::getresgid().map(|(r, e, s)| (r_, e_, s_) = (r, e, s))
             };
-            if ret != 0 {
+            if ret.is_err() {
                 set_result_after_seccomp(tracee, (-(libc::EPERM as i64)) as Word);
             } else {
                 let mut out = 0i64;
@@ -606,23 +604,23 @@ fn statfs_via_sigsys(tracee: &mut Tracee) {
     let c = std::ffi::CString::new(path.as_bytes()).unwrap();
     // statfs64 exposes f_flags and f_spare publicly on this libc target;
     // plain statfs hides them behind private fields.
-    let mut st: libc::statfs64 = unsafe { std::mem::zeroed() };
-    unsafe { *libc::__errno_location() = 0 };
-    if unsafe { libc::statfs64(c.as_ptr(), &mut st) } != 0 {
-        let e = crate::path::errno();
-        set_result_after_seccomp(
-            tracee,
-            if e != 0 {
-                (-(e as i64)) as Word
-            } else {
-                (-(libc::EPERM as i64)) as Word
-            },
-        );
-        return;
-    }
+    let st = match crate::sys::statfs64(&c) {
+        Ok(st) => st,
+        Err(e) => {
+            set_result_after_seccomp(
+                tracee,
+                if e != 0 {
+                    (-(e as i64)) as Word
+                } else {
+                    (-(libc::EPERM as i64)) as Word
+                },
+            );
+            return;
+        }
+    };
 
     // Fake /dev/shm as tmpfs (see statfs in syscall/exit.c).
-    let mut f_type = st.f_type as i64;
+    let mut f_type = st.f_type;
     let mut devshm = FixedPath::new();
     if crate::path::translate_path(tracee, &mut devshm, libc::AT_FDCWD, b"/dev/shm", true).is_ok() {
         let c = compare_paths(devshm.as_bytes(), path.as_bytes());
@@ -633,13 +631,13 @@ fn statfs_via_sigsys(tracee: &mut Tracee) {
 
     // Narrow to 32-bit fields; -EOVERFLOW when any doesn't fit.
     let fields = [
-        st.f_blocks as u64,
-        st.f_bfree as u64,
-        st.f_bavail as u64,
+        st.f_blocks,
+        st.f_bfree,
+        st.f_bavail,
         st.f_bsize as u64,
         st.f_frsize as u64,
-        st.f_files as u64,
-        st.f_ffree as u64,
+        st.f_files,
+        st.f_ffree,
     ];
     if fields.iter().any(|&v| v & 0xffff_ffff_0000_0000 != 0) {
         set_result_after_seccomp(tracee, (-(libc::EOVERFLOW as i64)) as Word);
@@ -652,19 +650,20 @@ fn statfs_via_sigsys(tracee: &mut Tracee) {
         out[off..off + 4].copy_from_slice(&(v as i32).to_ne_bytes());
     };
     put(0, f_type, &mut out);
-    put(4, st.f_bsize as i64, &mut out);
+    put(4, st.f_bsize, &mut out);
     put(8, st.f_blocks as i64, &mut out);
     put(12, st.f_bfree as i64, &mut out);
     put(16, st.f_bavail as i64, &mut out);
     put(20, st.f_files as i64, &mut out);
     put(24, st.f_ffree as i64, &mut out);
-    // fsid_t is opaque in this libc binding but is always two i32s.
-    let fsid: [i32; 2] = unsafe { std::mem::transmute_copy(&st.f_fsid) };
-    out[28..32].copy_from_slice(&fsid[0].to_ne_bytes());
-    out[32..36].copy_from_slice(&fsid[1].to_ne_bytes());
-    put(36, st.f_namelen as i64, &mut out);
-    put(40, st.f_frsize as i64, &mut out);
-    put(44, st.f_flags as i64, &mut out);
+    // fsid_t is opaque in this libc binding but is always two i32s;
+    // read it through the byte view instead of transmuting.
+    let stb = crate::sys::as_bytes(&st);
+    let fsid_off = std::mem::offset_of!(libc::statfs64, f_fsid);
+    out[28..36].copy_from_slice(&stb[fsid_off..fsid_off + 8]);
+    put(36, st.f_namelen, &mut out);
+    put(40, st.f_frsize, &mut out);
+    put(44, st.f_flags, &mut out);
 
     let _ = write_data(
         tracee,

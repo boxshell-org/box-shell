@@ -482,13 +482,10 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                     status = e;
                 } else {
                     let c = std::ffi::CString::new(path.as_bytes()).unwrap();
-                    let mut st: libc::stat = unsafe { std::mem::zeroed() };
-                    if unsafe { libc::lstat(c.as_ptr(), &mut st) } < 0 {
-                        status = -crate::path::errno();
-                    } else if (st.st_mode & libc::S_IXUSR) == 0 {
-                        return -libc::EACCES;
-                    } else {
-                        match crate::path::detranslate_path(tracee, &mut path, None) {
+                    match crate::sys::lstat(&c) {
+                        Err(e) => status = -e,
+                        Ok(st) if (st.st_mode & libc::S_IXUSR) == 0 => return -libc::EACCES,
+                        Ok(_) => match crate::path::detranslate_path(tracee, &mut path, None) {
                             Err(e) => status = e,
                             Ok(_) => {
                                 path.chop_finality();
@@ -497,7 +494,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                                 set_sysnum(tracee, Sysnum::Void);
                                 status = 0;
                             }
-                        }
+                        },
                     }
                 }
             }
@@ -660,7 +657,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                             let _ =
                                 netlink::write_fake_netlink_sockname(tracee, addr_ptr, size_ptr, 0);
                         }
-                        unsafe { *libc::__errno_location() = 0 };
+                        crate::sys::clear_errno();
                         poke_reg(tracee, Reg::SysargResult, result as Word);
                         set_sysnum(tracee, Sysnum::Void);
                     }
@@ -687,20 +684,20 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                     if datagram != 0 {
                         let (mut msg_name, mut iov_ptr, mut iov_count) = (0, 0, 0);
                         if msghdr_addr != 0 {
-                            unsafe { *libc::__errno_location() = 0 };
+                            crate::sys::clear_errno();
                             msg_name = peek_word(tracee, msghdr_addr);
-                            if crate::path::errno() != 0 {
-                                unsafe { *libc::__errno_location() = 0 };
+                            if crate::sys::errno() != 0 {
+                                crate::sys::clear_errno();
                                 msg_name = 0;
                             }
                             iov_ptr = peek_word(tracee, msghdr_addr + 2 * w);
-                            if crate::path::errno() != 0 {
-                                unsafe { *libc::__errno_location() = 0 };
+                            if crate::sys::errno() != 0 {
+                                crate::sys::clear_errno();
                                 iov_ptr = 0;
                             }
                             iov_count = peek_word(tracee, msghdr_addr + 3 * w);
-                            if crate::path::errno() != 0 {
-                                unsafe { *libc::__errno_location() = 0 };
+                            if crate::sys::errno() != 0 {
+                                crate::sys::clear_errno();
                                 iov_count = 0;
                             }
                         }
@@ -725,10 +722,10 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
 
                         // sockaddr_nl (nl_pid == 0) source for getifaddrs.
                         if msg_name != 0 && msghdr_addr != 0 {
-                            unsafe { *libc::__errno_location() = 0 };
+                            crate::sys::clear_errno();
                             let in_namelen =
                                 crate::tracee::mem::peek_uint32(tracee, msghdr_addr + w);
-                            if crate::path::errno() == 0 && in_namelen > 0 {
+                            if crate::sys::errno() == 0 && in_namelen > 0 {
                                 let mut snl = [0u8; 12];
                                 snl[0..2].copy_from_slice(&(libc::AF_NETLINK as u16).to_ne_bytes());
                                 let copy = (in_namelen as usize).min(snl.len());
@@ -739,7 +736,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                                     snl.len() as u32,
                                 );
                             }
-                            unsafe { *libc::__errno_location() = 0 };
+                            crate::sys::clear_errno();
                         }
 
                         // msg_flags (word 6): MSG_TRUNC iff truncated.
@@ -753,7 +750,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                                     0
                                 },
                             );
-                            unsafe { *libc::__errno_location() = 0 };
+                            crate::sys::clear_errno();
                         }
 
                         poke_reg(tracee, Reg::SysargResult, result as Word);
@@ -833,9 +830,9 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
         Sysnum::clone3 => {
             let args_addr = peek_reg(tracee, RegVersion::Current, Reg::Sysarg1);
             if args_addr != 0 {
-                unsafe { *libc::__errno_location() = 0 };
+                crate::sys::clear_errno();
                 let flags = peek_word(tracee, args_addr);
-                if crate::path::errno() == 0 && (flags & CLONE_NS_MASK) != 0 {
+                if crate::sys::errno() == 0 && (flags & CLONE_NS_MASK) != 0 {
                     if (flags & libc::CLONE_NEWNS as Word) != 0 {
                         tracee.clone_stripped_newns = true;
                     }
@@ -1169,14 +1166,14 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
 /// The `accept*/getsockname/getpeername` body: capture the in/out size into
 /// SYSARG_6 (unused) so the exit stage knows the buffer bound.
 fn sockname_size_capture(tracee: &mut Tracee, special: bool) -> i32 {
-    unsafe { *libc::__errno_location() = 0 };
+    crate::sys::clear_errno();
     let size_addr = peek_reg(tracee, RegVersion::Original, Reg::Sysarg3);
     let size = peek_word(tracee, size_addr) as i32;
-    if crate::path::errno() != 0 {
+    if crate::sys::errno() != 0 {
         return if special {
             -libc::EINVAL
         } else {
-            -crate::path::errno()
+            -crate::sys::errno()
         };
     }
     poke_reg(tracee, Reg::Sysarg6, size as Word);
@@ -1219,9 +1216,9 @@ fn socketcall_enter(tracee: &mut Tracee, mut special: bool) -> i32 {
 
     macro_rules! peekw {
         ($addr:expr_2021, $forced:expr_2021) => {{
-            unsafe { *libc::__errno_location() = 0 };
+            crate::sys::clear_errno();
             let v = peek_word(tracee, $addr);
-            let e = crate::path::errno();
+            let e = crate::sys::errno();
             if e != 0 {
                 return if $forced != 0 { $forced } else { -e };
             }
@@ -1230,9 +1227,9 @@ fn socketcall_enter(tracee: &mut Tracee, mut special: bool) -> i32 {
     }
     macro_rules! pokew {
         ($addr:expr_2021, $val:expr_2021) => {{
-            unsafe { *libc::__errno_location() = 0 };
+            crate::sys::clear_errno();
             poke_word(tracee, $addr, $val);
-            let e = crate::path::errno();
+            let e = crate::sys::errno();
             if e != 0 {
                 return -e;
             }

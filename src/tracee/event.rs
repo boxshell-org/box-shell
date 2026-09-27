@@ -103,12 +103,7 @@ pub fn launch_process(tracee_rc: &TraceeRef, argv: &[String]) -> i32 {
             // Child: give the guest a sane SIGPIPE disposition, request
             // tracing, stop for the event loop, install the filter, exec.
             crate::sys::signal(libc::SIGPIPE, libc::SIG_DFL);
-            let status = crate::sys::ptrace(
-                crate::ptrace::ptc::PTRACE_TRACEME as u32,
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            );
+            let status = crate::sys::ptrace(crate::ptrace::ptc::PTRACE_TRACEME as u32, 0, 0, 0);
             if status < 0 {
                 crate::note!(
                     crate::note::Severity::Error,
@@ -792,12 +787,7 @@ pub fn restart_tracee(tracee_rc: &TraceeRef, signal: i32) -> bool {
         return false;
     }
     debug_assert_ne!(t.restart_how, 0);
-    let status = crate::sys::ptrace(
-        t.restart_how as u32,
-        t.pid,
-        std::ptr::null_mut(),
-        signal as *mut libc::c_void,
-    );
+    let status = crate::sys::ptrace(t.restart_how as u32, t.pid, 0, signal as usize);
     if status < 0 {
         return false; // The process likely died in a syscall.
     }

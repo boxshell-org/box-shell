@@ -28,13 +28,8 @@ fn read_sockaddr_un(
         return 0;
     }
 
-    *sockaddr = unsafe { std::mem::zeroed() };
-    let raw = unsafe {
-        std::slice::from_raw_parts_mut(
-            sockaddr as *mut libc::sockaddr_un as *mut u8,
-            SIZEOF_SOCKADDR_UN,
-        )
-    };
+    *sockaddr = crate::sys::zeroed();
+    let raw = crate::sys::as_bytes_mut(sockaddr);
     let status = read_data(tracee, &mut raw[..size as usize], address);
     if status < 0 {
         return status;
@@ -45,8 +40,7 @@ fn read_sockaddr_un(
     }
 
     // sun_path doesn't have to be NUL-terminated.
-    let sun: &[u8] =
-        unsafe { std::slice::from_raw_parts(sockaddr.sun_path.as_ptr() as *const u8, SIZEOF_PATH) };
+    let sun: &[u8] = crate::sys::as_bytes(&sockaddr.sun_path);
     let end = sun.iter().position(|&c| c == 0).unwrap_or(SIZEOF_PATH);
     let mut p = [0u8; crate::PATH_MAX];
     p[..end].copy_from_slice(&sun[..end]);
@@ -59,7 +53,7 @@ fn read_sockaddr_un(
 /// Returns 1 when a translation happened, 0 when not applicable,
 /// -errno on error.
 pub fn translate_socketcall_enter(tracee: &mut Tracee, address: &mut Word, size: Word) -> i32 {
-    let mut sockaddr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    let mut sockaddr: libc::sockaddr_un = crate::sys::zeroed();
     let mut user_path = FixedPath::new();
     let mut host_path = FixedPath::new();
 
@@ -121,12 +115,8 @@ pub fn translate_socketcall_enter(tracee: &mut Tracee, address: &mut Word, size:
     // Copy host_path into sun_path (not NUL-terminated if it fills).
     let hb = host_path.as_bytes();
     let n = hb.len().min(SIZEOF_PATH);
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            hb.as_ptr() as *const libc::c_char,
-            sockaddr.sun_path.as_mut_ptr(),
-            n,
-        );
+    for (dst, src) in sockaddr.sun_path.iter_mut().zip(hb.iter().take(n)) {
+        *dst = *src as libc::c_char;
     }
     if n < SIZEOF_PATH {
         sockaddr.sun_path[n] = 0;
@@ -137,12 +127,7 @@ pub fn translate_socketcall_enter(tracee: &mut Tracee, address: &mut Word, size:
         return -libc::EFAULT;
     }
 
-    let raw = unsafe {
-        std::slice::from_raw_parts(
-            &sockaddr as *const libc::sockaddr_un as *const u8,
-            SIZEOF_SOCKADDR_UN,
-        )
-    };
+    let raw = crate::sys::as_bytes(&sockaddr);
     let status = write_data(tracee, *address, raw);
     if status < 0 {
         return status;
@@ -158,17 +143,17 @@ pub fn translate_socketcall_exit(
     size_addr: Word,
     max_size: Word,
 ) -> i32 {
-    let mut sockaddr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    let mut sockaddr: libc::sockaddr_un = crate::sys::zeroed();
     let mut path = FixedPath::new();
 
     if sock_addr == 0 {
         return 0;
     }
 
-    unsafe { *libc::__errno_location() = 0 };
+    crate::sys::clear_errno();
     let mut size = peek_int32(tracee, size_addr);
-    if crate::path::errno() != 0 {
-        return -crate::path::errno();
+    if crate::sys::errno() != 0 {
+        return -crate::sys::errno();
     }
 
     let max_size = max_size.min(SIZEOF_SOCKADDR_UN as Word);
@@ -190,21 +175,12 @@ pub fn translate_socketcall_exit(
 
     let pb = path.as_bytes();
     let n = pb.len().min(SIZEOF_PATH - 1);
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            pb.as_ptr() as *const libc::c_char,
-            sockaddr.sun_path.as_mut_ptr(),
-            n,
-        );
+    for (dst, src) in sockaddr.sun_path.iter_mut().zip(pb.iter().take(n)) {
+        *dst = *src as libc::c_char;
     }
     sockaddr.sun_path[n] = 0;
 
-    let raw = unsafe {
-        std::slice::from_raw_parts(
-            &sockaddr as *const libc::sockaddr_un as *const u8,
-            SIZEOF_SOCKADDR_UN,
-        )
-    };
+    let raw = crate::sys::as_bytes(&sockaddr);
     let status = write_data(tracee, sock_addr, &raw[..size as usize]);
     if status < 0 {
         return status;
@@ -216,10 +192,10 @@ pub fn translate_socketcall_exit(
         size = max_size as i32 + 1;
     }
 
-    unsafe { *libc::__errno_location() = 0 };
+    crate::sys::clear_errno();
     poke_int32(tracee, size_addr, size);
-    if crate::path::errno() != 0 {
-        return -crate::path::errno();
+    if crate::sys::errno() != 0 {
+        return -crate::sys::errno();
     }
     0
 }

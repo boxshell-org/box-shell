@@ -111,8 +111,8 @@ pub fn detach_from_ptracer(ptracee: &mut Tracee, held_ptracer: Option<&mut Trace
 }
 
 fn ptrace_req(request: Word, pid: i32, addr: usize, data: usize) -> i32 {
-    unsafe { *libc::__errno_location() = 0 };
-    unsafe { libc::ptrace(request as u32, pid, addr, data) as i32 }
+    crate::sys::clear_errno();
+    crate::sys::ptrace(request as u32, pid, addr, data) as i32
 }
 
 /// `translate_ptrace_exit()` — emulate the ptrace request the tracee
@@ -141,7 +141,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
             crate::tracee::with_tracee(ptracer_pid, |p| p.as_ptracer.waits_in == WaitsIn::Kernel)
                 .unwrap_or(false);
         if waiting {
-            let status = unsafe { libc::kill(ptracer_pid, libc::SIGSTOP) };
+            let status = crate::sys::kill(ptracer_pid, libc::SIGSTOP);
             if status < 0 {
                 crate::note!(
                     Some(ptracer),
@@ -178,7 +178,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
             }
             attach_to_ptracer(&mut ptracee, ptracer.pid);
         }
-        unsafe { libc::kill(pid as i32, libc::SIGSTOP) };
+        crate::sys::kill(pid as i32, libc::SIGSTOP);
         return 0;
     }
 
@@ -239,21 +239,14 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
         }
         crate::ptrace::ptc::PTRACE_GETEVENTMSG => {
             let mut result: Word = 0;
-            let st = unsafe {
-                libc::ptrace(
-                    request as u32,
-                    ptracee_pid,
-                    std::ptr::null::<u8>(),
-                    &mut result as *mut Word as usize,
-                )
-            };
+            let st = ptrace_req(request, ptracee_pid, 0, &mut result as *mut Word as usize);
             if st < 0 {
-                return -crate::path::errno();
+                return -crate::sys::errno();
             }
-            unsafe { *libc::__errno_location() = 0 };
+            crate::sys::clear_errno();
             poke_word(ptracer, data, result);
-            if crate::path::errno() != 0 {
-                return -crate::path::errno();
+            if crate::sys::errno() != 0 {
+                return -crate::sys::errno();
             }
             return 0;
         }
@@ -278,30 +271,33 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
             }
             let st = ptrace_req(request, ptracee_pid, address as usize, data as usize);
             if st < 0 {
-                return -crate::path::errno();
+                return -crate::sys::errno();
             }
             return 0;
         }
         crate::ptrace::ptc::PTRACE_POKETEXT | crate::ptrace::ptc::PTRACE_POKEDATA => {
             let mut data = data;
             if is_32on64_mode(ptracer) {
-                unsafe { *libc::__errno_location() = 0 };
-                let tmp = unsafe {
-                    libc::ptrace(crate::ptrace::ptc::PTRACE_PEEKDATA as u32, ptracee_pid, address as usize, 0usize)
-                } as Word;
-                if crate::path::errno() != 0 {
-                    return -crate::path::errno();
+                crate::sys::clear_errno();
+                let tmp = crate::sys::ptrace(
+                    crate::ptrace::ptc::PTRACE_PEEKDATA as u32,
+                    ptracee_pid,
+                    address as usize,
+                    0,
+                ) as Word;
+                if crate::sys::errno() != 0 {
+                    return -crate::sys::errno();
                 }
                 data |= tmp & 0xFFFF_FFFF_0000_0000;
             }
             let st = ptrace_req(request, ptracee_pid, address as usize, data as usize);
             if st < 0 {
-                return -crate::path::errno();
+                return -crate::sys::errno();
             }
             return 0;
         }
         crate::ptrace::ptc::PTRACE_GETSIGINFO => {
-            let mut siginfo: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let mut siginfo: libc::siginfo_t = crate::sys::zeroed();
             let st = ptrace_req(
                 request,
                 ptracee_pid,
@@ -309,31 +305,21 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
                 &mut siginfo as *mut _ as usize,
             );
             if st < 0 {
-                return -crate::path::errno();
+                return -crate::sys::errno();
             }
-            let raw = unsafe {
-                std::slice::from_raw_parts(
-                    &siginfo as *const libc::siginfo_t as *const u8,
-                    std::mem::size_of::<libc::siginfo_t>(),
-                )
-            };
+            let raw = crate::sys::as_bytes(&siginfo);
             return write_data(ptracer, data, raw);
         }
         crate::ptrace::ptc::PTRACE_SETSIGINFO => {
-            let mut siginfo: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            let raw = unsafe {
-                std::slice::from_raw_parts_mut(
-                    &mut siginfo as *mut libc::siginfo_t as *mut u8,
-                    std::mem::size_of::<libc::siginfo_t>(),
-                )
-            };
+            let mut siginfo: libc::siginfo_t = crate::sys::zeroed();
+            let raw = crate::sys::as_bytes_mut(&mut siginfo);
             let st = read_data(ptracer, raw, data);
             if st < 0 {
                 return st;
             }
             let st = ptrace_req(request, ptracee_pid, 0, &mut siginfo as *mut _ as usize);
             if st < 0 {
-                return -crate::path::errno();
+                return -crate::sys::errno();
             }
             return 0;
         }
@@ -346,7 +332,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
                 buffer.as_mut_ptr() as usize,
             );
             if st < 0 {
-                return -crate::path::errno();
+                return -crate::sys::errno();
             }
             let size = if is_32on64_mode(ptracer) {
                 let mut regs32 = [0u32; user::USER32_NB_REGS];
@@ -355,9 +341,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
                     .map(|c| u64::from_ne_bytes(c.try_into().unwrap()))
                     .collect();
                 user::convert_user_regs_struct(false, &mut regs64, &mut regs32);
-                let raw = unsafe {
-                    std::slice::from_raw_parts(regs32.as_ptr() as *const u8, regs32.len() * 4)
-                };
+                let raw = crate::sys::as_bytes(&regs32);
                 buffer[..raw.len()].copy_from_slice(raw);
                 regs32.len() * 4
             } else {
@@ -394,7 +378,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
                 buffer.as_mut_ptr() as usize,
             );
             if st < 0 {
-                return -crate::path::errno();
+                return -crate::sys::errno();
             }
             return 0;
         }
@@ -404,7 +388,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
             let mut buffer = vec![0u8; fp_sz];
             let st = ptrace_req(request, ptracee_pid, 0, buffer.as_mut_ptr() as usize);
             if st < 0 {
-                return -crate::path::errno();
+                return -crate::sys::errno();
             }
             let size = if is_32on64_mode(ptracer) {
                 crate::note!(
@@ -438,7 +422,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
             }
             let st = ptrace_req(request, ptracee_pid, 0, buffer.as_mut_ptr() as usize);
             if st < 0 {
-                return -crate::path::errno();
+                return -crate::sys::errno();
             }
             return 0;
         }
@@ -451,7 +435,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
                 user_desc.as_mut_ptr() as usize,
             );
             if st < 0 {
-                return -crate::path::errno();
+                return -crate::sys::errno();
             }
             return write_data(ptracer, data, &user_desc);
         }
@@ -468,19 +452,19 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
                 user_desc.as_mut_ptr() as usize,
             );
             if st < 0 {
-                return -crate::path::errno();
+                return -crate::sys::errno();
             }
             return 0;
         }
         crate::ptrace::ptc::PTRACE_GETREGSET => {
-            unsafe { *libc::__errno_location() = 0 };
+            crate::sys::clear_errno();
             let remote_base = peek_word(ptracer, data);
-            if crate::path::errno() != 0 {
-                return -crate::path::errno();
+            if crate::sys::errno() != 0 {
+                return -crate::sys::errno();
             }
             let remote_len = peek_word(ptracer, data + crate::tracee::reg::sizeof_word(ptracer) as Word);
-            if crate::path::errno() != 0 {
-                return -crate::path::errno();
+            if crate::sys::errno() != 0 {
+                return -crate::sys::errno();
             }
             let mut buf = vec![0u8; remote_len as usize];
             let mut local = libc::iovec {
@@ -502,26 +486,26 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
             if st < 0 {
                 return st;
             }
-            unsafe { *libc::__errno_location() = 0 };
+            crate::sys::clear_errno();
             poke_word(
                 ptracer,
                 data + crate::tracee::reg::sizeof_word(ptracer) as Word,
                 remote_len,
             );
-            if crate::path::errno() != 0 {
-                return -crate::path::errno();
+            if crate::sys::errno() != 0 {
+                return -crate::sys::errno();
             }
             return 0;
         }
         crate::ptrace::ptc::PTRACE_SETREGSET => {
-            unsafe { *libc::__errno_location() = 0 };
+            crate::sys::clear_errno();
             let remote_base = peek_word(ptracer, data);
-            if crate::path::errno() != 0 {
-                return -crate::path::errno();
+            if crate::sys::errno() != 0 {
+                return -crate::sys::errno();
             }
             let remote_len = peek_word(ptracer, data + crate::tracee::reg::sizeof_word(ptracer) as Word);
-            if crate::path::errno() != 0 {
-                return -crate::path::errno();
+            if crate::sys::errno() != 0 {
+                return -crate::sys::errno();
             }
             let mut buf = vec![0u8; remote_len as usize];
             let mut local = libc::iovec {
@@ -584,16 +568,16 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
 }
 
 fn peek_data(ptracer: &mut Tracee, request: Word, pid: i32, address: Word, data: Word) -> i32 {
-    unsafe { *libc::__errno_location() = 0 };
-    let result = unsafe { libc::ptrace(request as u32, pid, address as usize, 0usize) } as Word;
-    let e = crate::path::errno();
+    crate::sys::clear_errno();
+    let result = crate::sys::ptrace(request as u32, pid, address as usize, 0) as Word;
+    let e = crate::sys::errno();
     if e != 0 {
         return -e;
     }
-    unsafe { *libc::__errno_location() = 0 };
+    crate::sys::clear_errno();
     poke_word(ptracer, data, result);
-    if crate::path::errno() != 0 {
-        return -crate::path::errno();
+    if crate::sys::errno() != 0 {
+        return -crate::sys::errno();
     }
     0
 }

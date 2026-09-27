@@ -35,14 +35,13 @@ pub fn translate_and_check_exec(
         Ok(c) => c,
         Err(_) => return -libc::EINVAL,
     };
-    if unsafe { libc::access(c.as_ptr(), libc::F_OK) } < 0 {
+    if crate::sys::access(&c, libc::F_OK) < 0 {
         return -libc::ENOENT;
     }
-    if unsafe { libc::access(c.as_ptr(), libc::X_OK) } < 0 {
+    if crate::sys::access(&c, libc::X_OK) < 0 {
         return -libc::EACCES;
     }
-    let mut st: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::lstat(c.as_ptr(), &mut st) } < 0 {
+    if crate::sys::lstat(&c).is_err() {
         return -libc::EPERM;
     }
     0
@@ -55,19 +54,19 @@ type Shebang = Result<Option<(Vec<u8>, Vec<u8>)>, i32>;
 /// `extract_shebang()` — read the `#!interpreter [arg]` line of `host_path`.
 fn extract_shebang(host_path: &[u8]) -> Shebang {
     let c = std::ffi::CString::new(host_path).map_err(|_| -libc::EINVAL)?;
-    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY) };
+    let fd = crate::sys::open(&c, libc::O_RDONLY, 0);
     if fd < 0 {
-        return Err(-crate::path::errno());
+        return Err(-crate::sys::errno());
     }
     let result = extract_shebang_fd(fd);
-    unsafe { libc::close(fd) };
+    crate::sys::close(fd);
     result
 }
 
 fn extract_shebang_fd(fd: i32) -> Shebang {
     let read1 = |fd: i32| -> Result<u8, i32> {
         let mut b = [0u8; 1];
-        let n = unsafe { libc::read(fd, b.as_mut_ptr() as *mut _, 1) };
+        let n = crate::sys::read(fd, &mut b);
         if n < 0 {
             Err(-crate::path::errno())
         } else if n == 0 {
@@ -79,7 +78,7 @@ fn extract_shebang_fd(fd: i32) -> Shebang {
 
     // Read "#!".
     let mut magic = [0u8; 2];
-    let n = unsafe { libc::read(fd, magic.as_mut_ptr() as *mut _, 2) };
+    let n = crate::sys::read(fd, &mut magic);
     if n < 0 {
         return Err(-crate::path::errno());
     }

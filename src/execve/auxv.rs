@@ -37,11 +37,11 @@ pub struct ElfAuxVector {
 pub fn get_elf_aux_vectors_address(tracee: &Tracee) -> Word {
     let w = sizeof_word(tracee) as Word;
     let mut address = peek_reg(tracee, RegVersion::Current, Reg::StackPointer);
-    unsafe { *libc::__errno_location() = 0 };
+    crate::sys::clear_errno();
 
     // argc, then argv[] + NULL.
     let argc = peek_word(tracee, address);
-    if crate::path::errno() != 0 {
+    if crate::sys::errno() != 0 {
         return 0;
     }
     address += (1 + argc + 1) * w;
@@ -49,7 +49,7 @@ pub fn get_elf_aux_vectors_address(tracee: &Tracee) -> Word {
     // envp[] + NULL.
     loop {
         let data = peek_word(tracee, address);
-        if crate::path::errno() != 0 {
+        if crate::sys::errno() != 0 {
             return 0;
         }
         address += w;
@@ -66,9 +66,9 @@ pub fn fetch_elf_aux_vectors(tracee: &Tracee, address: Word) -> Option<Vec<ElfAu
     let mut address = address;
     let mut vectors = Vec::new();
     loop {
-        unsafe { *libc::__errno_location() = 0 };
+        crate::sys::clear_errno();
         let atype = peek_word(tracee, address);
-        if crate::path::errno() != 0 {
+        if crate::sys::errno() != 0 {
             return None;
         }
         address += w;
@@ -76,7 +76,7 @@ pub fn fetch_elf_aux_vectors(tracee: &Tracee, address: Word) -> Option<Vec<ElfAu
             break;
         }
         let value = peek_word(tracee, address);
-        if crate::path::errno() != 0 {
+        if crate::sys::errno() != 0 {
             return None;
         }
         address += w;
@@ -97,15 +97,15 @@ pub fn push_elf_aux_vectors(tracee: &Tracee, vectors: &[ElfAuxVector], address: 
         .iter()
         .chain(std::iter::once(&ElfAuxVector::default()))
     {
-        unsafe { *libc::__errno_location() = 0 };
+        crate::sys::clear_errno();
         poke_word(tracee, address, v.atype);
-        if crate::path::errno() != 0 {
-            return -crate::path::errno();
+        if crate::sys::errno() != 0 {
+            return -crate::sys::errno();
         }
         address += w;
         poke_word(tracee, address, v.value);
-        if crate::path::errno() != 0 {
-            return -crate::path::errno();
+        if crate::sys::errno() != 0 {
+            return -crate::sys::errno();
         }
         address += w;
         if v.atype == AT_NULL {

@@ -31,7 +31,7 @@ const LOAD_ACTION_START: u64 = 6;
 fn page_size() -> Word {
     static ONCE: std::sync::OnceLock<Word> = std::sync::OnceLock::new();
     *ONCE.get_or_init(|| {
-        let v = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        let v = crate::sys::sysconf(libc::_SC_PAGESIZE);
         if v > 0 { v as Word } else { 0x1000 }
     })
 }
@@ -256,7 +256,7 @@ pub fn translate_execve_exit(tracee: &mut Tracee) {
         bind_proc_pid_auxv(tracee);
 
         if (tracee.as_ptracee.options & crate::ptrace::ptc::PTRACE_O_TRACEEXEC as Word) == 0 {
-            unsafe { libc::kill(tracee.pid, libc::SIGTRAP) };
+            crate::sys::kill(tracee.pid, libc::SIGTRAP);
         }
         return;
     }

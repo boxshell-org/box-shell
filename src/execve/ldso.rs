@@ -5,7 +5,7 @@
 //! `LD_LIBRARY_PATH` rewritten through the `/host-rootfs` binding.
 
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Mutex;
 
 use crate::HOST_ROOTFS;
@@ -229,15 +229,12 @@ fn read_ldso_rpaths(
     let n_entries = dyn_size / entry_size;
 
     let read_entry = |file: &std::fs::File, i: u64| -> Result<DynamicEntry, i32> {
-        let mut de: DynamicEntry = unsafe { std::mem::zeroed() };
-        let n = unsafe {
-            libc::pread(
-                file.as_raw_fd(),
-                &mut de as *mut _ as *mut libc::c_void,
-                entry_size as usize,
-                (dyn_off + i * entry_size) as i64,
-            )
-        };
+        let mut de: DynamicEntry = crate::sys::zeroed();
+        let n = crate::sys::pread(
+            file.as_raw_fd(),
+            &mut crate::sys::as_bytes_mut(&mut de)[..entry_size as usize],
+            (dyn_off + i * entry_size) as i64,
+        );
         if n != entry_size as isize {
             return Err(-libc::EIO);
         }
@@ -314,7 +311,7 @@ pub fn rebuild_host_ldso_paths(
         Ok(x) => x,
         Err(e) => return e,
     };
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut file = crate::sys::file_from_fd(fd);
     let parsed = read_ldso_rpaths(&mut file, fd, &elf_header);
     drop(file); // closes fd
     let (rpaths, runpaths) = match parsed {

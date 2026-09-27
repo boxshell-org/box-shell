@@ -6,9 +6,7 @@
 //! the tracee `mmap`s it — all as chained syscalls.
 
 use std::cell::RefCell;
-use std::ffi::CString;
 use std::io::{Read, Write};
-use std::os::unix::io::FromRawFd;
 
 use super::*;
 use crate::Word;
@@ -76,12 +74,7 @@ fn send_helper_request(request: &HelperRequest, response: &mut [u8]) {
         let Some(conn) = hb.as_mut() else {
             return;
         };
-        let req_bytes = unsafe {
-            std::slice::from_raw_parts(
-                request as *const HelperRequest as *const u8,
-                std::mem::size_of::<HelperRequest>(),
-            )
-        };
+        let req_bytes = crate::sys::as_bytes(request);
         let _ = conn.proot2helper.write_all(req_bytes);
         let mut off = 0;
         while off < response.len() {
@@ -96,64 +89,57 @@ fn send_helper_request(request: &HelperRequest, response: &mut [u8]) {
 /// Launch `proot --shm-helper` detached via double-fork; the socket path
 /// arrives on its stdout pipe.
 fn launch_helper() -> Option<HelperConn> {
-    unsafe {
-        let mut p2h = [0i32; 2];
-        let mut h2p = [0i32; 2];
-        if libc::pipe2(p2h.as_mut_ptr(), libc::O_CLOEXEC) < 0 {
-            return None;
+    let Ok((p2h_rd, p2h_wr)) = crate::sys::pipe_cloexec() else {
+        return None;
+    };
+    let Ok((h2p_rd, h2p_wr)) = crate::sys::pipe_cloexec() else {
+        crate::sys::close(p2h_rd);
+        crate::sys::close(p2h_wr);
+        return None;
+    };
+    let forked = crate::sys::fork();
+    if forked == 0 {
+        crate::sys::close(p2h_wr);
+        crate::sys::close(h2p_rd);
+        crate::sys::dup2(p2h_rd, 0);
+        crate::sys::dup2(h2p_wr, 1);
+        crate::sys::close(p2h_rd);
+        crate::sys::close(h2p_wr);
+        crate::sys::fcntl(0, libc::F_SETFL, 0);
+        crate::sys::fcntl(1, libc::F_SETFL, 0);
+        // Fork again to detach from proot's waitpid().
+        let forked2 = crate::sys::fork();
+        if forked2 == 0 {
+            let argv = [
+                c"proot".as_ptr(),
+                c"--shm-helper".as_ptr(),
+                std::ptr::null(),
+            ];
+            crate::sys::execvp(c"/proc/self/exe", &argv);
+            crate::sys::exit_immediately(1);
         }
-        if libc::pipe2(h2p.as_mut_ptr(), libc::O_CLOEXEC) < 0 {
-            libc::close(p2h[0]);
-            libc::close(p2h[1]);
-            return None;
-        }
-        let forked = libc::fork();
-        if forked == 0 {
-            libc::close(p2h[1]);
-            libc::close(h2p[0]);
-            libc::dup2(p2h[0], 0);
-            libc::dup2(h2p[1], 1);
-            libc::close(p2h[0]);
-            libc::close(h2p[1]);
-            libc::fcntl(0, libc::F_SETFL, 0);
-            libc::fcntl(1, libc::F_SETFL, 0);
-            // Fork again to detach from proot's waitpid().
-            let forked2 = libc::fork();
-            if forked2 == 0 {
-                let exe = CString::new("/proc/self/exe").unwrap();
-                let arg0 = CString::new("proot").unwrap();
-                let arg1 = CString::new("--shm-helper").unwrap();
-                libc::execl(
-                    exe.as_ptr(),
-                    arg0.as_ptr(),
-                    arg1.as_ptr(),
-                    std::ptr::null::<u8>(),
-                );
-                libc::_exit(1);
-            }
-            libc::_exit(0);
-        } else if forked < 0 {
-            libc::close(p2h[0]);
-            libc::close(p2h[1]);
-            libc::close(h2p[0]);
-            libc::close(h2p[1]);
-            return None;
-        }
-        libc::close(p2h[0]);
-        libc::close(h2p[1]);
-        let mut addr = [0u8; SHMHELPER_SOCKET_LEN];
-        let nread = libc::read(h2p[0], addr.as_mut_ptr() as *mut _, SHMHELPER_SOCKET_LEN);
-        if nread as usize != SHMHELPER_SOCKET_LEN {
-            libc::close(p2h[1]);
-            libc::close(h2p[0]);
-            return None;
-        }
-        Some(HelperConn {
-            proot2helper: std::fs::File::from_raw_fd(p2h[1]),
-            helper2proot: std::fs::File::from_raw_fd(h2p[0]),
-            addr,
-        })
+        crate::sys::exit_immediately(0);
+    } else if forked < 0 {
+        crate::sys::close(p2h_rd);
+        crate::sys::close(p2h_wr);
+        crate::sys::close(h2p_rd);
+        crate::sys::close(h2p_wr);
+        return None;
     }
+    crate::sys::close(p2h_rd);
+    crate::sys::close(h2p_wr);
+    let mut addr = [0u8; SHMHELPER_SOCKET_LEN];
+    let nread = crate::sys::read(h2p_rd, &mut addr);
+    if nread as usize != SHMHELPER_SOCKET_LEN {
+        crate::sys::close(p2h_wr);
+        crate::sys::close(h2p_rd);
+        return None;
+    }
+    Some(HelperConn {
+        proot2helper: crate::sys::file_from_fd(p2h_wr),
+        helper2proot: crate::sys::file_from_fd(h2p_rd),
+        addr,
+    })
 }
 
 /// `sysvipc_shm_recvmsg_pointers()` — lay out an msghdr+iovec+cmsghdr in
@@ -545,7 +531,7 @@ pub fn shmat_chain(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
             }
             config.shmat_mem_fd = fd;
 
-            let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+            let page_size = crate::sys::sysconf(libc::_SC_PAGESIZE) as u64;
             let map_size = {
                 let nsb = ns.borrow();
                 (nsb.shms[config.waiting_object_index].stats.shm_segsz + (page_size - 1))
@@ -708,13 +694,7 @@ pub fn shmctl(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
                 let mut nsb = ns.borrow_mut();
                 let shm = &mut nsb.shms[shm_index];
                 update_stats(shm);
-                unsafe {
-                    std::slice::from_raw_parts(
-                        &shm.stats as *const ShmidDs as *const u8,
-                        std::mem::size_of::<ShmidDs>(),
-                    )
-                    .to_vec()
-                }
+                crate::sys::as_bytes(&shm.stats).to_vec()
             };
             write_data(tracee, buf, &bytes)
         }
@@ -780,7 +760,7 @@ pub fn fill_proc(w: &mut dyn std::io::Write, ns: &SysVIpcNamespace) {
         w,
         "       key      shmid perms                  size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime                   rss                  swap"
     );
-    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+    let page_size = crate::sys::sysconf(libc::_SC_PAGESIZE) as u64;
     for (shm_index, shm) in ns.shms.iter().enumerate() {
         if !shm.valid {
             continue;
@@ -813,34 +793,27 @@ pub fn fill_proc(w: &mut dyn std::io::Write, ns: &SysVIpcNamespace) {
 /// `sysvipc_shm_do_allocate()` — the backing-fd factory, run inside the
 /// helper process. tmpfile()+ftruncate on Linux.
 fn do_allocate(size: usize) -> i32 {
-    unsafe {
-        let f = libc::tmpfile();
-        if f.is_null() {
-            return -libc::ENOSPC;
-        }
-        let fd = libc::dup(libc::fileno(f));
-        libc::fclose(f);
-        if fd < 0 {
-            return -libc::ENOSPC;
-        }
-        if libc::ftruncate(fd, size as i64) == -1 {
-            libc::close(fd);
-            return -libc::ENOSPC;
-        }
-        fd
+    let fd = crate::sys::tmpfile_fd();
+    if fd < 0 {
+        return -libc::ENOSPC;
     }
+    if crate::sys::ftruncate(fd, size as i64) == -1 {
+        crate::sys::close(fd);
+        return -libc::ENOSPC;
+    }
+    fd
 }
 
 /// `sysvipc_shm_helper_main()` — the detached helper: bind a temp unix
 /// socket, print its path on stdout, then serve requests on stdin.
 pub fn shm_helper_main() -> ! {
     use std::io::Write as _;
-    let socket_server_fd = unsafe { libc::socket(libc::AF_UNIX, SOCK_SEQPACKET, 0) };
+    let socket_server_fd = crate::sys::socket(libc::AF_UNIX, SOCK_SEQPACKET, 0);
 
     let mut path = Vec::new();
     for i in 0.. {
         let Some(p) = crate::path::temp::create_temp_name("prootshm") else {
-            unsafe { libc::_exit(1) };
+            crate::sys::exit_immediately(1);
         };
         let p = {
             // mktemp semantics — create the name.
@@ -849,34 +822,28 @@ pub fn shm_helper_main() -> ! {
             p
         };
         if p.len() > SHMHELPER_SOCKET_LEN {
-            unsafe { libc::close(socket_server_fd) };
+            crate::sys::close(socket_server_fd);
             eprintln!("proot-shm-helper: Temporary path too long");
-            unsafe { libc::_exit(1) };
+            crate::sys::exit_immediately(1);
         }
-        let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        let mut addr: libc::sockaddr_un = crate::sys::zeroed();
         addr.sun_family = libc::AF_UNIX as u16;
-        addr.sun_path[..p.len()].copy_from_slice(unsafe {
-            std::slice::from_raw_parts(p.as_ptr() as *const i8, p.len())
-        });
-        let bound = unsafe {
-            libc::bind(
-                socket_server_fd,
-                &addr as *const _ as *const libc::sockaddr,
-                std::mem::size_of::<libc::sockaddr_un>() as u32,
-            )
-        };
+        for (dst, src) in addr.sun_path[..p.len()].iter_mut().zip(p.bytes()) {
+            *dst = src as i8;
+        }
+        let bound = crate::sys::bind(socket_server_fd, &addr);
         if bound == 0 {
             path = p.into_bytes();
             break;
         }
         if i >= 64 {
-            unsafe { libc::close(socket_server_fd) };
-            unsafe { libc::_exit(1) };
+            crate::sys::close(socket_server_fd);
+            crate::sys::exit_immediately(1);
         }
     }
 
-    if unsafe { libc::listen(socket_server_fd, 1) } < 0 {
-        unsafe { libc::_exit(0) };
+    if crate::sys::listen(socket_server_fd, 1) < 0 {
+        crate::sys::exit_immediately(0);
     }
     // Report the socket path to the launcher.
     let mut out = [0u8; SHMHELPER_SOCKET_LEN];
@@ -885,19 +852,14 @@ pub fn shm_helper_main() -> ! {
     let _ = std::io::stdout().flush();
 
     loop {
-        let mut request: HelperRequest = unsafe { std::mem::zeroed() };
-        let buf = unsafe {
-            std::slice::from_raw_parts_mut(
-                &mut request as *mut _ as *mut u8,
-                std::mem::size_of::<HelperRequest>(),
-            )
-        };
-        let status = unsafe { libc::read(0, buf.as_mut_ptr() as *mut _, buf.len()) };
+        let mut request: HelperRequest = crate::sys::zeroed();
+        let buf = crate::sys::as_bytes_mut(&mut request);
+        let status = crate::sys::read(0, buf);
         if status == 0 {
             break;
         }
         if status < 0 {
-            if crate::path::errno() == libc::EINTR {
+            if crate::sys::errno() == libc::EINTR {
                 continue;
             }
             break;
@@ -908,48 +870,45 @@ pub fn shm_helper_main() -> ! {
         match request.op {
             x if x == HelperOp::Alloc as i32 => {
                 let fd = do_allocate(request.size);
-                unsafe {
-                    libc::write(1, &fd as *const i32 as *const _, 4);
-                }
+                crate::sys::write(1, &fd.to_ne_bytes());
             }
-            x if x == HelperOp::Free as i32 => unsafe {
-                libc::close(request.fd);
-            },
+            x if x == HelperOp::Free as i32 => {
+                crate::sys::close(request.fd);
+            }
             x if x == HelperOp::Distribute as i32 => {
-                let client = unsafe {
-                    libc::accept(socket_server_fd, std::ptr::null_mut(), std::ptr::null_mut())
-                };
+                let client = crate::sys::accept(socket_server_fd);
                 if client >= 0 {
                     sendfd(client, request.fd);
-                    unsafe { libc::close(client) };
+                    crate::sys::close(client);
                 }
             }
             _ => {}
         }
     }
-    unsafe { libc::_exit(0) }
+    crate::sys::exit_immediately(0)
 }
 
-/// `SCM_RIGHTS` fd transfer (helper side).
+/// `SCM_RIGHTS` fd transfer (helper side). The cmsghdr is laid out by
+/// byte offset — `size_of::<cmsghdr>` is exactly `CMSG_DATA`'s offset.
 fn sendfd(socket: i32, fd: i32) {
-    unsafe {
-        let mut data = 0u8;
-        let mut iov = libc::iovec {
-            iov_base: &mut data as *mut _ as *mut _,
-            iov_len: 1,
-        };
-        let mut cmsg_space = [0u8; 64];
-        let mut msg: libc::msghdr = std::mem::zeroed();
-        msg.msg_iov = &mut iov;
-        msg.msg_iovlen = 1;
-        msg.msg_control = cmsg_space.as_mut_ptr() as *mut _;
-        msg.msg_controllen = 20;
-        let cmsg = libc::CMSG_FIRSTHDR(&msg);
-        (*cmsg).cmsg_level = libc::SOL_SOCKET;
-        (*cmsg).cmsg_type = SCM_RIGHTS;
-        (*cmsg).cmsg_len = 20;
-        let fd_ptr = libc::CMSG_DATA(cmsg) as *mut i32;
-        *fd_ptr = fd;
-        libc::sendmsg(socket, &msg, 0);
-    }
+    let mut data = 0u8;
+    let mut iov = libc::iovec {
+        iov_base: &mut data as *mut _ as *mut _,
+        iov_len: 1,
+    };
+    let hdr_len = std::mem::size_of::<libc::cmsghdr>();
+    let mut cmsg_space = [0u8; 64];
+    let cmsg = libc::cmsghdr {
+        cmsg_len: hdr_len + std::mem::size_of::<i32>(),
+        cmsg_level: libc::SOL_SOCKET,
+        cmsg_type: SCM_RIGHTS,
+    };
+    cmsg_space[..hdr_len].copy_from_slice(crate::sys::as_bytes(&cmsg));
+    cmsg_space[hdr_len..hdr_len + 4].copy_from_slice(&fd.to_ne_bytes());
+    let mut msg: libc::msghdr = crate::sys::zeroed();
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cmsg_space.as_mut_ptr() as *mut _;
+    msg.msg_controllen = 20;
+    crate::sys::sendmsg(socket, &msg, 0);
 }

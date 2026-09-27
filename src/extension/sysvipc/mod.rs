@@ -306,9 +306,7 @@ pub fn wake_tracee(tracee: &mut Tracee, config: &mut Sysvipc, status: i32) {
     match config.wait_state {
         WaitState::EnteredPpoll => {
             config.wait_state = WaitState::SignaledPpoll;
-            unsafe {
-                libc::syscall(libc::SYS_tkill, tracee.pid, libc::SIGSTOP);
-            }
+            crate::sys::tkill(tracee.pid, libc::SIGSTOP);
             tracee.sigstop = Sigstop::Ignored;
         }
         WaitState::RestartedIntoPpoll => {

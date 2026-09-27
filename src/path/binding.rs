@@ -309,9 +309,15 @@ pub fn initialize_binding(tracee: &mut Tracee, binding: &Rc<Binding>) {
         }
 
         // Remember the type of the final component for build_glue().
-        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        let mut st: libc::stat = crate::sys::zeroed();
         let c = std::ffi::CString::new(binding.host.as_bytes()).unwrap();
-        let status = unsafe { libc::lstat(c.as_ptr(), &mut st) };
+        let status = match crate::sys::lstat(&c) {
+            Ok(v) => {
+                st = v;
+                0
+            }
+            Err(_) => -1,
+        };
         tracee.glue_type = if status < 0
             || (st.st_mode & libc::S_IFMT) == libc::S_IFBLK
             || (st.st_mode & libc::S_IFMT) == libc::S_IFCHR

@@ -158,10 +158,10 @@ fn update_wait_status(ptracer: &mut Tracee, ptracee_rc: &TraceeRef) -> i32 {
 
     let address = peek_reg(ptracer, RegVersion::Original, Reg::Sysarg2);
     if address != 0 {
-        unsafe { *libc::__errno_location() = 0 };
+        crate::sys::clear_errno();
         poke_int32(ptracer, address, event_value);
-        if crate::path::errno() != 0 {
-            return -crate::path::errno();
+        if crate::sys::errno() != 0 {
+            return -crate::sys::errno();
         }
     }
 
@@ -337,7 +337,7 @@ pub fn handle_ptracee_event(ptracee_rc: &TraceeRef, event: i32) -> bool {
     }
 
     // Notify the ptracer asynchronously, like the kernel would.
-    unsafe { libc::kill(ptracer_pid, libc::SIGCHLD) };
+    crate::sys::kill(ptracer_pid, libc::SIGCHLD);
 
     let (wait_pid, wait_options) = {
         let p = ptracer_rc.borrow();

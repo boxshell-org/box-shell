@@ -50,29 +50,28 @@ fn handle_sysexit_end(tracee: &mut Tracee) -> i32 {
     let path = CString::new(&original[..size as usize - 1]).unwrap_or_default();
 
     // Not a link → nothing to fix.
-    let mut statl: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::lstat(path.as_ptr(), &mut statl) } < 0 {
-        return -crate::path::errno();
-    }
+    let statl = match crate::sys::lstat(&path) {
+        Ok(s) => s,
+        Err(e) => return -e,
+    };
     if (statl.st_mode & libc::S_IFMT) != libc::S_IFLNK {
         return 0;
     }
 
     let mut target = [0u8; PATH_MAX];
-    let size = unsafe { libc::readlink(path.as_ptr(), target.as_mut_ptr() as *mut i8, PATH_MAX) };
+    let size = crate::sys::readlink(&path, &mut target);
     if size < 0 {
         return -crate::path::errno();
     }
 
     // Overwrite st_size with the target length.
     let stat_addr = peek_reg(tracee, RegVersion::Original, Reg::Sysarg2);
-    let mut buf = [0u8; std::mem::size_of::<libc::stat>()];
-    if read_data(tracee, &mut buf, stat_addr) < 0 {
+    let mut st: libc::stat = crate::sys::zeroed();
+    if read_data(tracee, crate::sys::as_bytes_mut(&mut st), stat_addr) < 0 {
         return 0;
     }
-    let st = unsafe { &mut *buf.as_mut_ptr().cast::<libc::stat>() };
     st.st_size = size as i64;
-    if write_data(tracee, stat_addr, &buf) < 0 {
+    if write_data(tracee, stat_addr, crate::sys::as_bytes(&st)) < 0 {
         return -libc::EIO;
     }
     0

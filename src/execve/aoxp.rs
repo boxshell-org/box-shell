@@ -233,7 +233,5 @@ pub fn push_array_of_xpointers(tracee: &mut Tracee, array: &mut XPointerArray, r
 
 /// Clear thread-local errno before a `peek_word` (mirrors `errno = 0` in C).
 fn clear_errno() {
-    unsafe {
-        *libc::__errno_location() = 0;
-    }
+    crate::sys::clear_errno();
 }

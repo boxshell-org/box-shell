@@ -135,28 +135,28 @@ pub fn handle_statx_syscall(tracee: &mut Tracee, from_sigsys: bool) -> i32 {
 
     if from_sigsys || peek_reg(tracee, RegVersion::Current, Reg::SysargResult) != 0 {
         // Answer from a tracer-side [l]stat of the translated path.
-        let mut sb: libc::stat = unsafe { std::mem::zeroed() };
-        let r = if do_fstat {
+        let sb = if do_fstat {
             let link =
                 std::ffi::CString::new(format!("/proc/{}/fd/{}", tracee.pid, dirfd)).unwrap();
-            unsafe { libc::stat(link.as_ptr(), &mut sb) }
+            crate::sys::stat(&link)
         } else {
             let c = std::ffi::CString::new(state.host_path.as_bytes()).unwrap();
-            unsafe {
-                if do_lstat {
-                    libc::lstat(c.as_ptr(), &mut sb)
-                } else {
-                    libc::stat(c.as_ptr(), &mut sb)
-                }
+            if do_lstat {
+                crate::sys::lstat(&c)
+            } else {
+                crate::sys::stat(&c)
             }
         };
-        if r < 0 {
-            status = -crate::path::errno();
-            if status >= 0 {
-                status = -libc::EPERM;
+        let sb = match sb {
+            Ok(sb) => sb,
+            Err(e) => {
+                status = -e;
+                if status >= 0 {
+                    status = -libc::EPERM;
+                }
+                return status;
             }
-            return status;
-        }
+        };
 
         // stat → statx field translation.
         state.statx_buf.stx_mask = (mask
@@ -215,12 +215,7 @@ pub fn handle_statx_syscall(tracee: &mut Tracee, from_sigsys: bool) -> i32 {
         // inspect/falsify it.
         status = read_data(
             tracee,
-            unsafe {
-                std::slice::from_raw_parts_mut(
-                    &mut state.statx_buf as *mut Statx as *mut u8,
-                    std::mem::size_of::<Statx>(),
-                )
-            },
+            crate::sys::as_bytes_mut(&mut state.statx_buf),
             peek_reg(tracee, RegVersion::Original, Reg::Sysarg5),
         );
         if status < 0 {
@@ -241,12 +236,7 @@ pub fn handle_statx_syscall(tracee: &mut Tracee, from_sigsys: bool) -> i32 {
         status = write_data(
             tracee,
             peek_reg(tracee, RegVersion::Current, Reg::Sysarg5),
-            unsafe {
-                std::slice::from_raw_parts(
-                    &state.statx_buf as *const Statx as *const u8,
-                    std::mem::size_of::<Statx>(),
-                )
-            },
+            crate::sys::as_bytes(&state.statx_buf),
         );
         if status < 0 {
             return status;

@@ -8,65 +8,33 @@ use crate::tracee::Tracee;
 use crate::tracee::reg::{Reg, RegVersion, is_32on64_mode, peek_reg, poke_reg, sizeof_word};
 
 fn ptrace_peekdata(pid: i32, addr: Word) -> Result<Word, i32> {
-    unsafe {
-        *errno_ptr() = 0;
-        let v = libc::ptrace(
-            crate::ptrace::ptc::PTRACE_PEEKDATA as u32,
-            pid,
-            addr as usize,
-            0usize,
-        );
-        let e = *errno_ptr();
-        if e != 0 {
-            return Err(if e == libc::EIO { libc::EFAULT } else { e });
-        }
-        Ok(v as Word)
+    crate::sys::clear_errno();
+    let v = crate::sys::ptrace(
+        crate::ptrace::ptc::PTRACE_PEEKDATA as u32,
+        pid,
+        addr as usize,
+        0,
+    );
+    let e = crate::sys::errno();
+    if e != 0 {
+        return Err(if e == libc::EIO { libc::EFAULT } else { e });
     }
+    Ok(v as Word)
 }
 
 fn ptrace_pokedata(pid: i32, addr: Word, value: Word) -> Result<(), i32> {
-    unsafe {
-        *errno_ptr() = 0;
-        libc::ptrace(
-            crate::ptrace::ptc::PTRACE_POKEDATA as u32,
-            pid,
-            addr as usize,
-            value as usize,
-        );
-        let e = *errno_ptr();
-        if e != 0 {
-            return Err(if e == libc::EIO { libc::EFAULT } else { e });
-        }
-        Ok(())
+    crate::sys::clear_errno();
+    crate::sys::ptrace(
+        crate::ptrace::ptc::PTRACE_POKEDATA as u32,
+        pid,
+        addr as usize,
+        value as usize,
+    );
+    let e = crate::sys::errno();
+    if e != 0 {
+        return Err(if e == libc::EIO { libc::EFAULT } else { e });
     }
-}
-
-fn errno_ptr() -> *mut i32 {
-    unsafe { libc::__errno_location() }
-}
-
-fn process_vm_write(pid: i32, local: &[u8], remote: Word) -> isize {
-    let liovec = libc::iovec {
-        iov_base: local.as_ptr() as *mut _,
-        iov_len: local.len(),
-    };
-    let riovec = libc::iovec {
-        iov_base: remote as usize as *mut _,
-        iov_len: local.len(),
-    };
-    unsafe { libc::process_vm_writev(pid, &liovec, 1, &riovec, 1, 0) }
-}
-
-fn process_vm_read(pid: i32, local: &mut [u8], remote: Word) -> isize {
-    let liovec = libc::iovec {
-        iov_base: local.as_mut_ptr() as *mut _,
-        iov_len: local.len(),
-    };
-    let riovec = libc::iovec {
-        iov_base: remote as usize as *mut _,
-        iov_len: local.len(),
-    };
-    unsafe { libc::process_vm_readv(pid, &liovec, 1, &riovec, 1, 0) }
+    Ok(())
 }
 
 /// `write_data()` — copy `src` into `dest` in the tracee; `-errno` on error.
@@ -74,7 +42,7 @@ pub fn write_data(tracee: &Tracee, dest: Word, src: &[u8]) -> i32 {
     if src.is_empty() {
         return 0;
     }
-    if process_vm_write(tracee.pid, src, dest) == src.len() as isize {
+    if crate::sys::process_vm_write(tracee.pid, src, dest) == src.len() as isize {
         return 0;
     }
 
@@ -126,21 +94,7 @@ pub fn write_data(tracee: &Tracee, dest: Word, src: &[u8]) -> i32 {
 /// `writev_data()` — gather-write several buffers in one remote segment.
 pub fn writev_data(tracee: &Tracee, dest: Word, srcs: &[&[u8]]) -> i32 {
     let total: usize = srcs.iter().map(|s| s.len()).sum();
-    let local: Vec<libc::iovec> = srcs
-        .iter()
-        .map(|s| libc::iovec {
-            iov_base: s.as_ptr() as *mut _,
-            iov_len: s.len(),
-        })
-        .collect();
-    let remote = libc::iovec {
-        iov_base: dest as usize as *mut _,
-        iov_len: total,
-    };
-    if unsafe {
-        libc::process_vm_writev(tracee.pid, local.as_ptr(), local.len() as _, &remote, 1, 0)
-    } == total as isize
-    {
+    if crate::sys::process_vm_writev_bufs(tracee.pid, srcs, dest) == total as isize {
         return 0;
     }
     let mut off = 0u64;
@@ -159,7 +113,7 @@ pub fn read_data(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
     if dest.is_empty() {
         return 0;
     }
-    if process_vm_read(tracee.pid, dest, src) == dest.len() as isize {
+    if crate::sys::process_vm_read(tracee.pid, dest, src) == dest.len() as isize {
         return 0;
     }
 
@@ -214,7 +168,7 @@ pub fn read_string(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
         let next_chunk = (cur & !(CHUNK as u64 - 1)) + CHUNK as u64;
         let mut size = (next_chunk - cur) as usize;
         size = size.min(max_size - offset);
-        let n = process_vm_read(tracee.pid, &mut dest[offset..offset + size], cur);
+        let n = crate::sys::process_vm_read(tracee.pid, &mut dest[offset..offset + size], cur);
         if n == size as isize {
             match dest[offset..offset + size].iter().position(|&b| b == 0) {
                 Some(p) => return (offset + p + 1) as i32,
@@ -266,13 +220,13 @@ pub fn read_string(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
 pub fn peek_word(tracee: &Tracee, address: Word) -> Word {
     let mut result: Word = 0;
     let wsize = sizeof_word(tracee);
-    let n = process_vm_read(
+    let n = crate::sys::process_vm_read(
         tracee.pid,
-        unsafe { std::slice::from_raw_parts_mut(&mut result as *mut _ as *mut u8, wsize) },
+        &mut crate::sys::as_bytes_mut(&mut result)[..wsize],
         address,
     );
     if n == wsize as isize {
-        unsafe { *errno_ptr() = 0 };
+        crate::sys::clear_errno();
         return result;
     }
     match ptrace_peekdata(tracee.pid, address) {
@@ -289,13 +243,10 @@ pub fn peek_word(tracee: &Tracee, address: Word) -> Word {
 /// `poke_word()` — write one guest word; errno carries the failure.
 pub fn poke_word(tracee: &Tracee, address: Word, value: Word) {
     let wsize = sizeof_word(tracee);
-    let n = process_vm_write(
-        tracee.pid,
-        unsafe { std::slice::from_raw_parts(&value as *const _ as *const u8, wsize) },
-        address,
-    );
+    let n =
+        crate::sys::process_vm_write(tracee.pid, &crate::sys::as_bytes(&value)[..wsize], address);
     if n == wsize as isize {
-        unsafe { *errno_ptr() = 0 };
+        crate::sys::clear_errno();
         return;
     }
     let mut v = value;
@@ -312,8 +263,8 @@ pub fn poke_word(tracee: &Tracee, address: Word, value: Word) {
 /// `peek_uint32()` — read 4 bytes; errno carries the failure.
 pub fn peek_uint32(tracee: &Tracee, address: Word) -> u32 {
     let mut buf = [0u8; 4];
-    if process_vm_read(tracee.pid, &mut buf, address) == 4 {
-        unsafe { *errno_ptr() = 0 };
+    if crate::sys::process_vm_read(tracee.pid, &mut buf, address) == 4 {
+        crate::sys::clear_errno();
         return u32::from_ne_bytes(buf);
     }
     match ptrace_peekdata(tracee.pid, address) {
@@ -325,8 +276,8 @@ pub fn peek_uint32(tracee: &Tracee, address: Word) -> u32 {
 /// `poke_uint32()` — write 4 bytes; errno carries the failure.
 pub fn poke_uint32(tracee: &Tracee, address: Word, value: u32) {
     let buf = value.to_ne_bytes();
-    if process_vm_write(tracee.pid, &buf, address) == 4 {
-        unsafe { *errno_ptr() = 0 };
+    if crate::sys::process_vm_write(tracee.pid, &buf, address) == 4 {
+        crate::sys::clear_errno();
         return;
     }
     if let Ok(old) = ptrace_peekdata(tracee.pid, address) {
@@ -348,8 +299,8 @@ pub fn poke_int32(tracee: &Tracee, address: Word, value: i32) {
 /// `peek_uint64()`.
 pub fn peek_uint64(tracee: &Tracee, address: Word) -> u64 {
     let mut buf = [0u8; 8];
-    if process_vm_read(tracee.pid, &mut buf, address) == 8 {
-        unsafe { *errno_ptr() = 0 };
+    if crate::sys::process_vm_read(tracee.pid, &mut buf, address) == 8 {
+        crate::sys::clear_errno();
         return u64::from_ne_bytes(buf);
     }
     ptrace_peekdata(tracee.pid, address).unwrap_or_default()

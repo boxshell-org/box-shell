@@ -10,9 +10,7 @@ fn main() {
 
     // talloc_autofree equivalent: temp files and binding placeholders
     // are removed when the process exits.
-    unsafe {
-        libc::atexit(temp_cleanup_atexit);
-    }
+    boxshell::sys::at_exit(temp_cleanup_atexit);
 
     // Pre-create the first tracee (pid == 0 placeholder).
     let tracee = match boxshell::tracee::get_tracee(0, true) {

@@ -101,7 +101,7 @@ pub fn readlink_proc_pid_fd(pid: i32, fd: i32, path: &mut FixedPath) -> Result<(
         Err(_) => return Err(-libc::EBADF),
     };
     let mut buf = vec![0u8; PATH_MAX];
-    let n = unsafe { libc::readlink(c.as_ptr(), buf.as_mut_ptr() as *mut _, PATH_MAX - 1) };
+    let n = crate::sys::readlink(&c, &mut buf[..PATH_MAX - 1]);
     if n < 0 {
         return Err(-libc::EBADF);
     }
@@ -120,11 +120,7 @@ pub fn getcwd2(
 ) -> Result<(), i32> {
     match tracee {
         None => {
-            let mut buf = vec![0u8; PATH_MAX];
-            let r = unsafe { libc::getcwd(buf.as_mut_ptr() as *mut _, PATH_MAX) };
-            if r.is_null() {
-                return Err(-errno());
-            }
+            let buf = crate::sys::getcwd().ok_or_else(|| -errno())?;
             guest_path.set(&buf);
             Ok(())
         }
@@ -149,11 +145,7 @@ pub fn realpath2(
     match tracee {
         None => {
             let c = std::ffi::CString::new(path).map_err(|_| -libc::EINVAL)?;
-            let mut buf = vec![0u8; PATH_MAX];
-            let r = unsafe { libc::realpath(c.as_ptr(), buf.as_mut_ptr() as *mut _) };
-            if r.is_null() {
-                return Err(-errno());
-            }
+            let buf = crate::sys::realpath(&c).ok_or_else(|| -errno())?;
             host_path.set(&buf);
             Ok(())
         }
@@ -181,9 +173,8 @@ pub fn which(
 
     let mut found = false;
     if realpath2(tracee.as_deref_mut(), host_path, command, true).is_ok() {
-        let mut st: libc::stat = unsafe { std::mem::zeroed() };
         let c = std::ffi::CString::new(host_path.as_bytes()).unwrap();
-        if unsafe { libc::stat(c.as_ptr(), &mut st) } == 0 {
+        if let Ok(st) = crate::sys::stat(&c) {
             if is_explicit && (st.st_mode & libc::S_IFMT) != libc::S_IFREG {
                 crate::note!(
                     crate::note::Severity::Error,
@@ -238,9 +229,8 @@ pub fn which(
         cand.set(dir.as_bytes());
         let _ = cand.push_component(command);
         if realpath2(tracee.as_deref_mut(), host_path, cand.as_bytes(), true).is_ok() {
-            let mut st: libc::stat = unsafe { std::mem::zeroed() };
             let c = std::ffi::CString::new(host_path.as_bytes()).unwrap();
-            if unsafe { libc::stat(c.as_ptr(), &mut st) } == 0
+            if let Ok(st) = crate::sys::stat(&c)
                 && (st.st_mode & libc::S_IFMT) == libc::S_IFREG
                 && (st.st_mode & libc::S_IXUSR) != 0
             {
@@ -288,7 +278,7 @@ fn not_found(
 }
 
 pub fn errno() -> i32 {
-    unsafe { *libc::__errno_location() }
+    crate::sys::errno()
 }
 
 /// `translate_path()` — the full guest→host canonicalization entry point.

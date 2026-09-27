@@ -314,12 +314,7 @@ pub fn semctl(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
                 info.semusz = nsb.semaphores.len() as i32;
                 info.semaem = nsb.semaphores.iter().map(|s| s.sems.len() as i32).sum();
             }
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &info as *const Seminfo as *const u8,
-                    std::mem::size_of::<Seminfo>(),
-                )
-            };
+            let bytes = crate::sys::as_bytes(&info);
             write_data(tracee, cmdarg, bytes)
         }
         _ => -libc::EINVAL,

@@ -237,7 +237,7 @@ impl Default for Tracee {
             status: 0,
             restart_how: 0,
             last_restart_how: 0,
-            regs: unsafe { std::mem::zeroed() },
+            regs: crate::sys::zeroed(),
             regs_were_changed: false,
             restore_original_regs: true,
             restore_original_regs_after_seccomp_event: false,
@@ -574,6 +574,6 @@ pub fn detach_from_ptracer(ptracee_pid: i32) {
 pub fn kill_all_tracees() {
     for_each_tracee(|rc| {
         let pid = rc.borrow().pid;
-        unsafe { libc::kill(pid, libc::SIGKILL) };
+        crate::sys::kill(pid, libc::SIGKILL);
     });
 }

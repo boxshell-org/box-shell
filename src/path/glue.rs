@@ -50,9 +50,9 @@ pub fn build_glue(
     if !skip_create {
         let c = std::ffi::CString::new(host_path.as_bytes()).unwrap();
         let status = if (typ & libc::S_IFMT) == libc::S_IFDIR {
-            unsafe { libc::mkdir(c.as_ptr(), mode) }
+            crate::sys::mkdir(&c, mode)
         } else {
-            unsafe { libc::mknod(c.as_ptr(), mode | typ, 0) }
+            crate::sys::mknod(&c, mode | typ, 0)
         };
         // Remove guest-rootfs placeholders on termination.
         if status >= 0 && !belongs_to_gluefs {

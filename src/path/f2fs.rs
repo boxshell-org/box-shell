@@ -41,7 +41,7 @@ fn probe_f2fs_bug(tracee: &Tracee) -> bool {
         if std::path::Path::new(&file3).exists() {
             break 'probe;
         }
-        match unsafe { libc::fork() } {
+        match crate::sys::fork() {
             0 => {
                 let r = std::fs::OpenOptions::new()
                     .write(true)
@@ -50,15 +50,16 @@ fn probe_f2fs_bug(tracee: &Tracee) -> bool {
                     .mode(0o600)
                     .open(&file3);
                 match r {
-                    Err(e) if e.raw_os_error() == Some(libc::EEXIST) => unsafe { libc::_exit(1) },
-                    Err(_) => unsafe { libc::_exit(2) },
-                    Ok(_) => unsafe { libc::_exit(0) },
+                    Err(e) if e.raw_os_error() == Some(libc::EEXIST) => {
+                        crate::sys::exit_immediately(1)
+                    }
+                    Err(_) => crate::sys::exit_immediately(2),
+                    Ok(_) => crate::sys::exit_immediately(0),
                 }
             }
             -1 => break 'probe,
             pid => {
-                let mut wstatus = 0;
-                unsafe { libc::waitpid(pid, &mut wstatus, 0) };
+                let wstatus = crate::sys::waitpid(pid, 0).map(|(_, s)| s).unwrap_or(0);
                 if libc::WIFEXITED(wstatus) && libc::WEXITSTATUS(wstatus) == 1 {
                     crate::verbose!(Some(tracee), 1, "enabling f2fs bug workaround");
                     result = true;

@@ -613,7 +613,7 @@ fn host_interfaces() -> Vec<HostIf> {
         let name = ifa.name().to_bytes().to_vec();
 
         let idx = out.iter().position(|h: &HostIf| h.name == name);
-        let ifflags = ifa.flags() as u32;
+        let ifflags = ifa.flags();
         let entry = match idx {
             Some(i) => &mut out[i],
             None => {

@@ -6,7 +6,7 @@
 //! return the raw libc status (`< 0` on error, inspect [`errno`]) so call
 //! sites keep C-identical errno semantics.
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::os::unix::io::RawFd;
 
 /* ================================================================== */
@@ -67,7 +67,7 @@ pub fn pod_from_bytes<T: Copy>(bytes: &[u8]) -> Option<T> {
     if bytes.len() < size_of::<T>() {
         return None;
     }
-    if !(bytes.as_ptr() as usize).is_multiple_of(align_of::<T>()) {
+    if !(bytes.as_ptr() as usize) % align_of::<T>() == 0 {
         // Fall back to an unaligned copy via a boxed buffer.
         let mut buf = vec![0u8; size_of::<T>() + align_of::<T>()];
         let base = buf.as_ptr() as usize;
@@ -172,6 +172,28 @@ pub fn signal(signum: i32, handler: usize) -> usize {
     // SAFETY: standard libc call; handler is a valid `sighandler_t`
     // (SIG_DFL/SIG_IGN or a function address, per libc's representation).
     unsafe { libc::signal(signum, handler) as usize }
+}
+
+/// `strerror(errno)` → owned message string.
+pub fn strerror(errno: i32) -> String {
+    // SAFETY: strerror returns a pointer to a static, NUL-terminated
+    // string for any input on glibc.
+    unsafe { CStr::from_ptr(libc::strerror(errno)) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// `prlimit64(pid, resource, new, old)` → 0 or -1.
+pub fn prlimit64(
+    pid: libc::pid_t,
+    resource: u32,
+    new: Option<&libc::rlimit64>,
+    old: Option<&mut libc::rlimit64>,
+) -> i32 {
+    let newp = new.map_or(std::ptr::null(), |r| r as *const _);
+    let oldp = old.map_or(std::ptr::null_mut(), |r| r as *mut _);
+    // SAFETY: both pointers are valid or NULL per the prlimit64 contract.
+    unsafe { libc::prlimit64(pid, resource, newp, oldp) }
 }
 
 /// `sigaction(signum, act, oldact)`.
@@ -319,6 +341,41 @@ pub fn dup(fd: RawFd) -> RawFd {
     unsafe { libc::dup(fd) }
 }
 
+/// `dup2(fd, fd2)` → fd2 or -1.
+pub fn dup2(fd: RawFd, fd2: RawFd) -> RawFd {
+    // SAFETY: standard libc call; errno reports failure.
+    unsafe { libc::dup2(fd, fd2) }
+}
+
+/// Wrap a raw fd as an owned `File` (the fd must be uniquely owned).
+pub fn file_from_fd(fd: RawFd) -> std::fs::File {
+    use std::os::unix::io::FromRawFd;
+    // SAFETY: the caller transfers unique ownership of `fd`.
+    unsafe { std::fs::File::from_raw_fd(fd) }
+}
+
+/// Anonymous temp-file fd, like `tmpfile()` but returning a bare fd:
+/// `O_TMPFILE` on $TMPDIR (then /tmp), falling back to create+unlink.
+pub fn tmpfile_fd() -> RawFd {
+    use std::os::unix::ffi::OsStrExt;
+    let mut dirs: Vec<CString> = Vec::new();
+    if let Some(d) = std::env::var_os("TMPDIR") {
+        dirs.push(CString::new(d.as_os_str().as_bytes()).unwrap_or_default());
+    }
+    dirs.push(c"/tmp".to_owned());
+    for dir in &dirs {
+        if dir.as_bytes().is_empty() {
+            continue;
+        }
+        // SAFETY: standard libc call; errno reports failure.
+        let fd = unsafe { libc::open(dir.as_ptr(), libc::O_TMPFILE | libc::O_RDWR, 0o600) };
+        if fd >= 0 {
+            return fd;
+        }
+    }
+    -1
+}
+
 /// `fcntl(fd, cmd, arg)`.
 pub fn fcntl(fd: RawFd, cmd: i32, arg: i32) -> i32 {
     // SAFETY: standard variadic call with an integer arg; errno reports
@@ -348,6 +405,18 @@ pub fn lstat(path: &CStr) -> Result<libc::stat, i32> {
     let mut st: libc::stat = zeroed();
     // SAFETY: &mut st is a valid out-pointer.
     if unsafe { libc::lstat(path.as_ptr(), &mut st) } < 0 {
+        return Err(errno());
+    }
+    Ok(st)
+}
+
+/// `statfs64(path)` → filled `statfs64`, or `Err(errno)` (errno may be
+/// 0 on failure — the C reference maps that to -EPERM at call sites).
+pub fn statfs64(path: &CStr) -> Result<libc::statfs64, i32> {
+    let mut st: libc::statfs64 = zeroed();
+    clear_errno();
+    // SAFETY: &mut st is a valid out-pointer.
+    if unsafe { libc::statfs64(path.as_ptr(), &mut st) } != 0 {
         return Err(errno());
     }
     Ok(st)
@@ -764,16 +833,71 @@ pub fn sockaddr_as_ll(sa: &libc::sockaddr) -> Option<&libc::sockaddr_ll> {
 /* ptrace                                                             */
 /* ================================================================== */
 
-/// `ptrace(request, pid, addr, data)`.
-pub fn ptrace(
-    request: libc::c_uint,
-    pid: libc::pid_t,
-    addr: *mut libc::c_void,
-    data: *mut libc::c_void,
-) -> i64 {
+/// `ptrace(request, pid, addr, data)` — addr/data are taken as raw
+/// `usize` words since most requests use them as scalars or opaque
+/// remote addresses; pointer-valued callers cast with `as usize`.
+pub fn ptrace(request: libc::c_uint, pid: libc::pid_t, addr: usize, data: usize) -> i64 {
     // SAFETY: standard ptrace call; addr/data semantics are per-request
     // and provided by the caller. errno reports failure.
-    unsafe { libc::ptrace(request, pid, addr, data) as i64 }
+    unsafe {
+        libc::ptrace(
+            request,
+            pid,
+            addr as *mut libc::c_void,
+            data as *mut libc::c_void,
+        ) as i64
+    }
+}
+
+/// `process_vm_readv` single-iovec: copy `local.len()` bytes from
+/// `remote` in `pid`'s address space → bytes read or -1.
+pub fn process_vm_read(pid: libc::pid_t, local: &mut [u8], remote: u64) -> isize {
+    let liovec = libc::iovec {
+        iov_base: local.as_mut_ptr() as *mut _,
+        iov_len: local.len(),
+    };
+    let riovec = libc::iovec {
+        iov_base: remote as usize as *mut _,
+        iov_len: local.len(),
+    };
+    // SAFETY: `local` is a valid writable slice; the remote range is
+    // kernel-validated. Partial/failed reads are reported by status.
+    unsafe { libc::process_vm_readv(pid, &liovec, 1, &riovec, 1, 0) }
+}
+
+/// `process_vm_writev` single-iovec: write `local` into `remote` in
+/// `pid`'s address space → bytes written or -1.
+pub fn process_vm_write(pid: libc::pid_t, local: &[u8], remote: u64) -> isize {
+    let liovec = libc::iovec {
+        iov_base: local.as_ptr() as *mut _,
+        iov_len: local.len(),
+    };
+    let riovec = libc::iovec {
+        iov_base: remote as usize as *mut _,
+        iov_len: local.len(),
+    };
+    // SAFETY: `local` is a valid readable slice; the remote range is
+    // kernel-validated.
+    unsafe { libc::process_vm_writev(pid, &liovec, 1, &riovec, 1, 0) }
+}
+
+/// `process_vm_writev` scatter-gather: write `srcs` concatenated at
+/// `remote` in `pid`'s address space → bytes written or -1.
+pub fn process_vm_writev_bufs(pid: libc::pid_t, srcs: &[&[u8]], remote: u64) -> isize {
+    let local: Vec<libc::iovec> = srcs
+        .iter()
+        .map(|s| libc::iovec {
+            iov_base: s.as_ptr() as *mut _,
+            iov_len: s.len(),
+        })
+        .collect();
+    let remote_iov = libc::iovec {
+        iov_base: remote as usize as *mut _,
+        iov_len: srcs.iter().map(|s| s.len()).sum(),
+    };
+    // SAFETY: every slice in `srcs` outlives the call; the remote range
+    // is kernel-validated.
+    unsafe { libc::process_vm_writev(pid, local.as_ptr(), local.len() as _, &remote_iov, 1, 0) }
 }
 
 /// `PTRACE_GETSIGINFO` → filled `siginfo_t`, or `Err(errno)`.
@@ -782,8 +906,8 @@ pub fn ptrace_getsiginfo(pid: libc::pid_t) -> Result<libc::siginfo_t, i32> {
     let status = ptrace(
         crate::ptrace::ptc::PTRACE_GETSIGINFO as u32,
         pid,
-        std::ptr::null_mut(),
-        &mut si as *mut libc::siginfo_t as *mut libc::c_void,
+        0,
+        &mut si as *mut libc::siginfo_t as usize,
     );
     if status < 0 { Err(errno()) } else { Ok(si) }
 }
@@ -794,20 +918,15 @@ pub fn ptrace_geteventmsg(pid: libc::pid_t) -> Result<libc::c_ulong, i32> {
     let status = ptrace(
         crate::ptrace::ptc::PTRACE_GETEVENTMSG as u32,
         pid,
-        std::ptr::null_mut(),
-        &mut msg as *mut libc::c_ulong as *mut libc::c_void,
+        0,
+        &mut msg as *mut libc::c_ulong as usize,
     );
     if status < 0 { Err(errno()) } else { Ok(msg) }
 }
 
 /// `PTRACE_SETOPTIONS(pid, mask)`.
 pub fn ptrace_setoptions(pid: libc::pid_t, mask: usize) -> i64 {
-    ptrace(
-        crate::ptrace::ptc::PTRACE_SETOPTIONS as u32,
-        pid,
-        std::ptr::null_mut(),
-        mask as *mut libc::c_void,
-    )
+    ptrace(crate::ptrace::ptc::PTRACE_SETOPTIONS as u32, pid, 0, mask)
 }
 
 /// `si_pid` of a signal's `siginfo_t`.

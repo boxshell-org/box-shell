@@ -69,14 +69,20 @@ fn substitute_binding_stat(
         }
     }
 
-    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    let mut st: libc::stat = crate::sys::zeroed();
     let status;
     if should_skip_file_access_due_to_f2fs_bug(tracee, host_path.as_bytes()) {
         status = -1;
-        unsafe { *libc::__errno_location() = libc::ENOENT };
+        crate::sys::set_errno(libc::ENOENT);
     } else {
         let c = std::ffi::CString::new(host_path.as_bytes()).map_err(|_| -libc::EINVAL)?;
-        status = unsafe { libc::lstat(c.as_ptr(), &mut st) };
+        status = match crate::sys::lstat(&c) {
+            Ok(v) => {
+                st = v;
+                0
+            }
+            Err(_) => -1,
+        };
         // /linkerconfig exists on Android but cannot be stat'ed.
         if status < 0
             && crate::path::errno() == libc::EACCES
@@ -220,7 +226,7 @@ pub fn canonicalize(
             let mut buf = vec![0u8; PATH_MAX];
             let n = {
                 let c = std::ffi::CString::new(host_path.as_bytes()).map_err(|_| -libc::EINVAL)?;
-                let r = unsafe { libc::readlink(c.as_ptr(), buf.as_mut_ptr() as *mut _, PATH_MAX) };
+                let r = crate::sys::readlink(&c, &mut buf);
                 if r < 0 {
                     return Err(-crate::path::errno());
                 }

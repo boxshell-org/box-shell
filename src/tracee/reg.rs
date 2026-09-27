@@ -149,17 +149,20 @@ fn reg_offsets(tracee: &Tracee, version: RegVersion) -> &'static [usize; NB_REGS
     }
 }
 
-fn reg_ptr(regs: &Regs, off: usize) -> *const u64 {
-    unsafe { (regs as *const Regs as *const u8).add(off) as *const u64 }
+fn reg_read(regs: &Regs, off: usize) -> u64 {
+    crate::sys::as_bytes(regs)[off..off + 8]
+        .try_into()
+        .map(u64::from_ne_bytes)
+        .unwrap_or(0)
 }
-fn reg_ptr_mut(regs: &mut Regs, off: usize) -> *mut u64 {
-    unsafe { (regs as *mut Regs as *mut u8).add(off) as *mut u64 }
+fn reg_write(regs: &mut Regs, off: usize, v: u64) {
+    crate::sys::as_bytes_mut(regs)[off..off + 8].copy_from_slice(&v.to_ne_bytes());
 }
 
 /// `peek_reg()` — read the cached value of `reg` in `version`.
 pub fn peek_reg(tracee: &Tracee, version: RegVersion, reg: Reg) -> Word {
     let off = reg_offsets(tracee, version)[reg as usize];
-    let mut v = unsafe { *reg_ptr(&tracee.regs[version.idx()], off) };
+    let mut v = reg_read(&tracee.regs[version.idx()], off);
     if is_32on64_mode(tracee) {
         v &= 0xFFFF_FFFF;
     }
@@ -172,7 +175,7 @@ pub fn poke_reg(tracee: &mut Tracee, reg: Reg, value: Word) {
         return;
     }
     let off = reg_offsets(tracee, RegVersion::Current)[reg as usize];
-    unsafe { *reg_ptr_mut(&mut tracee.regs[RegVersion::Current.idx()], off) = value };
+    reg_write(&mut tracee.regs[RegVersion::Current.idx()], off, value);
     tracee.regs_were_changed = true;
 }
 
@@ -186,14 +189,12 @@ pub fn save_current_regs(tracee: &mut Tracee, version: RegVersion) {
 
 /// `fetch_regs()` — refresh the CURRENT bank from the kernel.
 pub fn fetch_regs(tracee: &mut Tracee) -> i32 {
-    let status = unsafe {
-        libc::ptrace(
-            crate::ptrace::ptc::PTRACE_GETREGS as u32,
-            tracee.pid,
-            std::ptr::null_mut::<libc::c_void>(),
-            &mut tracee.regs[RegVersion::Current.idx()] as *mut _ as *mut libc::c_void,
-        )
-    };
+    let status = crate::sys::ptrace(
+        crate::ptrace::ptc::PTRACE_GETREGS as u32,
+        tracee.pid,
+        0,
+        &mut tracee.regs[RegVersion::Current.idx()] as *mut _ as usize,
+    );
     if status < 0 {
         return status as i32;
     }
@@ -227,21 +228,19 @@ pub fn push_specific_regs(tracee: &mut Tracee, including_sysnum: bool) -> i32 {
             ] {
                 let src_off = reg_offsets(tracee, from)[r as usize];
                 let dst_off = reg_offsets(tracee, RegVersion::Current)[r as usize];
-                let v = unsafe { *reg_ptr(&tracee.regs[from.idx()], src_off) };
-                unsafe { *reg_ptr_mut(&mut tracee.regs[RegVersion::Current.idx()], dst_off) = v };
+                let v = reg_read(&tracee.regs[from.idx()], src_off);
+                reg_write(&mut tracee.regs[RegVersion::Current.idx()], dst_off, v);
             }
         }
         // including_sysnum is a no-op on x86_64: orig_rax is part of the
         // register set pushed by PTRACE_SETREGS anyway.
         let _ = including_sysnum;
-        let status = unsafe {
-            libc::ptrace(
-                crate::ptrace::ptc::PTRACE_SETREGS as u32,
-                tracee.pid,
-                std::ptr::null_mut::<libc::c_void>(),
-                &tracee.regs[RegVersion::Current.idx()] as *const _ as *const libc::c_void,
-            )
-        };
+        let status = crate::sys::ptrace(
+            crate::ptrace::ptc::PTRACE_SETREGS as u32,
+            tracee.pid,
+            0,
+            &tracee.regs[RegVersion::Current.idx()] as *const _ as usize,
+        );
         if status < 0 {
             return status as i32;
         }

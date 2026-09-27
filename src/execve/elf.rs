@@ -121,9 +121,42 @@ pub const DT_RPATH: i64 = 15;
 pub const DT_RUNPATH: i64 = 29;
 
 impl ElfHeader {
+    /// POD-union views. Both variants are plain-data layouts sharing the
+    /// same storage; every bit pattern is a valid value for either, so
+    /// a mis-guessed read is a logic error, never UB.
+    #[inline]
+    fn as32(&self) -> &ElfHeader32 {
+        // SAFETY: ElfHeader32 is all-POD; any stored bit pattern is valid.
+        unsafe { &self.class32 }
+    }
+    #[inline]
+    fn as64(&self) -> &ElfHeader64 {
+        // SAFETY: ElfHeader64 is all-POD; any stored bit pattern is valid.
+        unsafe { &self.class64 }
+    }
+    #[inline]
+    fn as32_mut(&mut self) -> &mut ElfHeader32 {
+        // SAFETY: ElfHeader32 is all-POD; any stored bit pattern is valid.
+        unsafe { &mut self.class32 }
+    }
+    #[inline]
+    fn as64_mut(&mut self) -> &mut ElfHeader64 {
+        // SAFETY: ElfHeader64 is all-POD; any stored bit pattern is valid.
+        unsafe { &mut self.class64 }
+    }
+    /// Mutate `e_entry` in the active class.
+    pub fn set_entry_bias(&mut self, delta: u64) {
+        if self.is_class64() {
+            let e = self.as64_mut().e_entry;
+            self.as64_mut().e_entry = e.wrapping_add(delta);
+        } else {
+            let e = self.as32_mut().e_entry;
+            self.as32_mut().e_entry = e.wrapping_add(delta as u32);
+        }
+    }
     #[inline]
     pub fn ident(&self, index: usize) -> u8 {
-        unsafe { self.class32.e_ident[index] }
+        self.as32().e_ident[index]
     }
     #[inline]
     pub fn is_class32(&self) -> bool {
@@ -140,19 +173,17 @@ impl ElfHeader {
         f32: impl Fn(&ElfHeader32) -> u32,
         f64: impl Fn(&ElfHeader64) -> u64,
     ) -> u64 {
-        unsafe {
-            if self.is_class64() {
-                f64(&self.class64)
-            } else {
-                f32(&self.class32) as u64
-            }
+        if self.is_class64() {
+            f64(self.as64())
+        } else {
+            f32(self.as32()) as u64
         }
     }
     pub fn e_type(&self) -> u16 {
-        unsafe { self.class64.e_type }
+        self.as64().e_type
     }
     pub fn e_machine(&self) -> u16 {
-        unsafe { self.class64.e_machine }
+        self.as64().e_machine
     }
     pub fn e_entry(&self) -> u64 {
         self.field64(|h| h.e_entry, |h| h.e_entry)
@@ -161,10 +192,10 @@ impl ElfHeader {
         self.field64(|h| h.e_phoff, |h| h.e_phoff)
     }
     pub fn e_phentsize(&self) -> u16 {
-        unsafe { self.class64.e_phentsize }
+        self.as64().e_phentsize
     }
     pub fn e_phnum(&self) -> u16 {
-        unsafe { self.class64.e_phnum }
+        self.as64().e_phnum
     }
     pub fn is_position_independent(&self) -> bool {
         self.e_type() == ET_DYN
@@ -172,6 +203,17 @@ impl ElfHeader {
 }
 
 impl ProgramHeader {
+    /// POD-union views — see `ElfHeader::as32`.
+    #[inline]
+    fn as32(&self) -> &ProgramHeader32 {
+        // SAFETY: all-POD variant; any stored bit pattern is valid.
+        unsafe { &self.class32 }
+    }
+    #[inline]
+    fn as64(&self) -> &ProgramHeader64 {
+        // SAFETY: all-POD variant; any stored bit pattern is valid.
+        unsafe { &self.class64 }
+    }
     #[inline]
     pub fn field(
         &self,
@@ -179,12 +221,10 @@ impl ProgramHeader {
         f32: impl Fn(&ProgramHeader32) -> u32,
         f64: impl Fn(&ProgramHeader64) -> u64,
     ) -> u64 {
-        unsafe {
-            if ehdr.is_class64() {
-                f64(&self.class64)
-            } else {
-                f32(&self.class32) as u64
-            }
+        if ehdr.is_class64() {
+            f64(self.as64())
+        } else {
+            f32(self.as32()) as u64
         }
     }
     pub fn p_type(&self, ehdr: &ElfHeader) -> u64 {
@@ -208,6 +248,17 @@ impl ProgramHeader {
 }
 
 impl DynamicEntry {
+    /// POD-union views — see `ElfHeader::as32`.
+    #[inline]
+    fn as32(&self) -> &DynamicEntry32 {
+        // SAFETY: all-POD variant; any stored bit pattern is valid.
+        unsafe { &self.class32 }
+    }
+    #[inline]
+    fn as64(&self) -> &DynamicEntry64 {
+        // SAFETY: all-POD variant; any stored bit pattern is valid.
+        unsafe { &self.class64 }
+    }
     #[inline]
     pub fn field(
         &self,
@@ -215,12 +266,10 @@ impl DynamicEntry {
         f32: impl Fn(&DynamicEntry32) -> u32,
         f64: impl Fn(&DynamicEntry64) -> u64,
     ) -> u64 {
-        unsafe {
-            if ehdr.is_class64() {
-                f64(&self.class64)
-            } else {
-                f32(&self.class32) as u64
-            }
+        if ehdr.is_class64() {
+            f64(self.as64())
+        } else {
+            f32(self.as32()) as u64
         }
     }
     pub fn d_tag(&self, ehdr: &ElfHeader) -> i64 {
@@ -240,20 +289,14 @@ pub fn known_phentsize(header: &ElfHeader, size: u64) -> bool {
 /// returns Ok((fd, header)); the fd is left open at offset 0.
 pub fn open_elf(t_path: &[u8]) -> Result<(RawFd, ElfHeader), i32> {
     let c = std::ffi::CString::new(t_path).map_err(|_| -libc::EINVAL)?;
-    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY) };
+    let fd = crate::sys::open(&c, libc::O_RDONLY, 0);
     if fd < 0 {
-        return Err(-crate::path::errno());
+        return Err(-crate::sys::errno());
     }
-    let mut ehdr: ElfHeader = unsafe { std::mem::zeroed() };
-    let n = unsafe {
-        libc::read(
-            fd,
-            &mut ehdr as *mut _ as *mut libc::c_void,
-            std::mem::size_of::<ElfHeader>(),
-        )
-    };
+    let mut ehdr: ElfHeader = crate::sys::zeroed();
+    let n = crate::sys::read(fd, crate::sys::as_bytes_mut(&mut ehdr));
     if n < std::mem::size_of::<ElfHeader32>() as isize {
-        unsafe { libc::close(fd) };
+        crate::sys::close(fd);
         return Err(-libc::ENOEXEC);
     }
     if ehdr.ident(0) != 0x7f
@@ -261,11 +304,11 @@ pub fn open_elf(t_path: &[u8]) -> Result<(RawFd, ElfHeader), i32> {
         || ehdr.ident(2) != b'L'
         || ehdr.ident(3) != b'F'
     {
-        unsafe { libc::close(fd) };
+        crate::sys::close(fd);
         return Err(-libc::ENOEXEC);
     }
     if !ehdr.is_class32() && !ehdr.is_class64() {
-        unsafe { libc::close(fd) };
+        crate::sys::close(fd);
         return Err(-libc::ENOEXEC);
     }
     Ok((fd, ehdr))
@@ -282,7 +325,7 @@ pub fn is_host_elf(tracee: &Tracee, t_path: &[u8]) -> bool {
     }
     match open_elf(t_path) {
         Ok((fd, ehdr)) => {
-            unsafe { libc::close(fd) };
+            crate::sys::close(fd);
             if crate::arch::HOST_ELF_MACHINE.contains(&ehdr.e_machine()) {
                 crate::verbose!(
                     Some(tracee),
@@ -313,16 +356,13 @@ pub fn iterate_program_headers(
         return -libc::EINVAL;
     }
     for i in 0..phnum {
-        let mut phdr: ProgramHeader = unsafe { std::mem::zeroed() };
+        let mut phdr: ProgramHeader = crate::sys::zeroed();
         let off = phoff + i * phentsize;
-        let n = unsafe {
-            libc::pread(
-                fd,
-                &mut phdr as *mut _ as *mut libc::c_void,
-                phentsize as usize,
-                off as i64,
-            )
-        };
+        let n = crate::sys::pread(
+            fd,
+            &mut crate::sys::as_bytes_mut(&mut phdr)[..phentsize as usize],
+            off as i64,
+        );
         if n != phentsize as isize {
             return -libc::EIO;
         }

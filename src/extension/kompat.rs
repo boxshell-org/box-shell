@@ -880,8 +880,14 @@ fn handle_sysexit_end(
 
 /// `parse_utsname()` — fill `config` from a `-k` argument string.
 fn parse_utsname(config: &mut Config, string: &str) -> i32 {
-    let mut host_uts: libc::utsname = unsafe { std::mem::zeroed() };
-    let status = unsafe { libc::uname(&mut host_uts) };
+    let mut host_uts: libc::utsname = crate::sys::zeroed();
+    let status = match crate::sys::uname() {
+        Ok(u) => {
+            host_uts = u;
+            0
+        }
+        Err(_) => -1,
+    };
     if status >= 0 {
         let field = |f: &[libc::c_char; 65]| f.iter().map(|&c| c as u8).collect::<Vec<u8>>();
         let mut host = Utsname::default();

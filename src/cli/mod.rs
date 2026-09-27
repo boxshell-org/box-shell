@@ -923,7 +923,8 @@ fn initialize_cwd(tracee: &mut Tracee) -> Result<(), i32> {
     path.chop_finality();
 
     tracee.fs.borrow_mut().cwd = path.clone();
-    unsafe { libc::setenv(c"PWD".as_ptr(), path.as_c_bytes().as_ptr() as *const _, 1) };
+    let value = std::ffi::CString::new(path.as_bytes()).unwrap_or_default();
+    crate::sys::setenv(c"PWD", &value, true);
     Ok(())
 }
 
@@ -1160,7 +1161,7 @@ fn expand_front_variable(string: &str) -> String {
 pub fn run(tracee_rc: &TraceeRef, args: &[String]) -> i32 {
     {
         let mut t = tracee_rc.borrow_mut();
-        let pid = unsafe { libc::getpid() };
+        let pid = crate::sys::getpid();
         let old_key = t.pid;
         t.pid = pid;
         drop(t);
