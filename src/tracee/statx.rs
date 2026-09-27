@@ -56,7 +56,7 @@ pub struct StatxSyscallState {
 
 const STATX_TYPE: u64 = 0x0001;
 const STATX_MODE: u64 = 0x0002;
-const STATX_NLINK: u64 = 0x0004;
+pub const STATX_NLINK: u64 = 0x0004;
 const STATX_UID: u64 = 0x0008;
 const STATX_GID: u64 = 0x0010;
 const STATX_ATIME: u64 = 0x0020;

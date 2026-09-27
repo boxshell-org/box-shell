@@ -571,6 +571,7 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
         fd: -1,
         host_path: FixedPath::new(),
         referer: FixedPath::new(),
+        substituted: false,
     };
 
     if status == 1 {
@@ -648,8 +649,8 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
     Flow::Result(new_size as i32)
 }
 
-fn proc_fd_substituted(_s: &ReadlinkProcFdState) -> bool {
-    false // Extensions set this when they rewrite host_path; see link2symlink.
+fn proc_fd_substituted(s: &ReadlinkProcFdState) -> bool {
+    s.substituted
 }
 
 /// sscanf("/proc/%d/fd/%d%c") — detect "/proc/<pid>/fd/<fd>" referers.

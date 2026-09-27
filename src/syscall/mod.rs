@@ -28,6 +28,8 @@ pub struct ReadlinkProcFdState {
     pub fd: i32,
     pub host_path: FixedPath,
     pub referer: FixedPath,
+    /// Set by an extension when it rewrote `host_path` (link2symlink).
+    pub substituted: bool,
 }
 
 /// `get_sysarg_path()` — read the path pointed to by `reg` of the current
