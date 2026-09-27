@@ -35,7 +35,6 @@ pub fn ldso_env_passthru(
     offset: usize,
 ) -> i32 {
     let mut has_seen_library_path = false;
-    let mut inserted = 0usize;
 
     for i in 0..envp.entries.len() {
         let env = match read_xpointee_as_string(tracee, envp, i) {
@@ -63,17 +62,16 @@ pub fn ldso_env_passthru(
                 if is_env_name(&env, $name) {
                     $seen = true;
                     // Errors are not fatal here (per the C code).
-                    let mut off = offset + inserted;
-                    if resize_array_of_xpointers(argv, off, 2) >= 0 {
+                    // Each pair is inserted at `offset` so later entries push
+                    // earlier ones right, like the C code.
+                    if resize_array_of_xpointers(argv, offset, 2) >= 0 {
                         let mut v = env.clone();
                         while v.last() == Some(&0) {
                             v.pop();
                         }
-                        write_xpointees(argv, off, &[define.as_bytes(), &v]);
+                        write_xpointees(argv, offset, &[define.as_bytes(), &v]);
                     }
                     write_xpointee_string(envp, i, b"");
-                    let _ = &mut off;
-                    inserted += 2;
                     continue;
                 }
             };
@@ -106,9 +104,8 @@ pub fn ldso_env_passthru(
     }
 
     if !has_seen_library_path {
-        let off = offset + inserted;
-        if resize_array_of_xpointers(argv, off, 2) >= 0 {
-            write_xpointees(argv, off, &[undefine.as_bytes(), b"LD_LIBRARY_PATH"]);
+        if resize_array_of_xpointers(argv, offset, 2) >= 0 {
+            write_xpointees(argv, offset, &[undefine.as_bytes(), b"LD_LIBRARY_PATH"]);
         }
     }
     0
