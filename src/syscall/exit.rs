@@ -171,7 +171,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
                 } else {
                     tracee.auxv_fd = syscall_result as i32;
                     tracee.sysexit_pending = true;
-                    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+                    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
                     Flow::End
                 }
             }
@@ -183,16 +183,15 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
                 Flow::End
             } else {
                 let result = syscall_result;
-                if result == 0 || (result as i64) < 0 {
-                    Flow::End
-                } else if peek_reg(tracee, RegVersion::Original, Reg::Sysarg1) as i32
-                    != tracee.auxv_fd
+                if result == 0
+                    || (result as i64) < 0
+                    || peek_reg(tracee, RegVersion::Original, Reg::Sysarg1) as i32 != tracee.auxv_fd
                 {
                     Flow::End
                 } else {
                     patch_execfn_in_auxv(tracee, result);
                     tracee.sysexit_pending = true;
-                    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+                    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
                     Flow::End
                 }
             }
@@ -418,18 +417,15 @@ fn socketcall_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
     const SYS_GETPEERNAME: Word = 7;
     const SYS_ACCEPT4: Word = 18;
 
-    let status;
-    match peek_reg(tracee, RegVersion::Original, Reg::Sysarg1) {
+    let status = match peek_reg(tracee, RegVersion::Original, Reg::Sysarg1) {
         n if n == SYS_ACCEPT || n == SYS_ACCEPT4 => {
             let sock_addr = peekw!(arg(2));
             if sock_addr == 0 {
                 return Flow::End;
             }
-            status = 1;
+            1
         }
-        n if n == SYS_GETSOCKNAME || n == SYS_GETPEERNAME => {
-            status = 1;
-        }
+        n if n == SYS_GETSOCKNAME || n == SYS_GETPEERNAME => 1,
         n if n == SYS_BIND || n == SYS_CONNECT => {
             // Restore args overwritten at enter.
             let s5 = peek_reg(tracee, RegVersion::Modified, Reg::Sysarg5);
@@ -439,7 +435,7 @@ fn socketcall_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
             return Flow::End;
         }
         _ => return Flow::End,
-    }
+    };
 
     if (syscall_result as i64) < 0 || status == 0 {
         return Flow::End;
@@ -516,7 +512,7 @@ fn rename_exit(tracee: &mut Tracee) -> Flow {
 
     let mut updated = FixedPath::from_bytes(cwd.as_bytes());
     let _ = updated.substitute_prefix(old_length, &new_path.as_bytes()[..new_length]);
-    let _ = tracee.fs.borrow_mut().cwd.set(updated.as_bytes());
+    tracee.fs.borrow_mut().cwd.set(updated.as_bytes());
     Flow::Result(0)
 }
 
@@ -581,9 +577,8 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
         }
         proc_fd.pid = tracee.pid;
         proc_fd.fd = dirfd;
-        match crate::path::readlink_proc_pid_fd(tracee.pid, dirfd, &mut referer) {
-            Err(e) => return Flow::Result(e),
-            Ok(()) => {}
+        if let Err(e) = crate::path::readlink_proc_pid_fd(tracee.pid, dirfd, &mut referer) {
+            return Flow::Result(e);
         }
     } else if let Some((fd_pid, fd_number)) = parse_proc_fd(referer.as_bytes()) {
         proc_fd.pid = fd_pid;

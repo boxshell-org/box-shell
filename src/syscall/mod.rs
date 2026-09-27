@@ -113,7 +113,7 @@ pub fn translate_syscall(tracee: &mut Tracee) {
                 let _ =
                     crate::extension::notify(tracee, &mut crate::extension::Event::ChainedEnter);
             }
-            tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+            tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
         }
 
         if status < 0 {
@@ -127,13 +127,13 @@ pub fn translate_syscall(tracee: &mut Tracee) {
             // faked result clobbered — force the exit stage to restore it.
             if is_voided_syscall(tracee, RegVersion::Current) && !kernel_cancels_voided_syscall() {
                 tracee.sysexit_pending = true;
-                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
             }
         }
 
         // If there's no sysexit stage (seccomp+PTRACE_CONT), restore the
         // stack pointer now.
-        if tracee.restart_how == crate::ptrace::ptc::PTRACE_CONT as i32 {
+        if tracee.restart_how == crate::ptrace::ptc::PTRACE_CONT {
             suppressed_syscall_status = tracee.status;
             tracee.status = 0;
             let sp = peek_reg(tracee, RegVersion::Original, Reg::StackPointer);
@@ -177,7 +177,7 @@ pub fn translate_syscall(tracee: &mut Tracee) {
                 chain::restart_current_syscall_as_chained(tracee);
             } else if suppressed_syscall_status != 0 {
                 tracee.status = suppressed_syscall_status;
-                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
             }
 
             // Force the real syscall to fail with invalid arguments.

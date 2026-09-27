@@ -1160,7 +1160,7 @@ pub fn scatter_fake_netlink_reply(
 /// `nl_type_reconfigures()` — rtnetlink groups: NEW/DEL/GET/SET;
 /// everything but GET reconfigures.
 fn nl_type_reconfigures(ty: u16) -> bool {
-    if ty < RTM_BASE || ty > RTM_MAX {
+    if !(RTM_BASE..=RTM_MAX).contains(&ty) {
         return false;
     }
     ((ty - RTM_BASE) & 3) != 2
@@ -1198,7 +1198,7 @@ pub fn note_netns_netlink_reply(tracee: &mut Tracee, fd: i32) {
         return;
     }
     tracee.sysexit_pending = true;
-    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
 }
 
 /// `handle_netlink_reply_exit()` — at the exit of recvfrom/recvmsg, turn

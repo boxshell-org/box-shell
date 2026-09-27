@@ -352,10 +352,7 @@ pub fn peek_uint64(tracee: &Tracee, address: Word) -> u64 {
         unsafe { *errno_ptr() = 0 };
         return u64::from_ne_bytes(buf);
     }
-    match ptrace_peekdata(tracee.pid, address) {
-        Ok(w) => w as u64,
-        Err(_) => 0,
-    }
+    ptrace_peekdata(tracee.pid, address).unwrap_or_default()
 }
 
 /// `alloc_mem()` — grow the tracee stack downward by `size` bytes.

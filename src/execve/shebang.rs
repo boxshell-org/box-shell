@@ -48,10 +48,12 @@ pub fn translate_and_check_exec(
     0
 }
 
+/// `#!interpreter [arg]` split result: `Ok(None)` = not a script,
+/// `Ok(Some((interp, arg)))` = shebang found, `Err(-errno)` = I/O failure.
+type Shebang = Result<Option<(Vec<u8>, Vec<u8>)>, i32>;
+
 /// `extract_shebang()` — read the `#!interpreter [arg]` line of `host_path`.
-/// Returns `Ok(None)` when it isn't a script, `Ok(Some((interp, arg)))` when
-/// a shebang was found, `Err(-errno)` otherwise.
-fn extract_shebang(host_path: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>, i32> {
+fn extract_shebang(host_path: &[u8]) -> Shebang {
     let c = std::ffi::CString::new(host_path).map_err(|_| -libc::EINVAL)?;
     let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY) };
     if fd < 0 {
@@ -62,7 +64,7 @@ fn extract_shebang(host_path: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>, i32> 
     result
 }
 
-fn extract_shebang_fd(fd: i32) -> Result<Option<(Vec<u8>, Vec<u8>)>, i32> {
+fn extract_shebang_fd(fd: i32) -> Shebang {
     let read1 = |fd: i32| -> Result<u8, i32> {
         let mut b = [0u8; 1];
         let n = unsafe { libc::read(fd, b.as_mut_ptr() as *mut _, 1) };
@@ -167,7 +169,7 @@ fn extract_shebang_fd(fd: i32) -> Result<Option<(Vec<u8>, Vec<u8>)>, i32> {
     }
     let _ = i;
     // Remove trailing blanks.
-    while argument.last().map_or(false, |b| *b == b' ' || *b == b'\t') {
+    while argument.last().is_some_and(|b| *b == b' ' || *b == b'\t') {
         argument.pop();
     }
     strip_nul(&mut user_path);

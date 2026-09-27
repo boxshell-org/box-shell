@@ -126,22 +126,22 @@ pub fn reap() {
             &mut *std::ptr::addr_of_mut!(LAST_REAP),
         );
 
-        for i in 0..MAX_SHADOW_PIPES {
-            if SHADOWS[i].fd < 0 {
+        for shadow in (*std::ptr::addr_of_mut!(SHADOWS)).iter_mut() {
+            if shadow.fd < 0 {
                 continue;
             }
             let mut pfd = libc::pollfd {
-                fd: SHADOWS[i].fd,
+                fd: shadow.fd,
                 events: 0,
                 revents: 0,
             };
             let hup = libc::poll(&mut pfd, 1, 0) > 0 && (pfd.revents & libc::POLLHUP) != 0;
             if hup
-                || writer_would_block(SHADOWS[i].fd)
-                || elapsed_ms(&SHADOWS[i].birth) >= SHADOW_MAX_AGE_MS
+                || writer_would_block(shadow.fd)
+                || elapsed_ms(&shadow.birth) >= SHADOW_MAX_AGE_MS
             {
-                libc::close(SHADOWS[i].fd);
-                SHADOWS[i].fd = -1;
+                libc::close(shadow.fd);
+                shadow.fd = -1;
                 SHADOWS_HELD -= 1;
             }
         }

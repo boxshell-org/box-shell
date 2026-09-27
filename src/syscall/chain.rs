@@ -101,7 +101,7 @@ pub fn chain_next_syscall(tracee: &mut Tracee) {
                 ip.wrapping_sub(crate::tracee::reg::get_systrap_size(tracee)),
             );
             // Break after exit from this syscall; more may be chained.
-            tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+            tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
         }
     }
 }

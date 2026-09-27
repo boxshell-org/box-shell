@@ -97,7 +97,8 @@ pub enum Event<'a> {
 /// `AnyExtension` — one variant per built-in extension.
 pub enum AnyExtension {
     FakeId0(fake_id0::FakeId0),
-    Link2Symlink(link2symlink::Link2symlink),
+    // Boxed: this variant is ~8KB, dwarfing all the others.
+    Link2Symlink(Box<link2symlink::Link2symlink>),
     HiddenFiles(hidden_files::HiddenFiles),
     PortSwitch(port_switch::PortSwitch),
     FixSymlinkSize(fix_symlink_size::FixSymlinkSize),
@@ -141,7 +142,7 @@ impl AnyExtension {
         match self {
             AnyExtension::FakeId0(e) => AnyExtension::FakeId0(e.clone_for_child(clone_flags)),
             AnyExtension::Link2Symlink(e) => {
-                AnyExtension::Link2Symlink(e.clone_for_child(clone_flags))
+                AnyExtension::Link2Symlink(Box::new(e.clone_for_child(clone_flags)))
             }
             AnyExtension::HiddenFiles(e) => {
                 AnyExtension::HiddenFiles(e.clone_for_child(clone_flags))
@@ -222,10 +223,7 @@ pub fn has_extension(tracee: &Tracee, pred: impl Fn(&AnyExtension) -> bool) -> b
 /// them from `tracee.extensions`.
 pub fn remove_extension(tracee: &mut Tracee, pred: impl Fn(&AnyExtension) -> bool) {
     for i in 0..tracee.extensions.len() {
-        let matches = tracee.extensions[i]
-            .as_ref()
-            .map(|e| pred(e))
-            .unwrap_or(false);
+        let matches = tracee.extensions[i].as_ref().map(&pred).unwrap_or(false);
         if matches {
             if let Some(mut ext) = tracee.extensions[i].take() {
                 ext.notify(tracee, &mut Event::Removed);

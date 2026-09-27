@@ -161,12 +161,10 @@ fn handle_sysenter_end(tracee: &mut Tracee) -> i32 {
                         }
                     }
                 }
-                SYS_SENDTO => {
-                    if a[4] != 0 {
-                        if let Some(mut sa) = read_sockaddr(tracee, a[4]) {
-                            if is_localhost(&sa) {
-                                mod_port(tracee, true, false, true, &mut sa, Some(&mut a));
-                            }
+                SYS_SENDTO if a[4] != 0 => {
+                    if let Some(mut sa) = read_sockaddr(tracee, a[4]) {
+                        if is_localhost(&sa) {
+                            mod_port(tracee, true, false, true, &mut sa, Some(&mut a));
                         }
                     }
                 }
@@ -186,10 +184,10 @@ impl PortSwitch {
         }
     }
     pub fn filtered_sysnums(&self) -> &'static [(Sysnum, Word)] {
-        &FILTERED_SYSNUMS
+        FILTERED_SYSNUMS
     }
     pub fn clone_for_child(&self, _clone_flags: Word) -> Self {
-        Self::default()
+        Self
     }
 }
 

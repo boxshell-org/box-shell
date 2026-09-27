@@ -289,7 +289,7 @@ pub fn lookup_ipc_object(
 }
 
 /// `sysvipc_get_config()` — borrow the Sysvipc extension of `tracee`.
-pub fn get_config<'a>(tracee: &'a mut Tracee) -> Option<&'a mut Sysvipc> {
+pub fn get_config(tracee: &mut Tracee) -> Option<&mut Sysvipc> {
     for ext in tracee.extensions.iter_mut().flatten() {
         if let crate::extension::AnyExtension::Sysvipc(e) = ext {
             return Some(e);
@@ -396,7 +396,7 @@ fn syscall_common(tracee: &mut Tracee, config: &mut Sysvipc, from_sigsys: bool) 
         if config.chain_state == ChainState::Single {
             config.chain_state = ChainState::NotChained;
         }
-        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
         if from_sigsys {
             restart_syscall_after_seccomp(tracee);
             2
@@ -409,7 +409,7 @@ fn syscall_common(tracee: &mut Tracee, config: &mut Sysvipc, from_sigsys: bool) 
         poke_reg(tracee, Reg::Sysarg3, timeout);
         poke_reg(tracee, Reg::Sysarg4, 0);
         set_sysnum(tracee, Sysnum::ppoll);
-        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
         if from_sigsys {
             config.wait_state = WaitState::RestartedIntoPpoll;
             restart_syscall_after_seccomp(tracee);
@@ -426,7 +426,7 @@ fn syscall_common(tracee: &mut Tracee, config: &mut Sysvipc, from_sigsys: bool) 
             config.status_after_wait = status as u64;
             config.wait_state = WaitState::EnteredGetpid;
             set_sysnum(tracee, Sysnum::getpid);
-            tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+            tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
             1
         }
     }
@@ -457,8 +457,10 @@ impl Sysvipc {
         match event {
             Event::Initialization { .. } => {
                 self.ipc_namespace = Some(Rc::new(RefCell::new(SysVIpcNamespace::default())));
-                let mut process = SysVIpcProcess::default();
-                process.pgid = tracee.pid;
+                let process = SysVIpcProcess {
+                    pgid: tracee.pid,
+                    ..Default::default()
+                };
                 self.process = Some(Rc::new(RefCell::new(process)));
                 0
             }
@@ -470,8 +472,10 @@ impl Sysvipc {
                 if (*clone_flags & libc::CLONE_THREAD as Word) != 0 {
                     self.process = Some(parent_process);
                 } else {
-                    let mut child_process = SysVIpcProcess::default();
-                    child_process.pgid = tracee.pid;
+                    let child_process = SysVIpcProcess {
+                        pgid: tracee.pid,
+                        ..Default::default()
+                    };
                     let child_rc = Rc::new(RefCell::new(child_process));
                     shm::inherit_process(
                         &parent_process.borrow(),
@@ -502,7 +506,7 @@ impl Sysvipc {
                 WaitState::RestartedIntoPpoll => {
                     debug_assert!(get_sysnum(tracee, RegVersion::Current) == Sysnum::ppoll);
                     self.wait_state = WaitState::EnteredPpoll;
-                    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+                    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
                     1
                 }
                 WaitState::RestartedIntoPpollCanceled => {

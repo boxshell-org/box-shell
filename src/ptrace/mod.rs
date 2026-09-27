@@ -220,7 +220,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
             forced_signal = data as i32;
         }
         crate::ptrace::ptc::PTRACE_SINGLESTEP => {
-            ptracee.restart_how = crate::ptrace::ptc::PTRACE_SINGLESTEP as i32;
+            ptracee.restart_how = crate::ptrace::ptc::PTRACE_SINGLESTEP;
             forced_signal = data as i32;
         }
         33 /* PTRACE_SINGLEBLOCK */ => {

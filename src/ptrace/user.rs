@@ -119,6 +119,7 @@ pub fn convert_user_offset(offset: Word) -> Word {
 
 /// `convert_user_regs_struct()` — marshal a 32-bit user regs block to/from
 /// a 64-bit `user_regs_struct` (held as a flat u64 slice).
+#[allow(clippy::needless_range_loop)] // index32 feeds a computed index64.
 pub fn convert_user_regs_struct(
     reverse: bool,
     user_regs64: &mut [u64],

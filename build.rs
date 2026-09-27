@@ -50,9 +50,10 @@ fn generate_sysnums(manifest_dir: &Path, out_dir: &Path) {
     src.push_str("/// Neutral (ABI-agnostic) syscall identifiers.\n");
     src.push_str("/// Variant names deliberately mirror kernel syscall names.\n");
     src.push_str("#[allow(non_camel_case_types)]\n");
-    src.push_str("#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]\n");
+    src.push_str("#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]\n");
     src.push_str("#[repr(u16)]\n");
     src.push_str("pub enum Sysnum {\n");
+    src.push_str("    #[default]\n");
     for name in &names {
         src.push_str(&format!("    {},\n", rust_ident(name)));
     }
@@ -69,7 +70,6 @@ fn generate_sysnums(manifest_dir: &Path, out_dir: &Path) {
         ));
     }
     src.push_str("        }\n    }\n}\n\n");
-    src.push_str("impl Default for Sysnum {\n    fn default() -> Self { Sysnum::Void }\n}\n\n");
 
     for (table_const, file) in [
         ("SYSNUMS_X86_64", "x86_64"),
@@ -127,8 +127,7 @@ fn rust_ident(name: &str) -> String {
     ];
     if name == "void" {
         "Void".to_string()
-    } else if name.chars().next().map_or(false, |c| c.is_ascii_digit()) || KEYWORDS.contains(&name)
-    {
+    } else if name.chars().next().is_some_and(|c| c.is_ascii_digit()) || KEYWORDS.contains(&name) {
         format!("_{}", name)
     } else {
         name.to_string()
@@ -151,7 +150,7 @@ fn build_loader(manifest_dir: &Path, out_dir: &Path) {
     // 32-bit variant is built when the toolchain supports it.
     let (text_addr, rustc_target): (u64, &str) = match target_arch.as_str() {
         "x86_64" => (0x6000_0000_0000, "x86_64-unknown-linux-gnu"),
-        "aarch64" => (0x2000_0000_00, "aarch64-unknown-linux-gnu"),
+        "aarch64" => (0x0020_0000_0000, "aarch64-unknown-linux-gnu"),
         "arm" => (0x2000_0000, "armv7-unknown-linux-gnueabihf"),
         "x86" => (0xa000_0000, "i686-unknown-linux-gnu"),
         _ => panic!("unsupported host architecture for loader: {}", target_arch),

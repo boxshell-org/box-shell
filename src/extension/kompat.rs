@@ -636,13 +636,12 @@ fn adjust_elf_auxv(tracee: &mut Tracee, config: &Config) {
                     vector.value = config.hwcap;
                 }
             }
-            AT_RANDOM => {
+            AT_RANDOM
                 // Skip only if not in forced mode.
-                if config.actual_release != 0 {
+                if config.actual_release != 0 => {
                     push_elf_aux_vectors(tracee, &vectors, vectors_address);
                     return;
                 }
-            }
             _ => {}
         }
     }

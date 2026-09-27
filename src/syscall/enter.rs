@@ -45,7 +45,7 @@ enum PType {
 /// seccomp stop never runs; forcing PTRACE_SYSCALL keeps it proceeding.
 fn force_fork_sysexit(tracee: &mut Tracee) {
     tracee.sysexit_pending = true;
-    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
 }
 
 /// `translate_path2()` — translate `path` and write the host path back into
@@ -98,7 +98,7 @@ fn translate_path2_parent(tracee: &mut Tracee, dir_fd: i32, path: &FixedPath, re
     }
     let mut translated_path = FixedPath::new();
     if join_paths2(&mut translated_path, translated_parent.as_bytes(), leaf).is_err() {
-        return Err::<(), i32>(-libc::ENAMETOOLONG).unwrap_err();
+        return -libc::ENAMETOOLONG;
     }
     set_sysarg_path(tracee, translated_path.as_bytes(), reg)
 }
@@ -577,7 +577,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                     tracee.pending_real_netlink_socket = true;
                 }
                 tracee.sysexit_pending = true;
-                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
             }
             status = 0;
         }
@@ -878,7 +878,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                 }
                 if n > 0 && p.as_bytes() == b"/proc/self/auxv" {
                     tracee.sysexit_pending = true;
-                    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+                    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
                 }
             }
             if (flags & libc::O_NOFOLLOW as Word) != 0
@@ -1098,7 +1098,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
             if arg1 == PR_GET_AUXV {
                 // Sysexit patches AT_EXECFN in the returned buffer.
                 tracee.sysexit_pending = true;
-                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
             }
             if arg1 == PR_GET_NO_NEW_PRIVS {
                 // PRoot sets no_new_privs itself before execve; report the
@@ -1114,7 +1114,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
             if arg1 == PR_SET_NO_NEW_PRIVS {
                 // Observe the tracee's own PR_SET_NO_NEW_PRIVS at sysexit.
                 tracee.sysexit_pending = true;
-                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
             }
         }
         Sysnum::ioctl => {
@@ -1194,7 +1194,7 @@ fn openat_enter(tracee: &mut Tracee, path: &mut FixedPath) -> i32 {
     }
     if tracee.execfn_addr != 0 && path.as_bytes() == b"/proc/self/auxv" {
         tracee.sysexit_pending = true;
-        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
     }
 
     let ty = if (flags & libc::O_NOFOLLOW as Word) != 0

@@ -284,10 +284,10 @@ impl Default for Tracee {
 
 thread_local! {
     static TRACEES: RefCell<HashMap<i32, Rc<RefCell<Tracee>>>> = RefCell::new(HashMap::new());
-    static TRACEE_ORDER: RefCell<Vec<i32>> = RefCell::new(Vec::new());
-    static NEXT_VPID: RefCell<u64> = RefCell::new(1);
+    static TRACEE_ORDER: RefCell<Vec<i32>> = const { RefCell::new(Vec::new()) };
+    static NEXT_VPID: RefCell<u64> = const { RefCell::new(1) };
     /// Pid of the first tracee (for "-k" / last exit status reporting).
-    pub static FIRST_TRACEE_PID: RefCell<i32> = RefCell::new(0);
+    pub static FIRST_TRACEE_PID: RefCell<i32> = const { RefCell::new(0) };
 }
 
 /// Borrow the tracee map immutably for `f`.

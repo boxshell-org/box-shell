@@ -43,7 +43,7 @@ Copyright (C) 2015 STMicroelectronics, licensed under GPL v2 or later.",
 |  __ \\  __ \\_____  _____|   |_\n\
 |   __/     /  _  \\/  _  \\    _|\n\
 |__|  |__|__\\_____/\\_____/\\____|",
-    options: &PROOT_OPTIONS,
+    options: PROOT_OPTIONS,
 };
 
 /* ------------------------------------------------------------------ */
@@ -629,7 +629,7 @@ fn handle_option_0(tracee: &mut Tracee, _value: Option<&str>) -> i32 {
 
 fn handle_option_link2symlink(tracee: &mut Tracee, _value: Option<&str>) -> i32 {
     let status =
-        extension::initialize_extension(tracee, AnyExtension::Link2Symlink(Default::default()), "");
+        extension::initialize_extension(tracee, AnyExtension::Link2Symlink(Box::default()), "");
     if status < 0 {
         note(
             Severity::Warning,

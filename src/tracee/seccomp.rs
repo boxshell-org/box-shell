@@ -23,7 +23,7 @@ use crate::Word;
 pub fn restart_syscall_after_seccomp(tracee: &mut Tracee) {
     // Restore regs when the replaced call exits; also defers signals.
     tracee.restore_original_regs_after_seccomp_event = true;
-    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
 
     // Move the instruction pointer back onto the syscall trap.
     let ip = peek_reg(tracee, RegVersion::Current, Reg::InstrPointer);

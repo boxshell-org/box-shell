@@ -103,10 +103,8 @@ pub fn ldso_env_passthru(
         let _ = known;
     }
 
-    if !has_seen_library_path {
-        if resize_array_of_xpointers(argv, offset, 2) >= 0 {
-            write_xpointees(argv, offset, &[undefine.as_bytes(), b"LD_LIBRARY_PATH"]);
-        }
+    if !has_seen_library_path && resize_array_of_xpointers(argv, offset, 2) >= 0 {
+        write_xpointees(argv, offset, &[undefine.as_bytes(), b"LD_LIBRARY_PATH"]);
     }
     0
 }
@@ -191,12 +189,15 @@ fn add_xpaths(file: &mut std::fs::File, offset: u64, xpaths: &mut Option<Vec<u8>
     0
 }
 
+/// DT_RPATH and DT_RUNPATH payload strings extracted from an ELF binary.
+type Rpaths = (Option<Vec<u8>>, Option<Vec<u8>>);
+
 /// `read_ldso_rpaths()` — extract DT_RPATH/DT_RUNPATH strings.
 fn read_ldso_rpaths(
     file: &mut std::fs::File,
     fd: RawFd,
     elf_header: &ElfHeader,
-) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>), i32> {
+) -> Result<Rpaths, i32> {
     let _ = fd;
     // Find PT_DYNAMIC.
     let mut dynamic: Option<ProgramHeader> = None;
@@ -325,12 +326,14 @@ pub fn rebuild_host_ldso_paths(
     let mut rpath_found = false;
 
     // 1. DT_RPATH (only when no RUNPATH — RUNPATH supersedes it).
-    if rpaths.is_some() && runpaths.is_none() {
-        let r = String::from_utf8_lossy(rpaths.as_ref().unwrap()).into_owned();
-        if add_host_ldso_paths(&mut host_ldso_paths, &r) < 0 {
-            return 0; // not fatal
+    if runpaths.is_none() {
+        if let Some(rp) = &rpaths {
+            let r = String::from_utf8_lossy(rp).into_owned();
+            if add_host_ldso_paths(&mut host_ldso_paths, &r) < 0 {
+                return 0; // not fatal
+            }
+            rpath_found = true;
         }
-        rpath_found = true;
     }
 
     // 2. Initial LD_LIBRARY_PATH.

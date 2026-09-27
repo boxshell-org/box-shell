@@ -130,7 +130,7 @@ fn transfer_load_script(tracee: &mut Tracee) -> i32 {
         || load_info
             .interp
             .as_ref()
-            .map_or(false, |i| i.needs_executable_stack);
+            .is_some_and(|i| i.needs_executable_stack);
 
     let string1 = load_info.user_path.clone() + "\0";
     let string2 = match &load_info.interp {

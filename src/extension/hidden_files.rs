@@ -101,10 +101,10 @@ impl HiddenFiles {
         }
     }
     pub fn filtered_sysnums(&self) -> &'static [(Sysnum, Word)] {
-        &FILTERED_SYSNUMS
+        FILTERED_SYSNUMS
     }
     pub fn clone_for_child(&self, _clone_flags: Word) -> Self {
-        Self::default()
+        Self
     }
 }
 

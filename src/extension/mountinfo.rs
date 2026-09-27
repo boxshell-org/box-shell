@@ -208,6 +208,6 @@ impl Mountinfo {
         &[]
     }
     pub fn clone_for_child(&self, _clone_flags: Word) -> Self {
-        Self::default()
+        Self
     }
 }

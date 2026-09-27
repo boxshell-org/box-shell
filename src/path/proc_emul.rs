@@ -39,7 +39,7 @@ pub fn readlink_proc(
 
     // Normalize /proc/self/... to /proc/<pid>/... so bound paths like
     // "-b /proc/self/fd:/dev/fd" reach the fd handling below.
-    let base_bytes: Vec<u8>;
+
     let tail = &base.as_bytes()[b"/proc/".len()..];
     let normalized: Vec<u8>;
     let base: &[u8] = if tail.starts_with(b"self") && (tail.len() == 4 || tail[4] == b'/') {
@@ -58,7 +58,7 @@ pub fn readlink_proc(
     if pid == 0 {
         return Ok(Action::Default);
     }
-    base_bytes = base.to_vec();
+    let base_bytes: Vec<u8> = base.to_vec();
     let _ = base_bytes;
 
     // Handle links in "/proc/<PID>/".

@@ -105,8 +105,8 @@ pub fn launch_process(tracee_rc: &TraceeRef, argv: &[String]) -> i32 {
             unsafe { libc::kill(libc::getpid(), libc::SIGSTOP) };
 
             if std::env::var_os("PROOT_NO_SECCOMP").is_none() {
-                let mut t = tracee_rc.borrow_mut();
-                let _ = crate::syscall::seccomp::enable_syscall_filtering(&mut t);
+                let t = tracee_rc.borrow_mut();
+                let _ = crate::syscall::seccomp::enable_syscall_filtering(&t);
             }
 
             let argv_c: Vec<std::ffi::CString> = if argv.is_empty() {
@@ -279,7 +279,7 @@ fn install_signal_handlers() {
                     continue;
                 }
                 _ => {
-                    sa.sa_sigaction = libc::SIG_IGN as usize;
+                    sa.sa_sigaction = libc::SIG_IGN;
                 }
             }
             if libc::sigaction(signum, &sa, std::ptr::null_mut()) < 0
@@ -349,9 +349,9 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
         || tracee.restore_original_regs_after_seccomp_event;
     if tracee.restart_how == 0 {
         if tracee.seccomp == Seccomp::Enabled && !sysexit_necessary {
-            tracee.restart_how = crate::ptrace::ptc::PTRACE_CONT as i32;
+            tracee.restart_how = crate::ptrace::ptc::PTRACE_CONT;
         } else {
-            tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+            tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
         }
     }
 
@@ -448,7 +448,7 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
             s if s == libc::SIGTRAP | (crate::ptrace::ptc::PTRACE_EVENT_VFORK << 8) => {
                 tracee.as_ptracee.event4.proot.pending = false;
                 drop(t);
-                new_child(&tracee_rc, libc::CLONE_VFORK as Word);
+                new_child(tracee_rc, libc::CLONE_VFORK as Word);
                 return 0;
             }
             s if s == libc::SIGTRAP | (crate::ptrace::ptc::PTRACE_EVENT_FORK << 8)
@@ -456,7 +456,7 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
             {
                 tracee.as_ptracee.event4.proot.pending = false;
                 drop(t);
-                new_child(&tracee_rc, 0);
+                new_child(tracee_rc, 0);
                 return 0;
             }
             s if s == libc::SIGTRAP | (crate::ptrace::ptc::PTRACE_EVENT_VFORK_DONE << 8)
@@ -520,17 +520,17 @@ fn handle_sigtrap_syscall(tracee: &mut Tracee, _signal: &mut i32) -> i32 {
     let mut signal = 0;
 
     if tracee.exe.is_none() {
-        tracee.restart_how = crate::ptrace::ptc::PTRACE_CONT as i32;
+        tracee.restart_how = crate::ptrace::ptc::PTRACE_CONT;
         return 0;
     }
 
     match tracee.seccomp {
         Seccomp::Enabled => {
             if is_in_sysenter(tracee) {
-                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+                tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
                 tracee.sysexit_pending = true;
             } else {
-                tracee.restart_how = crate::ptrace::ptc::PTRACE_CONT as i32;
+                tracee.restart_how = crate::ptrace::ptc::PTRACE_CONT;
                 tracee.sysexit_pending = false;
             }
             do_syscall_stage(tracee, &mut signal);
@@ -549,7 +549,7 @@ fn handle_sigtrap_syscall(tracee: &mut Tracee, _signal: &mut i32) -> i32 {
     }
 
     if tracee.seccomp == Seccomp::Disabling {
-        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
         tracee.seccomp = Seccomp::Disabled;
     }
 
@@ -600,7 +600,7 @@ fn do_syscall_stage(tracee: &mut Tracee, signal: &mut i32) {
         debug_assert!(!is_in_sysenter(tracee));
         debug_assert!(!unsafe { SECCOMP_AFTER_PTRACE_ENTER });
         tracee.seccomp_already_handled_enter = false;
-        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
     }
 }
 
@@ -636,7 +636,7 @@ fn handle_seccomp_stop(tracee: &mut Tracee, sysexit_necessary: bool) -> i32 {
             6,
             "skipping PTRACE_EVENT_SECCOMP for already handled sysenter"
         );
-        debug_assert_ne!(tracee.restart_how, crate::ptrace::ptc::PTRACE_CONT as i32);
+        debug_assert_ne!(tracee.restart_how, crate::ptrace::ptc::PTRACE_CONT);
         return signal;
     }
 
@@ -689,25 +689,25 @@ fn handle_seccomp_stop(tracee: &mut Tracee, sysexit_necessary: bool) -> i32 {
 
     if (flags & crate::syscall::seccomp::FILTER_SYSEXIT) != 0 || sysexit_necessary {
         if unsafe { SECCOMP_AFTER_PTRACE_ENTER } {
-            tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+            tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
             crate::syscall::translate_syscall(tracee);
         }
-        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
         return signal;
     }
 
     // Handle the sysenter stage right now.
-    tracee.restart_how = crate::ptrace::ptc::PTRACE_CONT as i32;
+    tracee.restart_how = crate::ptrace::ptc::PTRACE_CONT;
     crate::syscall::translate_syscall(tracee);
 
     if tracee.sysexit_pending {
-        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
     }
     if tracee.seccomp == Seccomp::Disabling {
-        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+        tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
     }
     if !unsafe { SECCOMP_AFTER_PTRACE_ENTER }
-        && tracee.restart_how == crate::ptrace::ptc::PTRACE_SYSCALL as i32
+        && tracee.restart_how == crate::ptrace::ptc::PTRACE_SYSCALL
         && !tracee.voided_syscall_cancelled
     {
         tracee.seccomp_already_handled_enter = true;
@@ -1096,9 +1096,8 @@ pub fn attach_child(parent_rc: &TraceeRef, clone_flags: Word, pid: i32) -> i32 {
     child.is_clone = (clone_flags & libc::CLONE_THREAD as Word) != 0;
 
     // Auto-attach to the parent's ptracer when its options ask for it.
-    let ptrace_options: Word = if clone_flags == 0 {
-        crate::ptrace::ptc::PTRACE_O_TRACEFORK as Word
-    } else if (clone_flags & 0xFF) == libc::SIGCHLD as Word {
+    let ptrace_options: Word = if clone_flags == 0 || (clone_flags & 0xFF) == libc::SIGCHLD as Word
+    {
         crate::ptrace::ptc::PTRACE_O_TRACEFORK as Word
     } else if (clone_flags & libc::CLONE_VFORK as Word) != 0 {
         crate::ptrace::ptc::PTRACE_O_TRACEVFORK as Word
@@ -1127,8 +1126,10 @@ pub fn attach_child(parent_rc: &TraceeRef, clone_flags: Word, pid: i32) -> i32 {
     if (clone_flags & libc::CLONE_FS as Word) != 0 {
         child.fs = parent.fs.clone();
     } else {
-        let mut new_fs = crate::tracee::FileSystemNameSpace::default();
-        new_fs.cwd = parent.fs.borrow().cwd.clone();
+        let mut new_fs = crate::tracee::FileSystemNameSpace {
+            cwd: parent.fs.borrow().cwd.clone(),
+            ..Default::default()
+        };
         if parent.clone_stripped_newns && !parent.fs.borrow().guest.is_empty() {
             // CLONE_NEWNS was stripped: give the child a private copy of the
             // binding tree so emulated mounts don't propagate back.

@@ -77,16 +77,9 @@ impl Default for Config {
     }
 }
 
+#[derive(Default)]
 pub struct FakeId0 {
     config: Config,
-}
-
-impl Default for FakeId0 {
-    fn default() -> Self {
-        FakeId0 {
-            config: Config::default(),
-        }
-    }
 }
 
 /// `get_extension(tracee, fake_id0_callback)` — fetch this tracee's config.
@@ -121,7 +114,7 @@ fn dtoo(mut n: i32) -> i32 {
 fn otod(mut n: i32) -> i32 {
     let (mut decimal, mut i) = (0i32, 0u32);
     while n != 0 {
-        decimal += (n % 10) * (1 << (3 * i)) / 1; // 8^i == 1<<(3i)
+        decimal += (n % 10) * (1 << (3 * i)); // 8^i == 1<<(3i)
         n /= 10;
         i += 1;
     }
@@ -438,9 +431,8 @@ fn handle_open_enter(
     }
 
     let mut rel_path = FixedPath::new();
-    match get_fd_path(tracee, &mut rel_path, fd_sysarg, RegVersion::Current) {
-        Err(e) => return e,
-        _ => {}
+    if let Err(e) = get_fd_path(tracee, &mut rel_path, fd_sysarg, RegVersion::Current) {
+        return e;
     }
 
     if (flags & libc::O_CREAT as Word) == libc::O_CREAT as Word {
@@ -816,9 +808,8 @@ fn handle_utimensat_enter(
             _ => {}
         }
     } else {
-        match get_fd_path(tracee, &mut path, Some(dirfd_sysarg), RegVersion::Current) {
-            Err(e) => return e,
-            _ => {}
+        if let Err(e) = get_fd_path(tracee, &mut path, Some(dirfd_sysarg), RegVersion::Current) {
+            return e;
         }
     }
 
@@ -841,6 +832,9 @@ fn handle_utimensat_enter(
 }
 
 /// `handle_access_enter_end()` — access/faccessat/faccessat2.
+// `mode & F_OK` mirrors the C check verbatim even though F_OK == 0 makes it
+// dead — it documents the intent ("skip pure existence probes").
+#[allow(clippy::bad_bit_mask)]
 fn handle_access_enter(
     tracee: &mut Tracee,
     path_sysarg: Reg,
@@ -2636,7 +2630,7 @@ impl FakeId0 {
     }
 
     pub fn filtered_sysnums(&self) -> &'static [(Sysnum, Word)] {
-        &FILTERED_SYSNUMS
+        FILTERED_SYSNUMS
     }
 
     pub fn clone_for_child(&self, _clone_flags: Word) -> Self {

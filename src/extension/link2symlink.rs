@@ -805,17 +805,14 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut L2sConfig) -> i32 {
             if sysnum == Sysnum::fstat64 || sysnum == Sysnum::fstat {
                 // non-USERLAND: resolve the fd via /proc/<pid>/fd/<fd>.
                 let fd = peek_reg(tracee, RegVersion::Modified, Reg::Sysarg1) as i32;
-                match readlink_proc_pid_fd(tracee.pid, fd, &mut original) {
-                    Err(status) => {
-                        verbose!(
-                            Some(tracee),
-                            3,
-                            "link2symlink: readlink_proc_pid_fd failed, status={}",
-                            status
-                        );
-                        return 0; // Don't alter syscall result.
-                    }
-                    _ => {}
+                if let Err(status) = readlink_proc_pid_fd(tracee.pid, fd, &mut original) {
+                    verbose!(
+                        Some(tracee),
+                        3,
+                        "link2symlink: readlink_proc_pid_fd failed, status={}",
+                        status
+                    );
+                    return 0; // Don't alter syscall result.
                 }
                 let bytes = original.as_bytes().to_vec();
                 if bytes.len() > DELETED_SUFFIX.len()
@@ -961,7 +958,7 @@ fn remember_opened_link(tracee: &mut Tracee, config: &mut L2sConfig, host_path: 
     // The descriptor number is only known at the exit stage, which
     // seccomp lets PRoot skip by default.
     tracee.sysexit_pending = true;
-    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL as i32;
+    tracee.restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
 }
 
 /// `translated_path()` — when `translated_path` is a faked hard link,

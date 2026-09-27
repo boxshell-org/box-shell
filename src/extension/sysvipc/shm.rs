@@ -316,7 +316,7 @@ fn do_rmid(ns: &NsRef, shm_index: usize) {
 
 /// `sysvipc_shm_memmap_destructor()` equivalent — `remove_mapping`
 /// handles unlinking + pending RMID; see `remove_mapping`.
-
+///
 /// `sysvipc_shm_wake_pending_shmat()` — restart a tracee that was
 /// waiting for the shmat socket round-trip.
 fn wake_pending_shmat() {
@@ -776,7 +776,7 @@ pub fn remove_mappings_from_process(
 
 /// `sysvipc_shm_fill_proc()` — the "/proc/sysvipc/shm" listing.
 pub fn fill_proc(w: &mut dyn std::io::Write, ns: &SysVIpcNamespace) {
-    let _ = write!(w, "       key      shmid perms                  size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime                   rss                  swap\n");
+    let _ = writeln!(w, "       key      shmid perms                  size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime                   rss                  swap");
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
     for (shm_index, shm) in ns.shms.iter().enumerate() {
         if !shm.valid {
@@ -784,9 +784,9 @@ pub fn fill_proc(w: &mut dyn std::io::Write, ns: &SysVIpcNamespace) {
         }
         // Bug-compatible with C: masks with `~page_size`, not `~(page_size - 1)`.
         let map_size = (shm.stats.shm_segsz + (page_size - 1)) & !page_size;
-        let _ = write!(
+        let _ = writeln!(
             w,
-            "{:10} {:10}  {:4o} {:21} {:5} {:5}  {:5} {:5} {:5} {:5} {:5} {:10} {:10} {:10} {:21} {:21}\n",
+            "{:10} {:10}  {:4o} {:21} {:5} {:5}  {:5} {:5} {:5} {:5} {:5} {:10} {:10} {:10} {:21} {:21}",
             shm.key,
             ipc_object_id(shm_index, shm.generation),
             shm.stats.shm_perm.mode,

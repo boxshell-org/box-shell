@@ -46,6 +46,7 @@ fn probe_f2fs_bug(tracee: &Tracee) -> bool {
                 let r = std::fs::OpenOptions::new()
                     .write(true)
                     .create(true)
+                    .truncate(false)
                     .mode(0o600)
                     .open(&file3);
                 match r {
