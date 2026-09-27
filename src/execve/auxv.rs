@@ -6,6 +6,24 @@ use crate::tracee::Tracee;
 use crate::Word;
 
 pub const AT_NULL: Word = 0;
+pub const AT_IGNORE: Word = 1;
+pub const AT_PHENT: Word = 4;
+pub const AT_PHNUM: Word = 5;
+pub const AT_PAGESZ: Word = 6;
+pub const AT_BASE: Word = 7;
+pub const AT_FLAGS: Word = 8;
+pub const AT_ENTRY: Word = 9;
+pub const AT_UID: Word = 11;
+pub const AT_EUID: Word = 12;
+pub const AT_GID: Word = 13;
+pub const AT_EGID: Word = 14;
+pub const AT_HWCAP: Word = 16;
+pub const AT_CLKTCK: Word = 17;
+pub const AT_SECURE: Word = 23;
+pub const AT_RANDOM: Word = 25;
+pub const AT_EXECFN: Word = 31;
+pub const AT_SYSINFO: Word = 32;
+pub const AT_SYSINFO_EHDR: Word = 33;
 
 #[derive(Copy, Clone, Default)]
 pub struct ElfAuxVector {
