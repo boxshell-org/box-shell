@@ -84,8 +84,9 @@ impl AnyExtension {
         }
     }
 
-    /// Sysnums this extension wants delivered when seccomp is used.
-    pub fn filtered_sysnums(&self) -> &'static [crate::sysnum::Sysnum] {
+    /// Sysnums this extension wants delivered when seccomp is used, with
+    /// their `FILTER_*` flags (C's `FilteredSysnum` pairs).
+    pub fn filtered_sysnums(&self) -> &'static [(crate::sysnum::Sysnum, crate::Word)] {
         match self {
             AnyExtension::FakeId0(e) => e.filtered_sysnums(),
             AnyExtension::Link2Symlink(e) => e.filtered_sysnums(),

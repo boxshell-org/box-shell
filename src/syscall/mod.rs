@@ -101,7 +101,7 @@ pub fn translate_syscall(tracee: &mut Tracee) {
         let mut status = 0;
         // Only translate a syscall the tracee actually requested — chained
         // ones are just announced to extensions.
-        if tracee.chain.syscalls.is_empty() {
+        if tracee.chain.syscalls.is_none() {
             save_current_regs(tracee, RegVersion::Original);
             status = enter::translate_syscall_enter(tracee);
             save_current_regs(tracee, RegVersion::Modified);
@@ -146,7 +146,7 @@ pub fn translate_syscall(tracee: &mut Tracee) {
         tracee.restore_original_regs = true;
         crate::tracee::reg::print_current_regs(tracee, 5, "sysexit start");
 
-        if tracee.chain.syscalls.is_empty()
+        if tracee.chain.syscalls.is_none()
             || tracee.chain.sysnum_workaround_state
                 == chain::SysnumWorkaround::ProcessReplacedCall
         {
@@ -166,12 +166,12 @@ pub fn translate_syscall(tracee: &mut Tracee) {
 
         tracee.status = 0;
 
-        if !tracee.chain.syscalls.is_empty() {
+        if tracee.chain.syscalls.is_some() {
             chain::chain_next_syscall(tracee);
         }
     }
 
-    let override_sysnum = is_enter_stage && tracee.chain.syscalls.is_empty();
+    let override_sysnum = is_enter_stage && tracee.chain.syscalls.is_none();
     let mut push_regs_status = push_specific_regs(tracee, override_sysnum);
     let sysnum_pushed = override_sysnum && push_regs_status == 0;
 

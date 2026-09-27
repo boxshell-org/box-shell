@@ -23,30 +23,59 @@ pub enum SysnumWorkaround {
 
 #[derive(Default)]
 pub struct Chain {
-    pub syscalls: VecDeque<ChainedSyscall>,
+    /// Mirrors C's `STAILQ` head pointer: `None` == "no chain at all"
+    /// (head freed), `Some` == chain in progress (even once drained).
+    /// The distinction matters: a queued-but-empty list still suppresses
+    /// ORIGINAL-reg snapshotting and triggers one final
+    /// `chain_next_syscall` call.
+    pub syscalls: Option<VecDeque<ChainedSyscall>>,
     pub force_final_result: bool,
     pub final_result: Word,
     pub sysnum_workaround_state: SysnumWorkaround,
     pub suppressed_signal: i32,
 }
 
+impl Chain {
+    /// C `tracee->chain.syscalls == NULL`.
+    pub fn inactive(&self) -> bool {
+        self.syscalls.is_none()
+    }
+}
+
 /// `register_chained_syscall()` — queue an unrequested syscall to run after
 /// the current one completes.
 pub fn register_chained_syscall(tracee: &mut Tracee, sysnum: Sysnum, sysargs: [Word; 6]) -> i32 {
-    tracee.chain.syscalls.push_back(ChainedSyscall { sysnum, sysargs });
+    tracee
+        .chain
+        .syscalls
+        .get_or_insert_with(VecDeque::new)
+        .push_back(ChainedSyscall { sysnum, sysargs });
     0
 }
 
 fn register_at_front(tracee: &mut Tracee, sysnum: Sysnum, sysargs: [Word; 6]) -> i32 {
-    tracee.chain.syscalls.push_front(ChainedSyscall { sysnum, sysargs });
+    tracee
+        .chain
+        .syscalls
+        .get_or_insert_with(VecDeque::new)
+        .push_front(ChainedSyscall { sysnum, sysargs });
     0
 }
 
 /// `chain_next_syscall()` — pop the next chained syscall and arm it: move the
 /// instruction pointer back onto the trap and rewrite sysargs.
 pub fn chain_next_syscall(tracee: &mut Tracee) {
-    match tracee.chain.syscalls.pop_front() {
+    debug_assert!(tracee.chain.syscalls.is_some());
+    let popped = tracee
+        .chain
+        .syscalls
+        .as_mut()
+        .and_then(|q| q.pop_front());
+    match popped {
         None => {
+            // Drained: free the queue head (C's TALLOC_FREE) and force the
+            // original syscall's result if requested.
+            tracee.chain.syscalls = None;
             if tracee.chain.force_final_result {
                 let r = tracee.chain.final_result;
                 poke_reg(tracee, Reg::SysargResult, r);
@@ -62,7 +91,13 @@ pub fn chain_next_syscall(tracee: &mut Tracee) {
             for (i, arg) in syscall.sysargs.iter().enumerate() {
                 poke_reg(tracee, crate::tracee::reg::sysarg(i + 1), *arg);
             }
-            crate::tracee::reg::set_sysnum(tracee, syscall.sysnum);
+            // The re-executed `syscall` instruction takes its number from
+            // the *result* register (rax on x86_64) — C pokes SYSTRAP_NUM.
+            let n = crate::sysnum::detranslate_sysnum(
+                crate::tracee::reg::get_abi(tracee),
+                syscall.sysnum,
+            );
+            poke_reg(tracee, Reg::SysargResult, n);
             let ip = peek_reg(tracee, RegVersion::Current, Reg::InstrPointer);
             poke_reg(
                 tracee,

@@ -339,7 +339,7 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
     // With seccomp, most events restart with PTRACE_CONT; PTRACE_SYSCALL is
     // kept whenever a sysexit stage must be reached.
     let sysexit_necessary = tracee.sysexit_pending
-        || !tracee.chain.syscalls.is_empty()
+        || tracee.chain.syscalls.is_some()
         || tracee.restore_original_regs_after_seccomp_event;
     if tracee.restart_how == 0 {
         if tracee.seccomp == Seccomp::Enabled && !sysexit_necessary {
@@ -479,7 +479,7 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
             }
             _ => {
                 // Deliver as-is unless a syscall chain is running.
-                if !tracee.chain.syscalls.is_empty()
+                if tracee.chain.syscalls.is_some()
                     || tracee.restore_original_regs_after_seccomp_event
                 {
                     crate::verbose!(
@@ -568,7 +568,7 @@ fn do_syscall_stage(tracee: &mut Tracee, signal: &mut i32) {
 
         // Redeliver a signal suppressed during a finished chain.
         if tracee.chain.suppressed_signal != 0
-            && tracee.chain.syscalls.is_empty()
+            && tracee.chain.syscalls.is_none()
             && !tracee.restore_original_regs_after_seccomp_event
         {
             *signal = tracee.chain.suppressed_signal;

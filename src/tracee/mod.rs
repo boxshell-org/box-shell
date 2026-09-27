@@ -201,6 +201,12 @@ pub struct Tracee {
 
     /// Scratch storage for the "still in sysenter" execve bookkeeping.
     pub execve_pending: Option<ExecvePending>,
+
+    /// Deferred cleanups scheduled during an event — the Rust equivalent
+    /// of talloc destructors hung off `tracee->ctx`.  Flushed by
+    /// [`get_tracee`] when the tracee is fetched for a new event (the C
+    /// code frees `tracee->ctx` at the same boundary).
+    pub deferred: Vec<Box<dyn FnOnce()>>,
 }
 
 /// Bookkeeping saved between execve sysenter and sysexit.
@@ -269,6 +275,7 @@ impl Default for Tracee {
             host_ldso_paths: None,
             guest_ldso_paths: None,
             execve_pending: None,
+            deferred: Vec::new(),
         }
     }
 }
@@ -297,10 +304,23 @@ pub fn with_tracee_mut<R>(pid: i32, f: impl FnOnce(&mut Tracee) -> R) -> Option<
 
 /// Get an `Rc` handle on the tracee with @pid, creating+registering a fresh
 /// one when `create` is true.
+/// Get an `Rc` handle on the tracee with @pid, creating+registering a fresh
+/// one when `create` is true.
 pub fn get_tracee(pid: i32, create: bool) -> Option<Rc<RefCell<Tracee>>> {
     TRACEES.with(|map| {
         if let Some(rc) = map.borrow().get(&pid) {
-            return Some(rc.clone());
+            let rc = rc.clone();
+            // Flush the per-event scratch (C frees tracee->ctx here).  Skip
+            // when the tracee is already borrowed — the caller owns it and
+            // the actions run at the next boundary instead.
+            if let Ok(mut t) = rc.try_borrow_mut() {
+                let actions = std::mem::take(&mut t.deferred);
+                drop(t);
+                for action in actions {
+                    action();
+                }
+            }
+            return Some(rc);
         }
         if !create {
             return None;
@@ -386,10 +406,20 @@ pub fn is_in_sysexit2(tracee: &Tracee, sysnum: Sysnum) -> bool {
 /// `terminate_tracee()` — mark a tracee dead; actual removal happens in
 /// `free_terminated_tracees()` at a safe point in the event loop.
 pub fn terminate_tracee(pid: i32) {
-    with_tracee_mut(pid, |t| {
+    let kill_all = with_tracee_mut(pid, |t| {
         t.terminated = true;
         t.running = false;
-    });
+        t.killall_on_exit
+    })
+    .unwrap_or(false);
+
+    // Case where the terminated tracee is marked to kill all tracees on exit.
+    if kill_all {
+        if let Some(rc) = get_tracee(pid, false) {
+            crate::verbose!(Some(&rc.borrow()), 1, "terminating all tracees on exit");
+        }
+        kill_all_tracees();
+    }
 }
 
 /// Reap terminated tracees — port of `remove_tracee()` + the

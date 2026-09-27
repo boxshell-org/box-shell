@@ -260,11 +260,10 @@ pub fn enable_syscall_filtering(tracee: &crate::tracee::Tracee) -> i32 {
     let mut filtered = Vec::new();
     merge_filtered_sysnums(&mut filtered, PROOT_SYSNUMS);
     for ext in tracee.extensions.iter().flatten() {
-        // Extension sysnum lists carry no flags in the C extension ABI.
-        let sysnums = ext.filtered_sysnums();
-        let tmp: Vec<FilteredSysnum> = sysnums
+        let tmp: Vec<FilteredSysnum> = ext
+            .filtered_sysnums()
             .iter()
-            .map(|&s| FilteredSysnum { value: s, flags: 0 })
+            .map(|&(value, flags)| FilteredSysnum { value, flags })
             .collect();
         merge_filtered_sysnums(&mut filtered, &tmp);
     }
@@ -281,8 +280,10 @@ pub fn filtered_sysnum_flags(tracee: &crate::tracee::Tracee, sysnum: Sysnum) -> 
         }
     }
     for ext in tracee.extensions.iter().flatten() {
-        if ext.filtered_sysnums().contains(&sysnum) {
-            flags |= 0; // extensions have no flag bits today
+        for &(value, f) in ext.filtered_sysnums() {
+            if value == sysnum {
+                flags |= f;
+            }
         }
     }
     flags
