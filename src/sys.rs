@@ -59,27 +59,6 @@ pub fn as_bytes_mut<T>(value: &mut T) -> &mut [u8] {
     unsafe { std::slice::from_raw_parts_mut(value as *mut T as *mut u8, size_of::<T>()) }
 }
 
-/// Read a `T` out of a byte slice, if it fits and is aligned.
-///
-/// Used to turn bytes read from tracee memory into a typed C struct
-/// without pointer casting at the call site.
-pub fn pod_from_bytes<T: Copy>(bytes: &[u8]) -> Option<T> {
-    if bytes.len() < size_of::<T>() {
-        return None;
-    }
-    if !(bytes.as_ptr() as usize) % align_of::<T>() == 0 {
-        // Fall back to an unaligned copy via a boxed buffer.
-        let mut buf = vec![0u8; size_of::<T>() + align_of::<T>()];
-        let base = buf.as_ptr() as usize;
-        let pad = base.next_multiple_of(align_of::<T>()) - base;
-        buf[pad..pad + size_of::<T>()].copy_from_slice(&bytes[..size_of::<T>()]);
-        // SAFETY: buf[pad..] is aligned and fully initialized; T: Copy.
-        return Some(unsafe { (buf.as_ptr().add(pad) as *const T).read() });
-    }
-    // SAFETY: slice is aligned and at least size_of::<T>() long; T: Copy.
-    Some(unsafe { (bytes.as_ptr() as *const T).read() })
-}
-
 /* ================================================================== */
 /* Process identity                                                   */
 /* ================================================================== */
