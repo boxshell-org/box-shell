@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation (mdBook)
+    url: https://github.com/boxshell-org/box-shell/tree/main/docs/src
+    about: User guide, architecture, and development docs
+  - name: Security advisories
+    url: https://github.com/boxshell-org/box-shell/security/advisories/new
+    about: Report vulnerabilities privately — do NOT open a public issue
+  - name: C reference implementation
+    url: https://github.com/termux/proot
+    about: The behavioral specification box-shell ports from
