@@ -191,7 +191,7 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
 /* msghdr/iovec walking                                                */
 /* ================================================================== */
 
-/// `msghdr_first_iovec()` — (base, len) of iov[0] in the msghdr at
+/// `msghdr_first_iovec()` — (base, len) of `iov[0]` in the msghdr at
 /// @msghdr_addr.  msghdr layout: word msg_name; u32 msg_namelen (+pad);
 /// word msg_iov; word msg_iovlen.
 pub fn msghdr_first_iovec(tracee: &Tracee, msghdr_addr: Word) -> Option<(Word, Word)> {

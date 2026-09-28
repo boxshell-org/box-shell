@@ -64,7 +64,8 @@ impl FixedPath {
 
     /// Mutable view of the *whole* buffer (capacity PATH_MAX) — for
     /// kernel writes like `read_string` that fill it in place.
-    /// Afterwards call [`set_len`] or [`sync_len_from_nul`].
+    /// Afterwards call [`FixedPath::set_len`] or
+    /// [`FixedPath::sync_len_from_nul`].
     pub fn as_mut_bytes(&mut self) -> &mut [u8] {
         &mut self.buf[..]
     }

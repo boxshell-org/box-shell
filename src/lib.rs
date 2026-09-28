@@ -1,5 +1,29 @@
 //! box-shell — a clean-room Rust re-implementation of PRoot:
 //! user-space chroot, `mount --bind` and `binfmt_misc` built on ptrace(2).
+//!
+//! # Architecture overview
+//!
+//! A guest syscall flows: [`cli`] (setup) → [`tracee`] event loop
+//! (`waitpid`/`ptrace` stops) → [`syscall`] translation pipeline →
+//! [`path`] canonicalization + bindings → [`extension`] typed events →
+//! [`execve`] for exec handling → [`sys`] as the sole libc/FFI
+//! boundary. Tracee memory access goes through `tracee::mem`;
+//! registers through `tracee::reg`; syscall numbers are decoded
+//! ABI-aware via [`sysnum`].
+//!
+//! # Safety contract
+//!
+//! All `unsafe` is confined to [`sys`] (the only module allowed to
+//! call libc) plus a few documented islands — `execve/elf.rs` union
+//! accessors, `tracee/event.rs` kernel-struct reads,
+//! `syscall/netlink.rs` `CStr::from_ptr`, and the freestanding
+//! `loader/` sub-crate. There is no `static mut` and no `transmute`
+//! anywhere; POD serialization goes through
+//! [`sys::as_bytes`]/[`sys::as_bytes_mut`].
+//!
+//! The behavioral specification is the C reference implementation —
+//! [Termux PRoot 5.1.0](https://github.com/termux/proot) — validated
+//! by running its integration suite against this binary.
 
 // The crate exposes the full PRoot API surface ahead of its consumers; much
 // of it is exercised only once the event loop and CLI land.

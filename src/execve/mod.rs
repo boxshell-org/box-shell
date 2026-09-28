@@ -1,4 +1,11 @@
 //! execve(2) subsystem — port of src/execve/*.
+//!
+//! `execve` is the hardest intercepted syscall: it replaces the tracee
+//! wholesale.  [`enter`] classifies the target (ELF via [`elf`], `#!`
+//! via [`shebang`], QEMU wrapping), loads the `loader/` stub into the
+//! tracee, and plants a trap; [`exit`] runs at `PTRACE_EVENT_EXEC` to
+//! unpoison state.  [`ldso`] rewrites `PT_INTERP`, [`auxv`]/[`aoxp`]
+//! rebuild the auxiliary vector on the new stack.
 
 pub mod aoxp;
 pub mod auxv;

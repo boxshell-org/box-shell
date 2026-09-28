@@ -3,7 +3,7 @@
 //! C uses `(callback, config, filtered_sysnums)` triples with untyped
 //! `intptr_t` payloads.  Here each extension is a variant of
 //! [`AnyExtension`] and events are a typed enum; dispatch happens via
-//! [`Extension::notify`].
+//! [`AnyExtension::notify`].
 
 use crate::Word;
 use crate::fpath::FixedPath;

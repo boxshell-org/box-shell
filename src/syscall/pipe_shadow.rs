@@ -3,7 +3,7 @@
 //! When a tracee closes the read end of an anonymous pipe while a child
 //! still holds the write end, ptrace serialization can make the parent
 //! close first — the child's write() then gets EPIPE.  The tracer opens a
-//! shadow read reference via /proc/<pid>/fd/<fd> and releases it once the
+//! shadow read reference via `/proc/<pid>/fd/<fd>` and releases it once the
 //! race window is over (POLLHUP, would-block writer, or max age).
 //!
 //! All state is thread-local: the event loop is single-threaded, so plain

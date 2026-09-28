@@ -1,6 +1,6 @@
 //! Diagnostic output, mirroring cli/note.c.
 //!
-//! `note()` prints "proot <severity>: <message>" on stderr; `SYSTEM` origin
+//! `note()` prints `proot <severity>: <message>` on stderr; `SYSTEM` origin
 //! appends the current errno's description.  `verbose!` is the per-tracee
 //! gated form.
 

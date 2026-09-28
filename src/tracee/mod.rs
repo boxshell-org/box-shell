@@ -1,4 +1,10 @@
 //! Tracee process model — port of tracee/tracee.h + tracee.c.
+//!
+//! A [`Tracee`] is one instrumented process: its ptrace state, register
+//! snapshots, ABI word size, memory accessors, pending syscalls and
+//! extensions.  The global registry maps host pid → tracee; the
+//! [`event`] module runs the `waitpid`/`ptrace` stop loop that drives
+//! everything else.
 
 pub mod abi;
 pub mod event;
@@ -160,7 +166,7 @@ pub struct Tracee {
     /// Load info generated during execve sysenter (used at sysexit).
     pub load_info: Option<Box<crate::execve::LoadInfo>>,
 
-    /// Address of argv[0] on the initial stack (AT_EXECFN fixup).
+    /// Address of `argv[0]` on the initial stack (AT_EXECFN fixup).
     pub execfn_addr: Word,
 
     /// fd the tracee used to open /proc/self/auxv (-1 = inactive).

@@ -3,7 +3,7 @@
 //!
 //! Emulates hard links with symlinks for filesystems that don't support
 //! them (e.g. FAT). A link(2) call moves the target into a backing file
-//! "<PREFIX><name><NNNN>.<NNNN>" and replaces the original with a chain
+//! `<PREFIX><name><NNNN>.<NNNN>` and replaces the original with a chain
 //! of symlinks: original -> intermediate -> final.
 
 use std::cell::RefCell;

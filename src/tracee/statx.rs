@@ -75,7 +75,7 @@ fn statx_ts(sec: i64, nsec: i64) -> StatxTimestamp {
     }
 }
 
-/// `handle_statx_syscall()` — answer statx() from a tracer-side [l]stat()
+/// `handle_statx_syscall()` — answer statx() from a tracer-side lstat/stat
 /// plus extension fixups.  Returns 0/-errno like a syscall result.
 pub fn handle_statx_syscall(tracee: &mut Tracee, from_sigsys: bool) -> i32 {
     let rv = if from_sigsys {
