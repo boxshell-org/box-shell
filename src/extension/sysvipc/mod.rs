@@ -650,3 +650,68 @@ impl Sysvipc {
         child
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::test_tracee;
+    use crate::tracee::reg::{Reg, poke_reg};
+
+    #[test]
+    fn ipc_object_id_packs_index_and_generation() {
+        // index is 1-based low 12 bits; generation in high bits.
+        assert_eq!(ipc_object_id(0, 0), 1);
+        assert_eq!(ipc_object_id(0, 1), 1 | (1 << 12));
+        assert_eq!(ipc_object_id(5, 0x123), 6 | (0x123 << 12));
+        assert_eq!(ipc_object_id(4095, 0), 4096);
+    }
+
+    #[test]
+    fn lookup_ipc_object_validates_slot_and_generation() {
+        let mut t = test_tracee("/", &[]);
+        // 3 objects, generation 7 on slot 1.
+        let valid = |i: usize| (i != 2, 7i16);
+        // id for (index=0, gen=7) = 1 | 7<<12.
+        poke_reg(&mut t, Reg::Sysarg1, (1 | (7 << 12)) as Word);
+        assert_eq!(lookup_ipc_object(&t, 3, valid), Ok(0));
+        // index 0 is invalid (ids are 1-based).
+        poke_reg(&mut t, Reg::Sysarg1, (7 << 12) as Word);
+        assert_eq!(lookup_ipc_object(&t, 3, valid), Err(-libc::EINVAL));
+        // index beyond len.
+        poke_reg(&mut t, Reg::Sysarg1, (4 | (7 << 12)) as Word);
+        assert_eq!(lookup_ipc_object(&t, 3, valid), Err(-libc::EINVAL));
+        // generation mismatch.
+        poke_reg(&mut t, Reg::Sysarg1, (1 | (8 << 12)) as Word);
+        assert_eq!(lookup_ipc_object(&t, 3, valid), Err(-libc::EINVAL));
+        // slot invalid (i==2 => slot index 2, id 3).
+        poke_reg(&mut t, Reg::Sysarg1, (3 | (7 << 12)) as Word);
+        assert_eq!(lookup_ipc_object(&t, 3, valid), Err(-libc::EINVAL));
+    }
+
+    #[test]
+    fn insert_mapping_reuses_freed_slots() {
+        let mut p = SysVIpcProcess::default();
+        let mk = || SharedMemMap {
+            addr: 0,
+            size: 0,
+            shm_index: 0,
+        };
+        let i0 = p.insert_mapping(mk());
+        let i1 = p.insert_mapping(mk());
+        assert_eq!((i0, i1), (0, 1));
+        p.mapped_shms[0] = None;
+        let i2 = p.insert_mapping(mk());
+        assert_eq!(i2, 0); // reused the hole
+        assert_eq!(p.mapped_shms.len(), 2);
+    }
+
+    #[test]
+    fn wait_and_chain_defaults() {
+        let c = Sysvipc::default();
+        assert!(c.wait_reason == WaitReason::NotWaiting);
+        assert!(c.wait_state == WaitState::NotWaiting);
+        assert!(c.chain_state == ChainState::NotChained);
+        assert_eq!(c.shmat_socket_fd, -1);
+        assert_eq!(c.shmat_mem_fd, -1);
+    }
+}

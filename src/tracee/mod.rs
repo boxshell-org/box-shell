@@ -587,3 +587,121 @@ pub fn kill_all_tracees() {
         crate::sys::kill(pid, libc::SIGKILL);
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{Arena, fork_child};
+
+    #[test]
+    fn registry_create_lookup_unregister() {
+        // Fresh TLS registry per test thread.
+        let pid = 424242;
+        assert!(get_tracee(pid, false).is_none());
+        let rc = get_tracee(pid, true).unwrap();
+        assert_eq!(rc.borrow().pid, pid);
+        assert!(all_pids().contains(&pid));
+        assert!(get_tracee(pid, false).is_some());
+        unregister(pid);
+        assert!(get_tracee(pid, false).is_none());
+        assert!(!all_pids().contains(&pid));
+    }
+
+    #[test]
+    fn registry_assigns_increasing_vpids() {
+        let a = get_tracee(424243, true).unwrap().borrow().vpid;
+        let b = get_tracee(424244, true).unwrap().borrow().vpid;
+        assert!(b > a);
+        unregister(424243);
+        unregister(424244);
+    }
+
+    #[test]
+    fn deferred_actions_flush_on_next_lookup() {
+        let pid = 424245;
+        let rc = get_tracee(pid, true).unwrap();
+        let ran = Rc::new(std::cell::Cell::new(false));
+        let ran2 = ran.clone();
+        rc.borrow_mut()
+            .deferred
+            .push(Box::new(move || ran2.set(true)));
+        drop(rc);
+        let _ = get_tracee(pid, false); // lookup runs deferred work
+        assert!(ran.get());
+        unregister(pid);
+    }
+
+    #[test]
+    fn sysenter_sysexit_helpers() {
+        let mut t = Tracee::default();
+        assert!(is_in_sysenter(&t));
+        assert!(!is_in_sysexit(&t));
+        t.status = 1;
+        assert!(is_in_sysexit(&t));
+        t.regs[crate::tracee::reg::RegVersion::Original.idx()].orig_rax =
+            crate::sysnum::detranslate_sysnum(crate::tracee::reg::get_abi(&t), Sysnum::getpid);
+        assert!(is_in_sysexit2(&t, Sysnum::getpid));
+        assert!(!is_in_sysexit2(&t, Sysnum::openat));
+    }
+
+    #[test]
+    fn terminate_marks_and_free_removes() {
+        let arena = Arena::new(1);
+        let child = fork_child(&arena).unwrap();
+        let pid = child.pid;
+        let rc = get_tracee(pid, true).unwrap();
+        rc.borrow_mut().terminated = false;
+        drop(rc);
+        terminate_tracee(pid);
+        assert!(get_tracee(pid, false).unwrap().borrow().terminated);
+        free_terminated_tracees();
+        assert!(get_tracee(pid, false).is_none());
+    }
+
+    #[test]
+    fn free_terminated_noops_when_all_alive() {
+        let pid = 424246;
+        get_tracee(pid, true);
+        free_terminated_tracees(); // nothing dead
+        assert!(get_tracee(pid, false).is_some());
+        unregister(pid);
+    }
+
+    #[test]
+    fn detach_updates_ptracer_count() {
+        let ptracer = get_tracee(424247, true).unwrap();
+        let ptracee = get_tracee(424248, true).unwrap();
+        ptracer.borrow_mut().as_ptracer.nb_ptracees = 3;
+        ptracee.borrow_mut().as_ptracee.ptracer = 424247;
+        drop((ptracer, ptracee));
+        detach_from_ptracer(424248);
+        assert_eq!(
+            get_tracee(424248, false)
+                .unwrap()
+                .borrow()
+                .as_ptracee
+                .ptracer,
+            0
+        );
+        assert_eq!(
+            get_tracee(424247, false)
+                .unwrap()
+                .borrow()
+                .as_ptracer
+                .nb_ptracees,
+            2
+        );
+        unregister(424247);
+        unregister(424248);
+    }
+
+    #[test]
+    fn verbose_of_falls_back_to_global() {
+        assert_eq!(verbose_of(None), crate::note::global_verbose());
+        let t = Tracee {
+            verbose: 7,
+            ..Default::default()
+        };
+        assert_eq!(verbose_of(Some(&t)), 7);
+    }
+}

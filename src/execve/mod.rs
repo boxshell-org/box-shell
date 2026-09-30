@@ -65,3 +65,32 @@ pub fn is_notification_ptraced_load_done(tracee: &Tracee) -> bool {
         && peek_reg(tracee, RegVersion::Original, Reg::Sysarg5) == 3
         && peek_reg(tracee, RegVersion::Original, Reg::Sysarg6) == 4
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::test_tracee;
+    use crate::tracee::reg::{Reg, RegVersion, poke_reg};
+
+    #[test]
+    fn load_done_notification_pattern() {
+        let mut t = test_tracee("/", &[]);
+        assert!(!is_notification_ptraced_load_done(&t)); // no ptracer
+        t.as_ptracee.ptracer = 999;
+        for (reg, v) in [
+            (Reg::Sysarg1, 1),
+            (Reg::Sysarg4, 2),
+            (Reg::Sysarg5, 3),
+            (Reg::Sysarg6, 4),
+        ] {
+            poke_reg(&mut t, reg, v);
+        }
+        // The check reads the Original bank.
+        t.regs[RegVersion::Original.idx()] = t.regs[RegVersion::Current.idx()];
+        assert!(is_notification_ptraced_load_done(&t));
+        // Any deviation breaks the pattern.
+        poke_reg(&mut t, Reg::Sysarg6, 5);
+        t.regs[RegVersion::Original.idx()] = t.regs[RegVersion::Current.idx()];
+        assert!(!is_notification_ptraced_load_done(&t));
+    }
+}

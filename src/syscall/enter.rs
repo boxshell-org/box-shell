@@ -1290,3 +1290,142 @@ fn end(tracee: &mut Tracee, mut status: i32) -> i32 {
     }
     status
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{Arena, TempDir, fork_child, test_tracee};
+    use crate::tracee::mem::{read_string, write_data};
+
+    #[test]
+    fn proc_userns_file_detection() {
+        assert!(is_proc_userns_file(b"/proc/self/uid_map"));
+        assert!(is_proc_userns_file(b"/proc/self/gid_map"));
+        assert!(is_proc_userns_file(b"/proc/self/setgroups"));
+        assert!(is_proc_userns_file(b"/proc/1234/uid_map"));
+        assert!(!is_proc_userns_file(b"/proc/self/maps"));
+        assert!(!is_proc_userns_file(b"/proc/self"));
+        assert!(!is_proc_userns_file(b"/proc//uid_map"));
+        assert!(!is_proc_userns_file(b"/proc/abc/uid_map"));
+        assert!(!is_proc_userns_file(b"/etc/passwd"));
+        assert!(!is_proc_userns_file(b"/proc"));
+        assert!(!is_proc_userns_file(b"/proc/self/uid_map_extra"));
+    }
+
+    /// A live tracee with `root` bound at guest "/" and an arena stack.
+    fn rooted_tracee(root: &[u8], arena: &Arena, child: &crate::testutil::Child) -> Tracee {
+        let mut t = child.tracee_with_sp(arena);
+        t.fs.borrow_mut().cwd.set(b"/");
+        crate::path::binding::new_binding(&mut t, root, Some(b"/"), true).unwrap();
+        crate::path::binding::initialize_bindings(&mut t);
+        t
+    }
+
+    fn remote_str(t: &Tracee, addr: Word) -> Vec<u8> {
+        let mut buf = vec![0u8; 4096];
+        let n = read_string(t, &mut buf, addr);
+        assert!(n > 0, "read_string at {addr:#x} -> {n}");
+        buf[..n as usize - 1].to_vec()
+    }
+
+    #[test]
+    fn translate_sysarg_rewrites_register_to_host_path() {
+        let f = TempDir::new("targ");
+        f.file("inside.txt", b"x");
+        let arena = Arena::new(2);
+        let child = fork_child(&arena).unwrap();
+        let mut t = rooted_tracee(&f.abs("."), &arena, &child);
+        // Guest path /inside.txt at remote addr; Sysarg1 points at it.
+        let src = arena.addr();
+        write_data(&t, src, b"/inside.txt\0");
+        poke_reg(&mut t, Reg::Sysarg1, src);
+        assert_eq!(translate_sysarg(&mut t, Reg::Sysarg1, PType::Regular), 0);
+        let dst = peek_reg(&t, RegVersion::Current, Reg::Sysarg1);
+        assert_ne!(dst, src);
+        let mut expected = f.abs(".");
+        expected.extend_from_slice(b"/inside.txt");
+        assert_eq!(remote_str(&t, dst), expected);
+    }
+
+    #[test]
+    fn translate_sysarg_null_arg_is_noop() {
+        let arena = Arena::new(1);
+        let child = fork_child(&arena).unwrap();
+        let mut t = rooted_tracee(b"/", &arena, &child);
+        poke_reg(&mut t, Reg::Sysarg1, 0);
+        assert_eq!(translate_sysarg(&mut t, Reg::Sysarg1, PType::Regular), 0);
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::Sysarg1), 0);
+    }
+
+    #[test]
+    fn translate_sysarg_missing_file_fails() {
+        let f = TempDir::new("targ-miss");
+        let arena = Arena::new(2);
+        let child = fork_child(&arena).unwrap();
+        let mut t = rooted_tracee(&f.abs("."), &arena, &child);
+        let src = arena.addr();
+        write_data(&t, src, b"/definitely/missing\0");
+        poke_reg(&mut t, Reg::Sysarg1, src);
+        let st = translate_sysarg(&mut t, Reg::Sysarg1, PType::Regular);
+        assert!(st < 0);
+    }
+
+    #[test]
+    fn translate_parent_appends_leaf_after_parent_translation() {
+        let f = TempDir::new("tparent");
+        f.dir("dir");
+        let arena = Arena::new(2);
+        let child = fork_child(&arena).unwrap();
+        let mut t = rooted_tracee(&f.abs("."), &arena, &child);
+        let src = arena.addr();
+        write_data(&t, src, b"/dir/newleaf\0");
+        poke_reg(&mut t, Reg::Sysarg2, src);
+        assert_eq!(
+            translate_path2_parent(
+                &mut t,
+                libc::AT_FDCWD,
+                &FixedPath::from_bytes(b"/dir/newleaf"),
+                Reg::Sysarg2
+            ),
+            0
+        );
+        let dst = peek_reg(&t, RegVersion::Current, Reg::Sysarg2);
+        let mut expected = f.abs(".");
+        expected.extend_from_slice(b"/dir/newleaf");
+        assert_eq!(remote_str(&t, dst), expected);
+    }
+
+    #[test]
+    fn translate_parent_keeps_dotdot_targets_full() {
+        // mkdir("a/..") must translate the whole path, not just "a".
+        let f = TempDir::new("tparent-dd");
+        f.dir("a");
+        let arena = Arena::new(2);
+        let child = fork_child(&arena).unwrap();
+        let mut t = rooted_tracee(&f.abs("."), &arena, &child);
+        let path = FixedPath::from_bytes(b"/a/..");
+        assert_eq!(
+            translate_path2_parent(&mut t, libc::AT_FDCWD, &path, Reg::Sysarg1),
+            0
+        );
+        let dst = peek_reg(&t, RegVersion::Current, Reg::Sysarg1);
+        // Whole path translated as a symlink-deref of the final "..".
+        let expected = f.abs(".");
+        assert!(remote_str(&t, dst).starts_with(&expected));
+    }
+
+    #[test]
+    fn guest_canonicalize_strips_frivolous_components() {
+        let f = TempDir::new("gcanon");
+        f.dir("d");
+        f.file("d/f", b"x");
+        let mut t = test_tracee(std::str::from_utf8(&f.abs(".")).unwrap(), &[]);
+        let mut out = FixedPath::new();
+        assert!(guest_canonicalize(&mut t, b"/d/./f/", &mut out).is_ok());
+        assert_eq!(out.as_bytes(), b"/d/f");
+        // Relative path canonicalizes against cwd.
+        let mut out2 = FixedPath::new();
+        assert!(guest_canonicalize(&mut t, b"d/f", &mut out2).is_ok());
+        assert_eq!(out2.as_bytes(), b"/d/f");
+    }
+}

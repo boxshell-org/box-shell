@@ -703,3 +703,23 @@ fn patch_execfn_in_auxv(tracee: &mut Tracee, result: Word) {
         offset += entry;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proc_fd_referer_parsing() {
+        assert_eq!(parse_proc_fd(b"/proc/12/fd/3"), Some((12, 3)));
+        assert_eq!(parse_proc_fd(b"/proc/1/fd/0"), Some((1, 0)));
+        assert_eq!(parse_proc_fd(b"/proc/1/fd/999"), Some((1, 999)));
+        assert_eq!(parse_proc_fd(b"/proc/self/fd/3"), None);
+        assert_eq!(parse_proc_fd(b"/proc/12/fd/"), None);
+        assert_eq!(parse_proc_fd(b"/proc/12/fdx/3"), None);
+        assert_eq!(parse_proc_fd(b"/proc/12/fd"), None);
+        assert_eq!(parse_proc_fd(b"/etc/fd/3"), None);
+        assert_eq!(parse_proc_fd(b"/proc/-1/fd/3"), None);
+        // Trailing junk after digits: sscanf still consumed the fd.
+        assert_eq!(parse_proc_fd(b"/proc/12/fd/3x"), Some((12, 3)));
+    }
+}

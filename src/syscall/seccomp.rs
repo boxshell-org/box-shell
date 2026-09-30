@@ -588,3 +588,41 @@ pub fn filtered_sysnum_flags(tracee: &crate::tracee::Tracee, sysnum: Sysnum) -> 
     }
     flags
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stmt_and_jump_layout() {
+        let s = stmt(libc::BPF_LD as u16, 42);
+        assert_eq!((s.code, s.jt, s.jf, s.k), (libc::BPF_LD as u16, 0, 0, 42));
+        let j = jump(libc::BPF_JMP as u16, 7, 1, 2);
+        assert_eq!((j.code, j.jt, j.jf, j.k), (libc::BPF_JMP as u16, 1, 2, 7));
+        assert_eq!(size_of::<SockFilter>(), 8);
+    }
+
+    #[test]
+    fn merge_filtered_sysnums_or_flags() {
+        let mut list: Vec<FilteredSysnum> = Vec::new();
+        let a = FilteredSysnum {
+            value: Sysnum::openat,
+            flags: 1,
+        };
+        let b = FilteredSysnum {
+            value: Sysnum::read,
+            flags: 2,
+        };
+        merge_filtered_sysnums(&mut list, &[a, b]);
+        assert_eq!(list.len(), 2);
+        // Merging the same sysnum again ORs the flags in place.
+        let a2 = FilteredSysnum {
+            value: Sysnum::openat,
+            flags: 4,
+        };
+        merge_filtered_sysnums(&mut list, &[a2]);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].flags, 1 | 4);
+        assert_eq!(list[1].flags, 2);
+    }
+}

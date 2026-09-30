@@ -1176,3 +1176,181 @@ pub fn attach_child(parent_rc: &TraceeRef, clone_flags: Word, pid: i32) -> i32 {
 
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{Arena, fork_child, test_tracee};
+    use crate::tracee::reg::{Reg, RegVersion, poke_reg};
+    use crate::tracee::{get_tracee, unregister};
+
+    #[test]
+    fn read_proc_status_ids_self() {
+        let pid = crate::sys::getpid();
+        let (tgid, ppid, _tracer) = read_proc_status_ids(pid).unwrap();
+        assert_eq!(tgid, pid);
+        assert_eq!(ppid, unsafe { libc::getppid() });
+    }
+
+    #[test]
+    fn read_proc_status_ids_missing() {
+        assert!(read_proc_status_ids(-1).is_none());
+        assert!(read_proc_status_ids(0x7FFF_FFFF).is_none());
+    }
+
+    #[test]
+    fn read_proc_status_ids_of_forked_child() {
+        let arena = Arena::new(1);
+        let child = fork_child(&arena).unwrap();
+        let (tgid, ppid, _tracer) = read_proc_status_ids(child.pid).unwrap();
+        assert_eq!(tgid, child.pid);
+        assert_eq!(ppid, crate::sys::getpid());
+    }
+
+    #[test]
+    fn sigsys_syscall_nr_reads_offset_24() {
+        let mut si: libc::siginfo_t = crate::sys::zeroed();
+        unsafe {
+            *((&mut si as *mut _ as *mut u8).add(24) as *mut i32) = 999;
+        }
+        assert_eq!(sigsys_syscall_nr(&si), 999);
+    }
+
+    #[test]
+    fn new_child_stack_clone_uses_sysarg2() {
+        let mut t = test_tracee("/", &[]);
+        poke_reg(&mut t, Reg::SysargNum, Sysnum::clone as Word);
+        // get_sysnum decodes via the ABI table.
+        t.regs[RegVersion::Current.idx()].orig_rax =
+            crate::sysnum::detranslate_sysnum(crate::tracee::reg::get_abi(&t), Sysnum::clone);
+        poke_reg(&mut t, Reg::Sysarg2, 0xDEAD_0000);
+        assert_eq!(new_child_stack(&mut t), 0xDEAD_0000);
+    }
+
+    #[test]
+    fn new_child_stack_clone3_reads_remote_args() {
+        let arena = Arena::new(2);
+        let child = fork_child(&arena).unwrap();
+        let mut t = child.tracee_with_sp(&arena);
+        // clone3 args: clone_args at Sysarg1; stack at +5*8, stack_size +6*8.
+        let args_addr = arena.addr() + 512;
+        crate::tracee::mem::write_data(&t, args_addr + 5 * 8, &0xAAAA_0000u64.to_ne_bytes());
+        crate::tracee::mem::write_data(&t, args_addr + 6 * 8, &0x4000u64.to_ne_bytes());
+        t.regs[RegVersion::Current.idx()].orig_rax =
+            crate::sysnum::detranslate_sysnum(crate::tracee::reg::get_abi(&t), Sysnum::clone3);
+        poke_reg(&mut t, Reg::Sysarg1, args_addr);
+        // child stack = clone_args.stack + clone_args.stack_size
+        assert_eq!(new_child_stack(&mut t), 0xAAAA_4000);
+    }
+
+    #[test]
+    fn new_child_stack_fork_falls_back_to_sp() {
+        let mut t = test_tracee("/", &[]);
+        t.regs[RegVersion::Current.idx()].orig_rax =
+            crate::sysnum::detranslate_sysnum(crate::tracee::reg::get_abi(&t), Sysnum::fork);
+        poke_reg(&mut t, Reg::StackPointer, 0x7777_8888);
+        assert_eq!(new_child_stack(&mut t), 0x7777_8888);
+    }
+
+    #[test]
+    fn attach_child_inherits_and_copies_heap() {
+        let arena = Arena::new(1);
+        let child = fork_child(&arena).unwrap();
+
+        let parent_rc = get_tracee(313370, true).unwrap();
+        {
+            let mut p = parent_rc.borrow_mut();
+            p.verbose = 3;
+            p.heap.borrow_mut().base = 0x5555;
+        }
+        // Regular fork flags: child gets a *private* heap copy.
+        let r = attach_child(&parent_rc, 0, child.pid);
+        assert_eq!(r, 0);
+        {
+            let p = parent_rc.borrow();
+            let c_rc = get_tracee(child.pid, false).unwrap();
+            let c = c_rc.borrow();
+            assert_eq!(c.verbose, 3);
+            assert_eq!(c.parent, p.pid);
+            assert!(!c.is_clone);
+            assert_eq!(c.heap.borrow().base, 0x5555);
+            assert!(!Rc::ptr_eq(&c.heap, &p.heap));
+        }
+        unregister(child.pid);
+        unregister(313370);
+    }
+
+    #[test]
+    fn attach_child_clone_vm_shares_heap() {
+        let arena = Arena::new(1);
+        let child = fork_child(&arena).unwrap();
+        let parent_rc = get_tracee(313371, true).unwrap();
+        parent_rc.borrow_mut().heap.borrow_mut().base = 0x9999;
+        let r = attach_child(&parent_rc, libc::CLONE_VM as Word, child.pid);
+        assert_eq!(r, 0);
+        let c_rc = get_tracee(child.pid, false).unwrap();
+        assert!(Rc::ptr_eq(&c_rc.borrow().heap, &parent_rc.borrow().heap));
+        unregister(child.pid);
+        unregister(313371);
+    }
+
+    #[test]
+    fn attach_child_clone_thread_marks_is_clone() {
+        let arena = Arena::new(1);
+        let child = fork_child(&arena).unwrap();
+        let parent_rc = get_tracee(313372, true).unwrap();
+        let r = attach_child(
+            &parent_rc,
+            (libc::CLONE_VM | libc::CLONE_THREAD) as Word,
+            child.pid,
+        );
+        assert_eq!(r, 0);
+        assert!(get_tracee(child.pid, false).unwrap().borrow().is_clone);
+        unregister(child.pid);
+        unregister(313372);
+    }
+
+    #[test]
+    fn attach_child_clone_parent_reparents() {
+        let arena = Arena::new(1);
+        let child = fork_child(&arena).unwrap();
+        let parent_rc = get_tracee(313373, true).unwrap();
+        parent_rc.borrow_mut().parent = 777;
+        let r = attach_child(&parent_rc, libc::CLONE_PARENT as Word, child.pid);
+        assert_eq!(r, 0);
+        // CLONE_PARENT: child's parent is the *parent's* parent.
+        assert_eq!(get_tracee(child.pid, false).unwrap().borrow().parent, 777);
+        unregister(child.pid);
+        unregister(313373);
+    }
+
+    #[test]
+    fn restart_tracee_respects_wait_pid_gate() {
+        let t = test_tracee("/", &[]);
+        let rc = get_tracee(t.pid.max(313374), true).unwrap();
+        rc.borrow_mut().as_ptracer.wait_pid = 1;
+        assert!(!restart_tracee(&rc, 0));
+        // signal == -1 is an internal no-op path.
+        rc.borrow_mut().as_ptracer.wait_pid = 0;
+        rc.borrow_mut().restart_how = crate::ptrace::ptc::PTRACE_SYSCALL;
+        // pid isn't actually ptraced -> ptrace fails -> false.
+        assert!(!restart_tracee(&rc, 0));
+        unregister(rc.borrow().pid);
+    }
+
+    #[test]
+    fn check_architecture_no_exe_noop() {
+        let mut t = test_tracee("/", &[]);
+        check_architecture(&mut t); // must not panic
+    }
+
+    #[test]
+    fn resolve_pending_child_ignores_non_fork() {
+        let mut t = test_tracee("/", &[]);
+        t.regs[RegVersion::Original.idx()].orig_rax =
+            crate::sysnum::detranslate_sysnum(crate::tracee::reg::get_abi(&t), Sysnum::getpid);
+        t.pending_child = true;
+        resolve_pending_child(&mut t);
+        assert!(t.pending_child); // untouched
+    }
+}

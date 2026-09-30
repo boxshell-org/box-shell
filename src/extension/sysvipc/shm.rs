@@ -907,3 +907,59 @@ fn sendfd(socket: i32, fd: i32) {
     msg.msg_controllen = 20;
     crate::sys::sendmsg(socket, &msg, 0);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sockaddr_un_len_is_struct_size() {
+        assert_eq!(sockaddr_un_len(), size_of::<libc::sockaddr_un>() as Word);
+    }
+
+    #[test]
+    fn helper_addr_is_af_unix_prefixed() {
+        let addr = helper_addr();
+        assert_eq!(addr.len(), size_of::<libc::sockaddr_un>());
+        assert_eq!(&addr[..2], &(libc::AF_UNIX as u16).to_ne_bytes());
+    }
+
+    #[test]
+    fn fill_proc_writes_ipcs_shm_table() {
+        let mut ns = SysVIpcNamespace::default();
+        ns.shms.push(SharedMem {
+            key: 0x1234,
+            generation: 2,
+            valid: true,
+            rmid_pending: false,
+            fd: -1,
+            stats: ShmidDs {
+                shm_segsz: 5000,
+                shm_cpid: 11,
+                shm_lpid: 22,
+                shm_atime: 111,
+                shm_dtime: 222,
+                shm_ctime: 333,
+                ..Default::default()
+            },
+            mappings: vec![MapRef {
+                process: 0,
+                index: 0,
+            }],
+        });
+        // An invalid entry must be skipped.
+        ns.shms.push(SharedMem {
+            valid: false,
+            ..SharedMem::default()
+        });
+        let mut out = Vec::new();
+        fill_proc(&mut out, &ns);
+        let s = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines.len(), 2); // header + 1 valid shm
+        assert!(lines[0].contains("shmid"));
+        // id = (index 0 +1) | (gen 2 << 12) = 0x2001 = 8193
+        assert!(lines[1].contains("8193"), "line: {}", lines[1]);
+        assert!(lines[1].contains("5000"), "line: {}", lines[1]);
+    }
+}
