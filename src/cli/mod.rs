@@ -527,7 +527,7 @@ fn handle_option_q(tracee: &mut Tracee, value: Option<&str>) -> i32 {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .collect();
-    tracee.qemu = Some(std::rc::Rc::new(qemu));
+    tracee.qemu = Some(std::rc::Rc::from(qemu));
 
     binding::new_binding(tracee, b"/", Some(HOST_ROOTFS.as_bytes()), true);
     binding::new_binding(tracee, b"/dev/null", Some(b"/etc/ld.so.preload"), false);
@@ -938,7 +938,7 @@ fn initialize_exe(tracee: &mut Tracee, exe: Option<&str>) -> Result<(), i32> {
         exe.as_bytes(),
     )?;
     path::detranslate_path(tracee, &mut path, None)?;
-    tracee.exe = Some(std::rc::Rc::new(
+    tracee.exe = Some(std::rc::Rc::from(
         String::from_utf8_lossy(path.as_bytes()).into_owned(),
     ));
     Ok(())
@@ -972,9 +972,9 @@ fn post_initialize_exe(tracee: &mut Tracee) -> Result<(), i32> {
         }
     }
     if let Some(qemu) = &tracee.qemu {
-        let mut q = (**qemu).clone();
+        let mut q = qemu.to_vec();
         q[0] = String::from_utf8_lossy(path.as_bytes()).into_owned();
-        tracee.qemu = Some(std::rc::Rc::new(q));
+        tracee.qemu = Some(std::rc::Rc::from(q));
     }
     Ok(())
 }
@@ -1200,7 +1200,7 @@ pub fn run(tracee_rc: &TraceeRef, args: &[String]) -> i32 {
     let status = tracee::event::launch_process(tracee_rc, &argv_tail);
     if status < 0 {
         let exe = tracee_rc.borrow().exe.clone();
-        print_execve_help(exe.as_ref().map(|s| s.as_str()).unwrap_or(""), status);
+        print_execve_help(exe.as_deref().unwrap_or(""), status);
         return -1;
     }
 

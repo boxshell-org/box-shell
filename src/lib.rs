@@ -19,7 +19,7 @@
 //! `syscall/netlink.rs` `CStr::from_ptr`, and the freestanding
 //! `loader/` sub-crate. There is no `static mut` and no `transmute`
 //! anywhere; POD serialization goes through
-//! [`sys::as_bytes`]/[`sys::as_bytes_mut`].
+//! `sys::as_bytes`/`sys::as_bytes_mut`.
 //!
 //! The behavioral specification is the C reference implementation —
 //! [Termux PRoot 5.1.0](https://github.com/termux/proot) — validated

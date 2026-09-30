@@ -189,19 +189,19 @@ pub struct Tracee {
 
     // ---- shared until execve ----
     /// Path to the executable, a'la /proc/self/exe (guest canonical).
-    pub exe: Option<Rc<String>>,
+    pub exe: Option<Rc<str>>,
     pub new_exe: Option<String>,
     pub host_exe: Option<String>,
 
     // ---- configuration ----
-    pub qemu: Option<Rc<Vec<String>>>,
+    pub qemu: Option<Rc<[String]>>,
     pub skip_proot_loader: bool,
-    pub glue: Option<Rc<String>>,
+    pub glue: Option<Rc<str>>,
     pub extensions: Vec<Option<AnyExtension>>,
 
     // ---- read-only shared ----
-    pub host_ldso_paths: Option<Rc<String>>,
-    pub guest_ldso_paths: Option<Rc<String>>,
+    pub host_ldso_paths: Option<Rc<str>>,
+    pub guest_ldso_paths: Option<Rc<str>>,
 
     /// Scratch storage for the "still in sysenter" execve bookkeeping.
     pub execve_pending: Option<ExecvePending>,

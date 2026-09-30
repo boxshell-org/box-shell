@@ -3,7 +3,7 @@
 //! Every raw syscall/libc call in the codebase is funneled through this
 //! module so that `unsafe` stays confined to FFI boundary functions instead
 //! of being scattered through the translation/extension logic. Wrappers
-//! return the raw libc status (`< 0` on error, inspect [`errno`]) so call
+//! return the raw libc status (`< 0` on error, inspect `errno`) so call
 //! sites keep C-identical errno semantics.
 
 use std::ffi::{CStr, CString};
@@ -844,7 +844,7 @@ pub(crate) fn ptrace_setoptions(pid: libc::pid_t, mask: usize) -> i64 {
 /// # Safety
 /// `si` must point to a valid `libc::siginfo_t` — e.g. the pointer a
 /// `SA_SIGINFO` handler receives from the kernel, or one filled by
-/// [`ptrace_getsiginfo`].
+/// `ptrace_getsiginfo`.
 pub unsafe fn siginfo_si_pid(si: *const libc::siginfo_t) -> libc::pid_t {
     // SAFETY: caller guarantees `si` is valid.
     unsafe { (*si).si_pid() }

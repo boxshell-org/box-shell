@@ -21,7 +21,7 @@ pub fn build_glue(
 
     if tracee.glue.is_none() {
         match crate::path::temp::create_temp_directory(None, "proot") {
-            Some(dir) => tracee.glue = Some(Rc::new(dir)),
+            Some(dir) => tracee.glue = Some(Rc::from(dir)),
             None => {
                 crate::note!(
                     crate::note::Severity::Error,

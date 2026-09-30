@@ -380,8 +380,9 @@ pub fn rebuild_host_ldso_paths(
     } else {
         if tracee.guest_ldso_paths.is_none() {
             if let Ok(Some(env)) = read_xpointee_as_string(tracee, envp, index) {
-                tracee.guest_ldso_paths =
-                    Some(std::rc::Rc::new(String::from_utf8_lossy(&env).into_owned()));
+                tracee.guest_ldso_paths = Some(std::rc::Rc::from(
+                    String::from_utf8_lossy(&env).into_owned(),
+                ));
             }
         }
         index
@@ -392,7 +393,9 @@ pub fn rebuild_host_ldso_paths(
     write_xpointee_string(envp, index, &var);
 
     if tracee.host_ldso_paths.is_none() {
-        tracee.host_ldso_paths = Some(std::rc::Rc::new(String::from_utf8_lossy(&var).into_owned()));
+        tracee.host_ldso_paths = Some(std::rc::Rc::from(
+            String::from_utf8_lossy(&var).into_owned(),
+        ));
     }
     rpath_found as i32
 }

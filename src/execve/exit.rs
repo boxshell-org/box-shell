@@ -264,7 +264,7 @@ pub fn translate_execve_exit(tracee: &mut Tracee) {
 
     // Commit "/proc/self/exe".
     if let Some(new_exe) = tracee.new_exe.take() {
-        tracee.exe = Some(Rc::new(new_exe));
+        tracee.exe = Some(Rc::from(new_exe));
     }
 
     // New processes have no heap.
