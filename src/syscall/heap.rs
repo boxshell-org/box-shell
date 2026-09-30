@@ -10,8 +10,7 @@ use crate::tracee::reg::{Reg, RegVersion, get_abi, get_sysnum, peek_reg, poke_re
 /// The size of the heap can be zero, unlike a memory mapping: the first page
 /// of the heap mapping is discarded so an empty heap is representable.
 fn heap_offset() -> Word {
-    let page = crate::sys::sysconf(libc::_SC_PAGE_SIZE);
-    if page <= 0 { 0x1000 } else { page as Word }
+    crate::sys::page_size()
 }
 
 #[derive(Default)]

@@ -9,7 +9,7 @@ pub mod proc_emul;
 pub mod temp;
 
 use crate::PATH_MAX;
-use crate::fpath::FixedPath;
+use crate::fpath::{FixedPath, PathGuard};
 
 /// Result of `compare_paths()` (path.h `Comparison`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -91,15 +91,12 @@ pub fn readlink_proc_pid_fd(pid: i32, fd: i32, path: &mut FixedPath) -> Result<(
         Ok(c) => c,
         Err(_) => return Err(-libc::EBADF),
     };
-    let mut buf = vec![0u8; PATH_MAX];
-    let n = crate::sys::readlink(&c, &mut buf[..PATH_MAX - 1]);
+    // PATH_MAX-1 keeps room for the terminator.
+    let n = crate::sys::readlink(&c, &mut path.as_mut_bytes()[..PATH_MAX - 1]);
     if n < 0 {
         return Err(-libc::EBADF);
     }
-    if n as usize >= PATH_MAX {
-        return Err(-libc::ENAMETOOLONG);
-    }
-    path.set(&buf[..n as usize]);
+    path.set_len_terminated(n as usize);
     Ok(())
 }
 
@@ -111,16 +108,17 @@ pub fn getcwd2(
 ) -> Result<(), i32> {
     match tracee {
         None => {
-            let buf = crate::sys::getcwd().ok_or_else(|| -crate::sys::errno())?;
-            guest_path.set(&buf);
+            let n = crate::sys::getcwd_into(guest_path.as_mut_bytes())
+                .ok_or_else(|| -crate::sys::errno())?;
+            guest_path.set_len_terminated(n);
             Ok(())
         }
         Some(t) => {
-            let cwd = t.fs.borrow().cwd.clone();
-            if cwd.len() >= PATH_MAX {
+            let fs = t.fs.borrow();
+            if fs.cwd.len() >= PATH_MAX {
                 return Err(-libc::ENAMETOOLONG);
             }
-            guest_path.set(cwd.as_bytes());
+            guest_path.set(fs.cwd.as_bytes());
             Ok(())
         }
     }
@@ -147,9 +145,10 @@ pub fn realpath2(
 /// `belongs_to_guestfs()` — whether the translated host path lives inside the
 /// guest rootfs (i.e. under the root binding, not a guest binding).
 pub fn belongs_to_guestfs(tracee: &crate::tracee::Tracee, host_path: &[u8]) -> bool {
-    let root = binding::get_root(tracee);
-    let c = compare_paths(root.as_bytes(), host_path);
-    c == Comparison::PathsAreEqual || c == Comparison::Path1IsPrefix
+    binding::with_root(tracee, |root| {
+        let c = compare_paths(root.as_bytes(), host_path);
+        c == Comparison::PathsAreEqual || c == Comparison::Path1IsPrefix
+    })
 }
 
 /// `which()` — resolve `command` using $PATH; within the tracee's namespace
@@ -245,7 +244,7 @@ fn not_found(
         Err(_) => "<unknown>".to_string(),
     };
     let root = match tracee {
-        Some(t) => binding::get_root(t).to_string(),
+        Some(t) => binding::with_root(t, |r| r.to_string()),
         None => "/".to_string(),
     };
     crate::note!(
@@ -276,7 +275,7 @@ pub fn translate_path(
     user_path: &[u8],
     deref_final: bool,
 ) -> Result<(), i32> {
-    let mut guest_path = FixedPath::new();
+    let mut guest_path = PathGuard::new();
 
     if user_path.first() == Some(&b'/') {
         result.set(b"/");
@@ -299,13 +298,14 @@ pub fn translate_path(
         String::from_utf8_lossy(user_path)
     );
 
-    let mut base = result.clone();
-    let status = crate::extension::notify_guest_path(tracee, &mut base, user_path);
+    // Extensions may reroute through `guest_path` (seeded with the base).
+    guest_path.set(result.as_bytes());
+    let status = crate::extension::notify_guest_path(tracee, &mut guest_path, user_path);
     if status < 0 {
         return Err(status);
     }
     if status > 0 {
-        result.set(base.as_bytes());
+        result.set(guest_path.as_bytes());
         return finish_translate(tracee, result);
     }
 
@@ -367,8 +367,10 @@ pub fn detranslate_path(
                     let referrer =
                         binding::get_path_binding(tracee, Side::Host, t_referrer.as_bytes());
                     if let (Some(ree), Some(rer)) = (referree, referrer) {
-                        follow_binding = compare_paths(ree.as_bytes(), rer.as_bytes())
-                            == Comparison::PathsAreEqual;
+                        follow_binding = compare_paths(
+                            ree.path(Side::Host).as_bytes(),
+                            rer.path(Side::Host).as_bytes(),
+                        ) == Comparison::PathsAreEqual;
                     }
                 }
             }
@@ -386,17 +388,13 @@ pub fn detranslate_path(
         }
     }
 
-    let root = binding::get_root(tracee);
-    match compare_paths(root.as_bytes(), path.as_bytes()) {
+    let (cmp, root_len) = binding::with_root(tracee, |root| {
+        (compare_paths(root.as_bytes(), path.as_bytes()), root.len())
+    });
+    match cmp {
         Comparison::Path1IsPrefix => {
-            let mut prefix_length = root.as_bytes().len();
-            if prefix_length == 1 {
-                prefix_length = 0;
-            }
-            let new_length = path.len() - prefix_length;
-            let bytes = path.as_bytes()[prefix_length..].to_vec();
-            path.set(&bytes);
-            let _ = new_length;
+            let prefix_length = if root_len == 1 { 0 } else { root_len };
+            path.strip_prefix(prefix_length);
             Ok(path.len() as i32 + 1)
         }
         Comparison::PathsAreEqual => {

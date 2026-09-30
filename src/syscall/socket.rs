@@ -3,7 +3,7 @@
 //! `sockaddr_un` has the same layout on every architecture.
 
 use crate::Word;
-use crate::fpath::FixedPath;
+use crate::fpath::{FixedPath, PathGuard};
 use crate::tracee::Tracee;
 use crate::tracee::mem::{alloc_mem, peek_int32, poke_int32, read_data, write_data};
 
@@ -54,8 +54,8 @@ fn read_sockaddr_un(
 /// -errno on error.
 pub fn translate_socketcall_enter(tracee: &mut Tracee, address: &mut Word, size: Word) -> i32 {
     let mut sockaddr: libc::sockaddr_un = crate::sys::zeroed();
-    let mut user_path = FixedPath::new();
-    let mut host_path = FixedPath::new();
+    let mut user_path = PathGuard::new();
+    let mut host_path = PathGuard::new();
 
     if *address == 0 {
         return 0;
@@ -144,7 +144,7 @@ pub fn translate_socketcall_exit(
     max_size: Word,
 ) -> i32 {
     let mut sockaddr: libc::sockaddr_un = crate::sys::zeroed();
-    let mut path = FixedPath::new();
+    let mut path = PathGuard::new();
 
     if sock_addr == 0 {
         return 0;

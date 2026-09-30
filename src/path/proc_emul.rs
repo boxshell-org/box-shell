@@ -58,8 +58,6 @@ pub fn readlink_proc(
     if pid == 0 {
         return Ok(Action::Default);
     }
-    let base_bytes: Vec<u8> = base.to_vec();
-    let _ = base_bytes;
 
     // Handle links in "/proc/<PID>/".
     let proc_path = format!("/proc/{}", pid);
@@ -77,7 +75,7 @@ pub fn readlink_proc(
                     .map(|s| s.as_bytes().to_vec())
                     .unwrap_or_default();
                 cwd_bytes = tracee.fs.borrow().cwd.as_bytes().to_vec();
-                root_bytes = crate::path::binding::get_root(tracee).as_bytes().to_vec();
+                root_bytes = crate::path::binding::with_root(tracee, |r| r.as_bytes().to_vec());
             } else {
                 let known = match crate::tracee::get_tracee(pid, false) {
                     Some(t) => t,
@@ -90,7 +88,7 @@ pub fn readlink_proc(
                     .map(|s| s.as_bytes().to_vec())
                     .unwrap_or_default();
                 cwd_bytes = known.fs.borrow().cwd.as_bytes().to_vec();
-                root_bytes = crate::path::binding::get_root(&known).as_bytes().to_vec();
+                root_bytes = crate::path::binding::with_root(&known, |r| r.as_bytes().to_vec());
             }
 
             macro_rules! substitute {

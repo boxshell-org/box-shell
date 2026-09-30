@@ -6,7 +6,7 @@
 //! /dev/shm statfs lie, and netlink ack rewriting.
 
 use crate::Word;
-use crate::fpath::FixedPath;
+use crate::fpath::{FixedPath, PathGuard};
 use crate::path::{Comparison, compare_paths};
 use crate::syscall::{ReadlinkProcFdState, is_voided_syscall, netlink};
 use crate::sysnum::Abi;
@@ -64,7 +64,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
             if size == 0 {
                 Flow::Result(-libc::EINVAL)
             } else {
-                let mut p = FixedPath::new();
+                let mut p = PathGuard::new();
                 match crate::path::translate_path(tracee, &mut p, libc::AT_FDCWD, b".", false) {
                     Err(e) => Flow::Result(e),
                     Ok(()) => {
@@ -126,7 +126,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
                 Flow::End
             } else {
                 let address = peek_reg(tracee, RegVersion::Original, Reg::Sysarg1);
-                let mut uts = vec![0u8; size_of::<libc::utsname>()];
+                let mut uts = [0u8; size_of::<libc::utsname>()];
                 match read_data(tracee, &mut uts, address) {
                     s if s < 0 => Flow::Result(s),
                     _ => {
@@ -257,7 +257,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
             if syscall_result != 0 {
                 Flow::End
             } else {
-                let mut devshm = FixedPath::new();
+                let mut devshm = PathGuard::new();
                 if crate::path::translate_path(
                     tracee,
                     &mut devshm,
@@ -274,7 +274,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
                     );
                     Flow::End
                 } else {
-                    let mut statfs_path = FixedPath::new();
+                    let mut statfs_path = PathGuard::new();
                     if read_path(
                         tracee,
                         &mut statfs_path,
@@ -459,8 +459,8 @@ fn rename_exit(tracee: &mut Tracee) -> Flow {
         (Reg::Sysarg2, Reg::Sysarg4)
     };
 
-    let mut old_path = FixedPath::new();
-    let mut new_path = FixedPath::new();
+    let mut old_path = PathGuard::new();
+    let mut new_path = PathGuard::new();
 
     let r = read_path(
         tracee,
@@ -543,16 +543,19 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
         return Flow::Result(-libc::EINVAL);
     }
 
-    // The kernel does not NUL-terminate readlink's output.
-    let mut referee = FixedPath::new();
-    let mut buf = vec![0u8; old_size + 1];
-    let s = read_data(tracee, &mut buf[..old_size], output);
+    // The kernel does not NUL-terminate readlink's output.  Read straight
+    // into the path buffer; the unfetched tail is zeroed as a fresh buffer
+    // would be, so a partial read behaves like the old zeroed scratch.
+    let mut referee = PathGuard::new();
+    let cap = old_size.min(crate::PATH_MAX);
+    let s = read_data(tracee, &mut referee.as_mut_bytes()[..cap], output);
     if s < 0 {
         return Flow::Result(s);
     }
-    referee.set(&buf[..old_size]);
+    referee.as_mut_bytes()[s as usize..cap].fill(0);
+    referee.set_len_terminated(cap);
 
-    let mut referer = FixedPath::new();
+    let mut referer = PathGuard::new();
     let status = read_path(tracee, &mut referer, input);
     if status < 0 {
         return Flow::Result(status);
@@ -588,12 +591,13 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
     // Full-buffer readlink truncation: re-read the target with PATH_MAX so
     // detranslation sees the real host path (guest targets truncate easily).
     if old_size == max_size {
-        let c = std::ffi::CString::new(referer.as_bytes()).unwrap();
-        let mut rbuf = vec![0u8; crate::PATH_MAX];
-        let end = rbuf.len() - 1;
-        let full = crate::sys::readlink(&c, &mut rbuf[..end]);
+        // PATH_MAX-1 keeps room for the terminator.
+        let full = crate::sys::readlink(
+            referer.as_c_str(),
+            &mut referee.as_mut_bytes()[..crate::PATH_MAX - 1],
+        );
         if full > 0 {
-            referee.set(&rbuf[..full as usize]);
+            referee.set_len_terminated(full as usize);
         }
     }
 
@@ -609,7 +613,7 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
         if status < 0 {
             return Flow::Result(status);
         }
-        referee = proc_fd.host_path.clone();
+        referee.set(proc_fd.host_path.as_bytes());
         substituted = proc_fd_substituted(&proc_fd);
     }
 

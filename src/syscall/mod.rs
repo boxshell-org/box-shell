@@ -14,7 +14,7 @@ pub mod socket;
 use crate::Word;
 use crate::fpath::FixedPath;
 use crate::sysnum::Sysnum;
-use crate::tracee::mem::{alloc_mem, read_path, write_data};
+use crate::tracee::mem::{alloc_mem, read_path, write_data, writev_data};
 use crate::tracee::reg::{
     Reg, RegVersion, fetch_regs, get_sysnum, peek_reg, poke_reg, push_specific_regs,
     save_current_regs, set_sysnum,
@@ -58,12 +58,18 @@ pub fn set_sysarg_data(tracee: &mut Tracee, data: &[u8], reg: Reg) -> i32 {
     0
 }
 
-/// `set_sysarg_path()`.
+/// `set_sysarg_path()` — gather-write `path` + its NUL in one remote copy.
 pub fn set_sysarg_path(tracee: &mut Tracee, path: &[u8], reg: Reg) -> i32 {
-    let mut buf = Vec::with_capacity(path.len() + 1);
-    buf.extend_from_slice(path);
-    buf.push(0);
-    set_sysarg_data(tracee, &buf, reg)
+    let ptr = alloc_mem(tracee, path.len() as i64 + 1);
+    if ptr == 0 {
+        return -libc::EFAULT;
+    }
+    let status = writev_data(tracee, ptr, &[path, &[0]]);
+    if status < 0 {
+        return status;
+    }
+    poke_reg(tracee, reg, ptr);
+    0
 }
 
 /// `is_voided_syscall()` — whether `version` holds the avoider PRoot

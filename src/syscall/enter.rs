@@ -6,7 +6,7 @@
 //! AF_NETLINK substitution handled by `netlink.rs`.
 
 use crate::Word;
-use crate::fpath::FixedPath;
+use crate::fpath::{FixedPath, PathGuard};
 use crate::path::{Comparison, Side, binding, compare_paths, join_paths2};
 use crate::syscall::{get_sysarg_path, netlink, set_sysarg_path};
 use crate::sysnum::Sysnum;
@@ -54,7 +54,7 @@ fn translate_path2(tracee: &mut Tracee, dir_fd: i32, path: &FixedPath, reg: Reg,
     if path.is_empty() {
         return 0;
     }
-    let mut new_path = FixedPath::new();
+    let mut new_path = PathGuard::new();
     match crate::path::translate_path(
         tracee,
         &mut new_path,
@@ -86,7 +86,7 @@ fn translate_path2_parent(tracee: &mut Tracee, dir_fd: i32, path: &FixedPath, re
     if leaf.is_empty() || leaf == b"." || leaf == b".." {
         return translate_path2(tracee, dir_fd, path, reg, PType::Symlink);
     }
-    let mut translated_parent = FixedPath::new();
+    let mut translated_parent = PathGuard::new();
     if let Err(e) = crate::path::translate_path(
         tracee,
         &mut translated_parent,
@@ -96,7 +96,7 @@ fn translate_path2_parent(tracee: &mut Tracee, dir_fd: i32, path: &FixedPath, re
     ) {
         return e;
     }
-    let mut translated_path = FixedPath::new();
+    let mut translated_path = PathGuard::new();
     if join_paths2(&mut translated_path, translated_parent.as_bytes(), leaf).is_err() {
         return -libc::ENAMETOOLONG;
     }
@@ -105,7 +105,7 @@ fn translate_path2_parent(tracee: &mut Tracee, dir_fd: i32, path: &FixedPath, re
 
 /// `translate_sysarg()` — translate the path argument `reg`.
 fn translate_sysarg(tracee: &mut Tracee, reg: Reg, ty: PType) -> i32 {
-    let mut path = FixedPath::new();
+    let mut path = PathGuard::new();
     let status = get_sysarg_path(tracee, &mut path, reg);
     if status < 0 {
         return status;
@@ -142,7 +142,7 @@ fn emulate_mount(
         return;
     }
 
-    let mut host_path = FixedPath::new();
+    let mut host_path = PathGuard::new();
     if (flags & libc::MS_BIND as Word) != 0 {
         if crate::path::translate_path(tracee, &mut host_path, libc::AT_FDCWD, src_user, true)
             .is_err()
@@ -167,7 +167,7 @@ fn emulate_mount(
     }
     host_path.chop_finality();
 
-    let mut guest_path = FixedPath::new();
+    let mut guest_path = PathGuard::new();
     if guest_canonicalize(tracee, target_user, &mut guest_path).is_err() {
         return;
     }
@@ -178,7 +178,7 @@ fn emulate_mount(
 /// `emulate_pivot_root()` — move the root binding to `new_root` and
 /// re-expose the old root under `put_old`.
 fn emulate_pivot_root(tracee: &mut Tracee, new_root_user: &[u8], put_old_user: &[u8]) {
-    let mut new_root_host = FixedPath::new();
+    let mut new_root_host = PathGuard::new();
     if crate::path::translate_path(
         tracee,
         &mut new_root_host,
@@ -192,13 +192,13 @@ fn emulate_pivot_root(tracee: &mut Tracee, new_root_user: &[u8], put_old_user: &
     }
     new_root_host.chop_finality();
 
-    let mut new_root_guest = FixedPath::new();
+    let mut new_root_guest = PathGuard::new();
     if guest_canonicalize(tracee, new_root_user, &mut new_root_guest).is_err() {
         return;
     }
 
     // put_old resolves against new_root (it's inside the new root).
-    let mut put_old_guest = FixedPath::new();
+    let mut put_old_guest = PathGuard::new();
     if put_old_user.first() == Some(&b'/') {
         put_old_guest.set(b"/");
     } else {
@@ -218,7 +218,7 @@ fn emulate_pivot_root(tracee: &mut Tracee, new_root_user: &[u8], put_old_user: &
     let new_root_len = new_root_guest.len();
 
     // Where the previous root becomes reachable, e.g. "/oldroot".
-    let mut put_old_after = FixedPath::new();
+    let mut put_old_after = PathGuard::new();
     let mut have_put_old = false;
     if new_root_len > 0
         && put_old_guest
@@ -272,7 +272,7 @@ fn emulate_pivot_root(tracee: &mut Tracee, new_root_user: &[u8], put_old_user: &
             {
                 continue;
             }
-            let mut aliased = FixedPath::new();
+            let mut aliased = PathGuard::new();
             if join_paths2(&mut aliased, put_old_after.as_bytes(), bguest).is_err() {
                 continue;
             }
@@ -284,7 +284,7 @@ fn emulate_pivot_root(tracee: &mut Tracee, new_root_user: &[u8], put_old_user: &
 /// `emulate_umount()` — drop the binding matching `target_user` exactly
 /// (never the root binding).
 fn emulate_umount(tracee: &mut Tracee, target_user: &[u8]) {
-    let mut guest_path = FixedPath::new();
+    let mut guest_path = PathGuard::new();
     if guest_canonicalize(tracee, target_user, &mut guest_path).is_err() {
         return;
     }
@@ -305,7 +305,7 @@ fn emulate_umount(tracee: &mut Tracee, target_user: &[u8]) {
 
 /// `apply_emulated_umount()`.
 pub fn apply_emulated_umount(tracee: &mut Tracee) {
-    let mut target = FixedPath::new();
+    let mut target = PathGuard::new();
     if get_sysarg_path(tracee, &mut target, Reg::Sysarg1) < 0 {
         return;
     }
@@ -315,8 +315,8 @@ pub fn apply_emulated_umount(tracee: &mut Tracee) {
 /// `apply_emulated_mount()` — usable both from the normal sysenter path and
 /// the SIGSYS handler (outer seccomp may trap mount before its sysenter).
 pub fn apply_emulated_mount(tracee: &mut Tracee) {
-    let mut src = FixedPath::new();
-    let mut target = FixedPath::new();
+    let mut src = PathGuard::new();
+    let mut target = PathGuard::new();
     if get_sysarg_path(tracee, &mut src, Reg::Sysarg1) < 0 {
         return;
     }
@@ -342,8 +342,8 @@ pub fn apply_emulated_mount(tracee: &mut Tracee) {
 
 /// `apply_emulated_pivot_root()`.
 pub fn apply_emulated_pivot_root(tracee: &mut Tracee) {
-    let mut new_root = FixedPath::new();
-    let mut put_old = FixedPath::new();
+    let mut new_root = PathGuard::new();
+    let mut put_old = PathGuard::new();
     if get_sysarg_path(tracee, &mut new_root, Reg::Sysarg1) < 0 {
         return;
     }
@@ -378,7 +378,7 @@ fn is_proc_userns_file(path: &[u8]) -> bool {
 /// `maybe_redirect_userns_file()` — writes to the userns setup files are
 /// silently redirected to /dev/null (the tracee can't really create them).
 fn maybe_redirect_userns_file(tracee: &mut Tracee, reg: Reg) {
-    let mut host_path = FixedPath::new();
+    let mut host_path = PathGuard::new();
     if get_sysarg_path(tracee, &mut host_path, reg) < 0 {
         return;
     }
@@ -394,9 +394,9 @@ fn maybe_redirect_userns_file(tracee: &mut Tracee, reg: Reg) {
 
 /// `translate_syscall_enter()`.
 pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
-    let mut path = FixedPath::new();
-    let mut oldpath = FixedPath::new();
-    let mut newpath = FixedPath::new();
+    let mut path = PathGuard::new();
+    let mut oldpath = PathGuard::new();
+    let mut newpath = PathGuard::new();
     let mut special = false;
 
     let mut status = crate::extension::notify(tracee, &mut crate::extension::Event::SysEnterStart);
@@ -481,8 +481,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                 {
                     status = e;
                 } else {
-                    let c = std::ffi::CString::new(path.as_bytes()).unwrap();
-                    match crate::sys::lstat(&c) {
+                    match crate::sys::lstat(path.as_c_str()) {
                         Err(e) => status = -e,
                         Ok(st) if (st.st_mode & libc::S_IXUSR) == 0 => return -libc::EACCES,
                         Ok(_) => match crate::path::detranslate_path(tracee, &mut path, None) {
@@ -860,7 +859,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
         Sysnum::open => {
             let flags = peek_reg(tracee, RegVersion::Current, Reg::Sysarg2);
             if tracee.execfn_addr != 0 {
-                let mut p = FixedPath::new();
+                let mut p = PathGuard::new();
                 let n = read_string(
                     tracee,
                     p.as_mut_bytes(),

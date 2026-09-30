@@ -6,8 +6,6 @@
 //! This extension rewrites st_size to the symlink target length so the
 //! fake link looks like the real file.
 
-use std::ffi::CString;
-
 use crate::PATH_MAX;
 use crate::Word;
 use crate::extension::Event;
@@ -47,10 +45,11 @@ fn handle_sysexit_end(tracee: &mut Tracee) -> i32 {
     if size as usize >= PATH_MAX {
         return -libc::ENAMETOOLONG;
     }
-    let path = CString::new(&original[..size as usize - 1]).unwrap_or_default();
+    // `size` includes the terminator read_string wrote.
+    let path = std::ffi::CStr::from_bytes_with_nul(&original[..size as usize]).unwrap_or_default();
 
     // Not a link → nothing to fix.
-    let statl = match crate::sys::lstat(&path) {
+    let statl = match crate::sys::lstat(path) {
         Ok(s) => s,
         Err(e) => return -e,
     };
@@ -59,7 +58,7 @@ fn handle_sysexit_end(tracee: &mut Tracee) -> i32 {
     }
 
     let mut target = [0u8; PATH_MAX];
-    let size = crate::sys::readlink(&path, &mut target);
+    let size = crate::sys::readlink(path, &mut target);
     if size < 0 {
         return -crate::sys::errno();
     }

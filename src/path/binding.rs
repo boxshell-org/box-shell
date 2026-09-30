@@ -30,6 +30,20 @@ impl Binding {
 /// `get_binding()` — find the binding covering `path` on `side`.
 pub fn get_binding(tracee: &Tracee, side: Side, path: &[u8]) -> Option<Rc<Binding>> {
     debug_assert!(path.first() == Some(&b'/'));
+    // The host-side false-positive guard is loop-invariant (it depends on
+    // the path and root only, not on the binding): evaluate it once — when
+    // it trips, every candidate is skipped, i.e. the result is `None`.
+    if side == Side::Host {
+        let skip = with_root(tracee, |root| {
+            compare_paths(root.as_bytes(), b"/") != Comparison::PathsAreEqual && {
+                let c = compare_paths(root.as_bytes(), path);
+                c == Comparison::PathsAreEqual || c == Comparison::Path1IsPrefix
+            }
+        });
+        if skip {
+            return None;
+        }
+    }
     let fs = tracee.fs.borrow();
     let list = match side {
         Side::Guest => &fs.guest,
@@ -39,41 +53,42 @@ pub fn get_binding(tracee: &Tracee, side: Side, path: &[u8]) -> Option<Rc<Bindin
     for binding in list.iter() {
         let reference = binding.path(side);
         let cmp = compare_paths(reference.as_bytes(), path);
-        if cmp != Comparison::PathsAreEqual && cmp != Comparison::Path1IsPrefix {
-            continue;
+        if cmp == Comparison::PathsAreEqual || cmp == Comparison::Path1IsPrefix {
+            return Some(binding.clone());
         }
-        // Avoid false positives when a prefix of the rootfs is used as an
-        // asymmetric binding (e.g. `-b /usr:/x` with rootfs under /usr).
-        if side == Side::Host
-            && compare_paths(get_root(tracee).as_bytes(), b"/") != Comparison::PathsAreEqual
-            && crate::path::belongs_to_guestfs(tracee, path)
-        {
-            continue;
-        }
-        return Some(binding.clone());
     }
     None
 }
 
-/// `get_path_binding()` — the side-specific path of the matching binding.
-pub fn get_path_binding(tracee: &Tracee, side: Side, path: &[u8]) -> Option<FixedPath> {
-    get_binding(tracee, side, path).map(|b| b.path(side).clone())
+/// `get_path_binding()` — the matching binding (its `path(side)` is the
+/// side-specific path); the `Rc` keeps the caller copy-free.
+pub fn get_path_binding(tracee: &Tracee, side: Side, path: &[u8]) -> Option<Rc<Binding>> {
+    get_binding(tracee, side, path)
+}
+
+/// `with_root()` — borrow the host path of the binding mounted at guest
+/// "/" for the duration of `f` (empty path when none), avoiding the
+/// PATH_MAX clone `get_root()` would return.
+pub fn with_root<R>(tracee: &Tracee, f: impl FnOnce(&FixedPath) -> R) -> R {
+    static EMPTY: FixedPath = FixedPath::new();
+    let fs = tracee.fs.borrow();
+    let root = if fs.guest.is_empty() {
+        match fs.pending.last() {
+            Some(b) if compare_paths(b.guest.as_bytes(), b"/") == Comparison::PathsAreEqual => {
+                &b.host
+            }
+            _ => &EMPTY,
+        }
+    } else {
+        &fs.guest.last().unwrap().host
+    };
+    f(root)
 }
 
 /// `get_root()` — host path of the binding mounted at guest "/".
+/// Prefer [`with_root`] when the value is only inspected.
 pub fn get_root(tracee: &Tracee) -> FixedPath {
-    let fs = tracee.fs.borrow();
-    if fs.guest.is_empty() {
-        if fs.pending.is_empty() {
-            return FixedPath::new();
-        }
-        let b = fs.pending.last().unwrap();
-        if compare_paths(b.guest.as_bytes(), b"/") != Comparison::PathsAreEqual {
-            return FixedPath::new();
-        }
-        return b.host.clone();
-    }
-    fs.guest.last().unwrap().host.clone()
+    with_root(tracee, |root| root.clone())
 }
 
 /// `substitute_binding()` — replace the `side` prefix of `path` with the
@@ -164,17 +179,10 @@ fn insort_binding(tracee: &Tracee, side: Side, binding: Rc<Binding>) {
 }
 
 /// `insort_binding2` — set need_substitution and insert into guest+host lists.
-pub fn insort_binding2(tracee: &Tracee, binding: &mut Binding) -> Rc<Binding> {
+pub fn insort_binding2(tracee: &Tracee, mut binding: Binding) -> Rc<Binding> {
     binding.need_substitution = compare_paths(binding.host.as_bytes(), binding.guest.as_bytes())
         != Comparison::PathsAreEqual;
-    let rc = Rc::new(std::mem::replace(
-        binding,
-        Binding {
-            host: FixedPath::new(),
-            guest: FixedPath::new(),
-            need_substitution: false,
-        },
-    ));
+    let rc = Rc::new(binding);
     insort_binding(tracee, Side::Guest, rc.clone());
     insort_binding(tracee, Side::Host, rc.clone());
     rc
@@ -186,7 +194,7 @@ pub fn insort_binding3(
     host_path: &[u8],
     guest_path: &[u8],
 ) -> Option<Rc<Binding>> {
-    let mut b = Binding {
+    let b = Binding {
         host: FixedPath::from_bytes(host_path),
         guest: FixedPath::from_bytes(guest_path),
         need_substitution: false,
@@ -194,7 +202,7 @@ pub fn insort_binding3(
     if b.host.len() >= crate::PATH_MAX - 1 || b.guest.len() >= crate::PATH_MAX - 1 {
         return None;
     }
-    Some(insort_binding2(tracee, &mut b))
+    Some(insort_binding2(tracee, b))
 }
 
 /// `new_binding()` — add a pending binding `host:guest` (guest defaults to
@@ -308,8 +316,7 @@ pub fn initialize_binding(tracee: &mut Tracee, binding: &Rc<Binding>) {
 
         // Remember the type of the final component for build_glue().
         let mut st: libc::stat = crate::sys::zeroed();
-        let c = std::ffi::CString::new(binding.host.as_bytes()).unwrap();
-        let status = match crate::sys::lstat(&c) {
+        let status = match crate::sys::lstat(binding.host.as_c_str()) {
             Ok(v) => {
                 st = v;
                 0
@@ -342,17 +349,13 @@ pub fn initialize_binding(tracee: &mut Tracee, binding: &Rc<Binding>) {
         ) {
             Ok(()) => {
                 new_guest.chop_finality();
-                // Replace binding.guest (Rc -> get_mut; only owner is us here
-                // before insertion).
-                let mut updated = Binding {
+                // insort_binding2 recomputes need_substitution.
+                let updated = Binding {
                     host: binding.host.clone(),
                     guest: new_guest,
-                    need_substitution: binding.need_substitution,
+                    need_substitution: false,
                 };
-                updated.need_substitution =
-                    compare_paths(updated.host.as_bytes(), updated.guest.as_bytes())
-                        != Comparison::PathsAreEqual;
-                insort_binding2(tracee, &mut updated);
+                insort_binding2(tracee, updated);
             }
             Err(e) => {
                 crate::note!(
@@ -366,15 +369,12 @@ pub fn initialize_binding(tracee: &mut Tracee, binding: &Rc<Binding>) {
         }
         tracee.glue_type = 0;
     } else {
-        let mut updated = Binding {
+        let updated = Binding {
             host: binding.host.clone(),
             guest: binding.guest.clone(),
-            need_substitution: binding.need_substitution,
+            need_substitution: false,
         };
-        updated.need_substitution =
-            compare_paths(updated.host.as_bytes(), updated.guest.as_bytes())
-                != Comparison::PathsAreEqual;
-        insort_binding2(tracee, &mut updated);
+        insort_binding2(tracee, updated);
     }
 }
 

@@ -17,7 +17,7 @@ use crate::execve::elf::{
 use crate::execve::ldso::{ldso_env_passthru, rebuild_host_ldso_paths};
 use crate::execve::shebang::expand_shebang;
 use crate::execve::{ExecveProcExeState, LoadInfo, Mapping, is_notification_ptraced_load_done};
-use crate::fpath::FixedPath;
+use crate::fpath::{FixedPath, PathGuard};
 use crate::syscall::{get_sysarg_path, set_sysarg_path};
 use crate::sysnum::Sysnum;
 use crate::tracee::Tracee;
@@ -119,7 +119,7 @@ fn add_interp(
         user_path = v;
     }
 
-    let mut host_path = FixedPath::new();
+    let mut host_path = PathGuard::new();
     let status =
         crate::execve::shebang::translate_and_check_exec(tracee, &mut host_path, &user_path);
     if status < 0 {
@@ -306,8 +306,7 @@ fn extract_loader(tracee: &Tracee) -> Option<String> {
         );
         return None;
     }
-    let c = std::ffi::CString::new(path.as_bytes()).ok()?;
-    if crate::sys::access(&c, libc::X_OK) < 0 {
+    if crate::sys::access(path.as_c_str(), libc::X_OK) < 0 {
         crate::note!(
             Some(tracee),
             crate::note::Severity::Error,
@@ -349,14 +348,14 @@ pub fn translate_execve_enter(tracee: &mut Tracee) -> i32 {
         return 0;
     }
 
-    let mut user_path = FixedPath::new();
+    let mut user_path = PathGuard::new();
     let mut status = get_sysarg_path(tracee, &mut user_path, Reg::Sysarg1);
     if status < 0 {
         return status;
     }
     let raw_path = user_path.clone();
 
-    let mut host_path = FixedPath::new();
+    let mut host_path = PathGuard::new();
     status = match expand_shebang(tracee, &mut host_path, &mut user_path) {
         Ok(s) => s,
         Err(e) => {

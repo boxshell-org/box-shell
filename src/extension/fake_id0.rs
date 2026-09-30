@@ -12,7 +12,7 @@ use std::os::unix::ffi::OsStrExt;
 use crate::PATH_MAX;
 use crate::Word;
 use crate::extension::Event;
-use crate::fpath::FixedPath;
+use crate::fpath::{FixedPath, PathGuard};
 use crate::path::{Comparison, belongs_to_guestfs, compare_paths};
 use crate::syscall::chain::register_chained_syscall;
 use crate::syscall::set_sysarg_data;
@@ -123,12 +123,8 @@ fn otod(mut n: i32) -> i32 {
 }
 
 /// `path_exists()` — access(path, F_OK) == 0.
-fn path_exists(path: &[u8]) -> bool {
-    let c = match CString::new(path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    crate::sys::access(&c, libc::F_OK) == 0
+fn path_exists(path: &FixedPath) -> bool {
+    crate::sys::access(path.as_c_str(), libc::F_OK) == 0
 }
 
 /// `get_name()` — final component of `path`.
@@ -139,44 +135,44 @@ fn get_name(path: &[u8]) -> &[u8] {
     }
 }
 
-/// `get_dir_path()` — `path` without its final component.
-fn get_dir_path(path: &[u8]) -> Vec<u8> {
-    let mut dir = path.to_vec();
-    let mut offset = dir.len() as i64 - 1;
-    if offset > 0 {
-        while offset > 1 && dir[offset as usize] == b'/' {
-            offset -= 1;
-        }
-        while offset > 1 && dir[offset as usize] != b'/' {
-            offset -= 1;
-        }
-        dir.truncate(offset.max(0) as usize);
+/// `get_dir_path()` — `path` without its final component (borrowed).
+/// Single-byte/empty paths return themselves, like the original.
+fn get_dir_path(path: &[u8]) -> &[u8] {
+    if path.len() <= 1 {
+        return path;
     }
-    dir
+    let mut offset = path.len() - 1;
+    while offset > 1 && path[offset] == b'/' {
+        offset -= 1;
+    }
+    while offset > 1 && path[offset] != b'/' {
+        offset -= 1;
+    }
+    &path[..offset]
 }
 
 /// `get_meta_path()` — insert META_TAG before the final component.
 fn get_meta_path(orig_path: &[u8], meta_path: &mut FixedPath) -> Result<(), i32> {
-    let mut dir = get_dir_path(orig_path);
+    let dir = get_dir_path(orig_path);
     let filename = get_name(orig_path);
-    if dir != b"/" {
-        dir.push(b'/');
-    }
-    if dir.len() + filename.len() + META_TAG.len() >= PATH_MAX {
+    if dir.len() + filename.len() + META_TAG.len() + 1 >= PATH_MAX {
         return Err(-libc::ENAMETOOLONG);
     }
-    dir.extend_from_slice(META_TAG);
-    dir.extend_from_slice(filename);
-    meta_path.set(&dir);
+    meta_path.set(dir);
+    if dir != b"/" {
+        meta_path.extend(b"/")?;
+    }
+    meta_path.extend(META_TAG)?;
+    meta_path.extend(filename)?;
     Ok(())
 }
 
 /// `read_meta_file()` — fill (mode, owner, group) from a meta file; absent
 /// meta files fall back to permissive defaults (755, euid/egid).
-fn read_meta_file(path: &[u8], config: &Config) -> (u32, u32, u32) {
+fn read_meta_file(path: &FixedPath, config: &Config) -> (u32, u32, u32) {
     // C reads `fscanf(fp, "%d %d %d ", ...)`; fields that fail to parse stay
     // at their defaults.
-    let text = match std::fs::read_to_string(std::ffi::OsStr::from_bytes(path)) {
+    let text = match std::fs::read_to_string(std::ffi::OsStr::from_bytes(path.as_bytes())) {
         Ok(t) => t,
         Err(_) => return (0o755, config.euid, config.egid),
     };
@@ -208,7 +204,7 @@ fn read_meta_file(path: &[u8], config: &Config) -> (u32, u32, u32) {
 /// `write_meta_file()` — record (mode, owner, group); `is_creat` applies the
 /// emulated umask.
 fn write_meta_file(
-    path: &[u8],
+    path: &FixedPath,
     mode: u32,
     owner: u32,
     group: u32,
@@ -221,13 +217,13 @@ fn write_meta_file(
         mode
     };
     let text = format!("{}\n{}\n{}\n", dtoo(mode as i32), owner, group);
-    std::fs::write(std::ffi::OsStr::from_bytes(path), text)
+    std::fs::write(std::ffi::OsStr::from_bytes(path.as_bytes()), text)
         .map_err(|e| -(e.raw_os_error().unwrap_or(libc::EIO)))
 }
 
 /// `get_permissions()` — the rwx class digit (as a decimal-looking octal
 /// digit) applicable to the emulated uid/gid; root always gets `|6`.
-fn get_permissions(meta_path: &[u8], config: &Config, uses_real: bool) -> Result<i32, i32> {
+fn get_permissions(meta_path: &FixedPath, config: &Config, uses_real: bool) -> Result<i32, i32> {
     if !path_exists(meta_path) && read_meta_file(meta_path, config).0 == 0o755 {
         // read_meta_file's default path means "no meta": fall through to the
         // permissive default like C does (owner=config->euid, mode=0755).
@@ -274,10 +270,10 @@ fn check_dir_perms(
     let w = 2;
 
     let mut shorten = get_dir_path(path);
-    let mut meta = FixedPath::new();
-    get_meta_path(&shorten, &mut meta)?;
+    let mut meta = PathGuard::new();
+    get_meta_path(shorten, &mut meta)?;
 
-    let perms = get_permissions(meta.as_bytes(), config, false)?;
+    let perms = get_permissions(&meta, config, false)?;
     if ty == b'w' && (perms & w) != w {
         return Err(-libc::EACCES);
     }
@@ -285,13 +281,13 @@ fn check_dir_perms(
         return Err(-libc::EACCES);
     }
 
-    while shorten.as_slice() != rel_path && rel_path.len() < shorten.len() {
-        shorten = get_dir_path(&shorten);
-        if !belongs_to_guestfs(tracee, &shorten) {
+    while shorten != rel_path && rel_path.len() < shorten.len() {
+        shorten = get_dir_path(shorten);
+        if !belongs_to_guestfs(tracee, shorten) {
             break;
         }
-        get_meta_path(&shorten, &mut meta)?;
-        let perms = get_permissions(meta.as_bytes(), config, false)?;
+        get_meta_path(shorten, &mut meta)?;
+        let perms = get_permissions(&meta, config, false)?;
         if (perms & x) != x {
             return Err(-libc::EACCES);
         }
@@ -358,7 +354,7 @@ fn read_sysarg_path(
             }
         }
         RegVersion::Original => {
-            let mut original = FixedPath::new();
+            let mut original = PathGuard::new();
             size = read_string(
                 tracee,
                 original.as_mut_bytes(),
@@ -406,14 +402,14 @@ fn handle_open_enter(
     mode_sysarg: Reg,
     config: &Config,
 ) -> i32 {
-    let mut orig_path = FixedPath::new();
+    let mut orig_path = PathGuard::new();
     match read_sysarg_path(tracee, &mut orig_path, path_sysarg, RegVersion::Current) {
         Err(e) => return e,
         Ok(1) => return 0,
         _ => {}
     }
 
-    let mut meta_path = FixedPath::new();
+    let mut meta_path = PathGuard::new();
     if let Err(e) = get_meta_path(orig_path.as_bytes(), &mut meta_path) {
         return e;
     }
@@ -424,41 +420,26 @@ fn handle_open_enter(
     };
 
     // No metafile + not creating → nothing to do.
-    if !path_exists(meta_path.as_bytes())
-        && (flags & libc::O_CREAT as Word) != libc::O_CREAT as Word
-    {
+    if !path_exists(&meta_path) && (flags & libc::O_CREAT as Word) != libc::O_CREAT as Word {
         return 0;
     }
 
-    let mut rel_path = FixedPath::new();
+    let mut rel_path = PathGuard::new();
     if let Err(e) = get_fd_path(tracee, &mut rel_path, fd_sysarg, RegVersion::Current) {
         return e;
     }
 
     if (flags & libc::O_CREAT as Word) == libc::O_CREAT as Word {
-        if path_exists(orig_path.as_bytes()) {
+        if path_exists(&orig_path) {
             // File exists already → check its perms instead.
             return open_check(tracee, &meta_path, &rel_path, flags, config);
         }
-        if let Err(e) = check_dir_perms(
-            tracee,
-            b'w',
-            meta_path.as_bytes(),
-            rel_path.as_bytes(),
-            config,
-        ) {
+        if let Err(e) = check_dir_perms(tracee, b'w', &meta_path, rel_path.as_bytes(), config) {
             return e;
         }
         let mode = peek_reg(tracee, RegVersion::Original, mode_sysarg) as u32;
         poke_reg(tracee, mode_sysarg, (mode | 0o700) as Word);
-        return match write_meta_file(
-            meta_path.as_bytes(),
-            mode,
-            config.euid,
-            config.egid,
-            true,
-            config,
-        ) {
+        return match write_meta_file(&meta_path, mode, config.euid, config.egid, true, config) {
             Ok(()) => 0,
             Err(e) => e,
         };
@@ -475,16 +456,10 @@ fn open_check(
     flags: Word,
     config: &Config,
 ) -> i32 {
-    if let Err(e) = check_dir_perms(
-        tracee,
-        b'r',
-        meta_path.as_bytes(),
-        rel_path.as_bytes(),
-        config,
-    ) {
+    if let Err(e) = check_dir_perms(tracee, b'r', meta_path, rel_path.as_bytes(), config) {
         return e;
     }
-    let perms = match get_permissions(meta_path.as_bytes(), config, false) {
+    let perms = match get_permissions(meta_path, config, false) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -506,23 +481,23 @@ fn handle_mk_enter(
     mode_sysarg: Reg,
     config: &Config,
 ) -> i32 {
-    let mut orig_path = FixedPath::new();
+    let mut orig_path = PathGuard::new();
     match read_sysarg_path(tracee, &mut orig_path, path_sysarg, RegVersion::Current) {
         Err(e) => return e,
         Ok(1) => return 0,
         _ => {}
     }
     // Existing path → the syscall will return EEXIST itself.
-    if path_exists(orig_path.as_bytes()) {
+    if path_exists(&orig_path) {
         return 0;
     }
 
-    let mut meta_path = FixedPath::new();
+    let mut meta_path = PathGuard::new();
     if let Err(e) = get_meta_path(orig_path.as_bytes(), &mut meta_path) {
         return e;
     }
 
-    let mut rel_path = FixedPath::new();
+    let mut rel_path = PathGuard::new();
     if let Err(e) = get_fd_path(tracee, &mut rel_path, fd_sysarg, RegVersion::Current) {
         return e;
     }
@@ -538,14 +513,7 @@ fn handle_mk_enter(
 
     let mode = peek_reg(tracee, RegVersion::Original, mode_sysarg) as u32;
     poke_reg(tracee, mode_sysarg, (mode | 0o700) as Word);
-    match write_meta_file(
-        meta_path.as_bytes(),
-        mode,
-        config.euid,
-        config.egid,
-        true,
-        config,
-    ) {
+    match write_meta_file(&meta_path, mode, config.euid, config.egid, true, config) {
         Ok(()) => 0,
         Err(e) => e,
     }
@@ -558,19 +526,19 @@ fn handle_unlink_enter(
     path_sysarg: Reg,
     config: &Config,
 ) -> i32 {
-    let mut orig_path = FixedPath::new();
+    let mut orig_path = PathGuard::new();
     match read_sysarg_path(tracee, &mut orig_path, path_sysarg, RegVersion::Current) {
         Err(e) => return e,
         Ok(1) => return 0,
         _ => {}
     }
 
-    let mut meta_path = FixedPath::new();
+    let mut meta_path = PathGuard::new();
     if let Err(e) = get_meta_path(orig_path.as_bytes(), &mut meta_path) {
         return e;
     }
 
-    let mut rel_path = FixedPath::new();
+    let mut rel_path = PathGuard::new();
     if let Err(e) = get_fd_path(tracee, &mut rel_path, fd_sysarg, RegVersion::Current) {
         return e;
     }
@@ -585,9 +553,8 @@ fn handle_unlink_enter(
     }
 
     // If a meta file exists, unlink it as well.
-    if path_exists(meta_path.as_bytes()) {
-        let c = CString::new(meta_path.as_bytes()).unwrap();
-        crate::sys::unlink(&c);
+    if path_exists(&meta_path) {
+        crate::sys::unlink(meta_path.as_c_str());
     }
     0
 }
@@ -601,23 +568,23 @@ fn handle_rename_enter(
     newpath_sysarg: Reg,
     config: &Config,
 ) -> i32 {
-    let mut oldpath = FixedPath::new();
+    let mut oldpath = PathGuard::new();
     match read_sysarg_path(tracee, &mut oldpath, oldpath_sysarg, RegVersion::Current) {
         Err(e) => return e,
         Ok(1) => return 0,
         _ => {}
     }
-    let mut newpath = FixedPath::new();
+    let mut newpath = PathGuard::new();
     match read_sysarg_path(tracee, &mut newpath, newpath_sysarg, RegVersion::Current) {
         Err(e) => return e,
         Ok(1) => return 0,
         _ => {}
     }
-    let mut rel_oldpath = FixedPath::new();
+    let mut rel_oldpath = PathGuard::new();
     if let Err(e) = get_fd_path(tracee, &mut rel_oldpath, oldfd_sysarg, RegVersion::Current) {
         return e;
     }
-    let mut rel_newpath = FixedPath::new();
+    let mut rel_newpath = PathGuard::new();
     if let Err(e) = get_fd_path(tracee, &mut rel_newpath, newfd_sysarg, RegVersion::Current) {
         return e;
     }
@@ -641,21 +608,20 @@ fn handle_rename_enter(
     }
 
     // If a meta file exists, "copy" it to the new path.
-    let mut meta_path = FixedPath::new();
+    let mut meta_path = PathGuard::new();
     if let Err(e) = get_meta_path(oldpath.as_bytes(), &mut meta_path) {
         return e;
     }
-    if !path_exists(meta_path.as_bytes()) {
+    if !path_exists(&meta_path) {
         return 0;
     }
-    let (mode, uid, gid) = read_meta_file(meta_path.as_bytes(), config);
-    let c = CString::new(meta_path.as_bytes()).unwrap();
-    crate::sys::unlink(&c);
+    let (mode, uid, gid) = read_meta_file(&meta_path, config);
+    crate::sys::unlink(meta_path.as_c_str());
 
     if let Err(e) = get_meta_path(newpath.as_bytes(), &mut meta_path) {
         return e;
     }
-    match write_meta_file(meta_path.as_bytes(), mode, uid, gid, false, config) {
+    match write_meta_file(&meta_path, mode, uid, gid, false, config) {
         Ok(()) => 0,
         Err(e) => e,
     }
@@ -670,7 +636,7 @@ fn handle_chmod_enter(
     dirfd_sysarg: Option<Reg>,
     config: &Config,
 ) -> i32 {
-    let mut path = FixedPath::new();
+    let mut path = PathGuard::new();
     let status = match path_sysarg {
         None => get_fd_path(tracee, &mut path, fd_sysarg, RegVersion::Current),
         Some(r) => read_sysarg_path(tracee, &mut path, r, RegVersion::Current),
@@ -685,13 +651,13 @@ fn handle_chmod_enter(
         _ => {}
     }
 
-    let mut meta_path = FixedPath::new();
+    let mut meta_path = PathGuard::new();
     let _ = get_meta_path(path.as_bytes(), &mut meta_path);
-    if !path_exists(meta_path.as_bytes()) {
+    if !path_exists(&meta_path) {
         return 0;
     }
 
-    let mut rel_path = FixedPath::new();
+    let mut rel_path = PathGuard::new();
     if let Err(e) = get_fd_path(tracee, &mut rel_path, dirfd_sysarg, RegVersion::Current) {
         return e;
     }
@@ -699,14 +665,14 @@ fn handle_chmod_enter(
         return e;
     }
 
-    let (_read_mode, owner, group) = read_meta_file(meta_path.as_bytes(), config);
+    let (_read_mode, owner, group) = read_meta_file(&meta_path, config);
     if config.euid != owner && config.euid != 0 {
         return -libc::EPERM;
     }
 
     let call_mode = peek_reg(tracee, RegVersion::Original, mode_sysarg) as u32;
     set_sysnum(tracee, Sysnum::getuid);
-    match write_meta_file(meta_path.as_bytes(), call_mode, owner, group, false, config) {
+    match write_meta_file(&meta_path, call_mode, owner, group, false, config) {
         Ok(()) => 0,
         Err(e) => e,
     }
@@ -722,7 +688,7 @@ fn handle_chown_enter(
     dirfd_sysarg: Option<Reg>,
     config: &Config,
 ) -> i32 {
-    let mut path = FixedPath::new();
+    let mut path = PathGuard::new();
     let status = match path_sysarg {
         None => get_fd_path(tracee, &mut path, fd_sysarg, RegVersion::Current),
         Some(r) => read_sysarg_path(tracee, &mut path, r, RegVersion::Current),
@@ -736,15 +702,15 @@ fn handle_chown_enter(
         _ => {}
     }
 
-    let mut meta_path = FixedPath::new();
+    let mut meta_path = PathGuard::new();
     if let Err(e) = get_meta_path(path.as_bytes(), &mut meta_path) {
         return e;
     }
-    if !path_exists(meta_path.as_bytes()) {
+    if !path_exists(&meta_path) {
         return 0;
     }
 
-    let mut rel_path = FixedPath::new();
+    let mut rel_path = PathGuard::new();
     if let Err(e) = get_fd_path(tracee, &mut rel_path, dirfd_sysarg, RegVersion::Current) {
         return e;
     }
@@ -752,7 +718,7 @@ fn handle_chown_enter(
         return e;
     }
 
-    let (mode, read_owner, _read_group) = read_meta_file(meta_path.as_bytes(), config);
+    let (mode, read_owner, _read_group) = read_meta_file(&meta_path, config);
     let mut owner = peek_reg(tracee, RegVersion::Original, owner_sysarg) as u32;
     // chown without owner → owner arg is -1; use the meta owner.
     if owner == u32::MAX {
@@ -761,9 +727,9 @@ fn handle_chown_enter(
     let group = peek_reg(tracee, RegVersion::Original, group_sysarg) as u32;
 
     if config.euid == 0 {
-        let _ = write_meta_file(meta_path.as_bytes(), mode, owner, group, false, config);
+        let _ = write_meta_file(&meta_path, mode, owner, group, false, config);
     } else if config.euid == read_owner {
-        let _ = write_meta_file(meta_path.as_bytes(), mode, read_owner, group, false, config);
+        let _ = write_meta_file(&meta_path, mode, read_owner, group, false, config);
         poke_reg(tracee, owner_sysarg, read_owner as Word);
     } else {
         return -libc::EPERM;
@@ -794,7 +760,7 @@ fn handle_utimensat_enter(
         }
     }
 
-    let mut path = FixedPath::new();
+    let mut path = PathGuard::new();
     let fd = peek_reg(tracee, RegVersion::Original, dirfd_sysarg) as i64 as i32;
     if fd == libc::AT_FDCWD {
         match read_sysarg_path(tracee, &mut path, path_sysarg, RegVersion::Current) {
@@ -808,18 +774,18 @@ fn handle_utimensat_enter(
         }
     }
 
-    let mut meta_path = FixedPath::new();
+    let mut meta_path = PathGuard::new();
     if let Err(e) = get_meta_path(path.as_bytes(), &mut meta_path) {
         return e;
     }
 
     // Current user must be owner of file or root.
-    let (_m, owner, _g) = read_meta_file(meta_path.as_bytes(), config);
+    let (_m, owner, _g) = read_meta_file(&meta_path, config);
     if config.euid != owner && config.euid != 0 {
         return -libc::EACCES;
     }
     // If write permissions are on the file, continue.
-    match get_permissions(meta_path.as_bytes(), config, false) {
+    match get_permissions(&meta_path, config, false) {
         Ok(perms) if (perms & 2) == 2 => 0,
         Ok(_) => -libc::EACCES,
         Err(e) => e,
@@ -837,13 +803,13 @@ fn handle_access_enter(
     dirfd_sysarg: Option<Reg>,
     config: &Config,
 ) -> i32 {
-    let mut path = FixedPath::new();
+    let mut path = PathGuard::new();
     match read_sysarg_path(tracee, &mut path, path_sysarg, RegVersion::Current) {
         Err(e) => return e,
         Ok(1) => return 0,
         _ => {}
     }
-    let mut rel_path = FixedPath::new();
+    let mut rel_path = PathGuard::new();
     if let Err(e) = get_fd_path(tracee, &mut rel_path, dirfd_sysarg, RegVersion::Current) {
         return e;
     }
@@ -857,7 +823,7 @@ fn handle_access_enter(
         return 0;
     }
 
-    let mut meta_path = FixedPath::new();
+    let mut meta_path = PathGuard::new();
     if let Err(e) = get_meta_path(path.as_bytes(), &mut meta_path) {
         return e;
     }
@@ -871,7 +837,7 @@ fn handle_access_enter(
     if mode & libc::X_OK == libc::X_OK {
         mask += 1;
     }
-    match get_permissions(meta_path.as_bytes(), config, true) {
+    match get_permissions(&meta_path, config, true) {
         Ok(perms) if (perms & mask) == mask => 0,
         Ok(_) => -libc::EACCES,
         Err(e) => e,
@@ -881,31 +847,31 @@ fn handle_access_enter(
 /// `handle_exec_enter_end()` — execve: check x permission + pick up
 /// setuid/setgid bits from the meta file.
 fn handle_exec_enter(tracee: &mut Tracee, filename_sysarg: Reg, config: &mut Config) -> i32 {
-    let mut path = FixedPath::new();
+    let mut path = PathGuard::new();
     match read_sysarg_path(tracee, &mut path, filename_sysarg, RegVersion::Original) {
         Err(e) => return e,
         Ok(1) => return 0,
         _ => {}
     }
 
-    let mut meta_path = FixedPath::new();
+    let mut meta_path = PathGuard::new();
     if let Err(e) = get_meta_path(path.as_bytes(), &mut meta_path) {
         return e;
     }
-    if !path_exists(meta_path.as_bytes()) {
+    if !path_exists(&meta_path) {
         return 0;
     }
 
     if let Err(e) = check_dir_perms(tracee, b'r', meta_path.as_bytes(), b"/", config) {
         return e;
     }
-    match get_permissions(meta_path.as_bytes(), config, false) {
+    match get_permissions(&meta_path, config, false) {
         Ok(perms) if (perms & 1) == 1 => {}
         Ok(_) => return -libc::EACCES,
         Err(e) => return e,
     }
 
-    let (mode, _uid, _gid) = read_meta_file(meta_path.as_bytes(), config);
+    let (mode, _uid, _gid) = read_meta_file(&meta_path, config);
     if (mode & libc::S_ISUID) != 0 {
         config.ruid = 0;
         config.euid = 0;
@@ -928,19 +894,19 @@ fn handle_link_enter(
     newpath_sysarg: Reg,
     config: &Config,
 ) -> i32 {
-    let mut oldpath = FixedPath::new();
+    let mut oldpath = PathGuard::new();
     match read_sysarg_path(tracee, &mut oldpath, oldpath_sysarg, RegVersion::Original) {
         Err(e) => return e,
         Ok(1) => return 0,
         _ => {}
     }
-    let mut newpath = FixedPath::new();
+    let mut newpath = PathGuard::new();
     match read_sysarg_path(tracee, &mut newpath, newpath_sysarg, RegVersion::Original) {
         Err(e) => return e,
         Ok(1) => return 0,
         _ => {}
     }
-    let mut rel_oldpath = FixedPath::new();
+    let mut rel_oldpath = PathGuard::new();
     if let Err(e) = get_fd_path(
         tracee,
         &mut rel_oldpath,
@@ -949,7 +915,7 @@ fn handle_link_enter(
     ) {
         return e;
     }
-    let mut rel_newpath = FixedPath::new();
+    let mut rel_newpath = PathGuard::new();
     if let Err(e) = get_fd_path(
         tracee,
         &mut rel_newpath,
@@ -987,17 +953,17 @@ fn handle_symlink_enter(
     newpath_sysarg: Reg,
     config: &Config,
 ) -> i32 {
-    let mut _oldpath = FixedPath::new();
+    let mut _oldpath = PathGuard::new();
     if let Err(e) = read_sysarg_path(tracee, &mut _oldpath, _oldpath_sysarg, RegVersion::Current) {
         return e;
     }
-    let mut newpath = FixedPath::new();
+    let mut newpath = PathGuard::new();
     match read_sysarg_path(tracee, &mut newpath, newpath_sysarg, RegVersion::Current) {
         Err(e) => return e,
         Ok(1) => return 0,
         _ => {}
     }
-    let mut rel_newpath = FixedPath::new();
+    let mut rel_newpath = PathGuard::new();
     if let Err(e) = get_fd_path(
         tracee,
         &mut rel_newpath,
@@ -1273,9 +1239,9 @@ fn handle_chroot_exit(tracee: &mut Tracee, config: &Config, from_sigsys: bool) -
         return if from_sigsys { -libc::EPERM } else { 0 };
     }
 
-    let mut path = FixedPath::new();
-    let mut path_guest = FixedPath::new();
-    let mut path_host_absolute = FixedPath::new();
+    let mut path = PathGuard::new();
+    let mut path_guest = PathGuard::new();
+    let mut path_host_absolute = PathGuard::new();
 
     let input;
     if from_sigsys {
@@ -1311,16 +1277,17 @@ fn handle_chroot_exit(tracee: &mut Tracee, config: &Config, from_sigsys: bool) -
     }
 
     // realpath()
-    let c = CString::new(path.as_bytes()).unwrap_or_default();
-    if let Some(resolved) = crate::sys::realpath(&c) {
+    if let Some(resolved) = crate::sys::realpath(path.as_c_str()) {
         path_host_absolute.set(&resolved);
     } else {
         path_host_absolute.set(path.as_bytes());
     }
 
     // "new rootfs == current rootfs"?
-    let root = crate::path::binding::get_root(tracee);
-    if compare_paths(root.as_bytes(), path_host_absolute.as_bytes()) == Comparison::PathsAreEqual {
+    let same_root = crate::path::binding::with_root(tracee, |root| {
+        compare_paths(root.as_bytes(), path_host_absolute.as_bytes()) == Comparison::PathsAreEqual
+    });
+    if same_root {
         if from_sigsys {
             return 1;
         }
@@ -1329,8 +1296,7 @@ fn handle_chroot_exit(tracee: &mut Tracee, config: &Config, from_sigsys: bool) -
     }
 
     // Validate target.
-    let c = CString::new(path_host_absolute.as_bytes()).unwrap_or_default();
-    let statbuf = match crate::sys::stat(&c) {
+    let statbuf = match crate::sys::stat(path_host_absolute.as_c_str()) {
         Ok(s) => s,
         Err(e) => return -e,
     };
@@ -1737,7 +1703,7 @@ fn handle_stat_exit(tracee: &mut Tracee, config: &Config, sysnum: Sysnum) -> i32
     }
 
     // Get the pathname of the file being stat'ed.
-    let mut path = FixedPath::new();
+    let mut path = PathGuard::new();
     let status = match sysnum {
         Sysnum::fstat | Sysnum::fstat64 if USERLAND => {
             read_sysarg_path(tracee, &mut path, Reg::Sysarg2, RegVersion::Current)
@@ -1760,9 +1726,9 @@ fn handle_stat_exit(tracee: &mut Tracee, config: &Config, sysnum: Sysnum) -> i32
     };
 
     // If the meta file exists, merge its mode/uid/gid into the stat.
-    let mut meta_path = FixedPath::new();
-    if get_meta_path(path.as_bytes(), &mut meta_path).is_ok() && path_exists(meta_path.as_bytes()) {
-        let (mode, uid, gid) = read_meta_file(meta_path.as_bytes(), config);
+    let mut meta_path = PathGuard::new();
+    if get_meta_path(path.as_bytes(), &mut meta_path).is_ok() && path_exists(&meta_path) {
+        let (mode, uid, gid) = read_meta_file(&meta_path, config);
         let mut st: libc::stat = crate::sys::zeroed();
         let addr = peek_reg(tracee, RegVersion::Original, sysarg);
         if read_data(tracee, crate::sys::as_bytes_mut(&mut st), addr) < 0 {
@@ -2177,7 +2143,7 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut Config) -> i32 {
             return result as i32;
         }
 
-        let mut path = FixedPath::new();
+        let mut path = PathGuard::new();
         let status = read_sysarg_path(tracee, &mut path, Reg::Sysarg3, RegVersion::Modified);
         if status.is_err() {
             return status.err().unwrap();
@@ -2341,22 +2307,21 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut Config) -> i32 {
                 Sysnum::open | Sysnum::creat => Reg::Sysarg1,
                 _ => Reg::Sysarg2,
             };
-            let mut path = FixedPath::new();
+            let mut path = PathGuard::new();
             match read_sysarg_path(tracee, &mut path, sysarg, RegVersion::Modified) {
                 Err(e) => return e,
                 Ok(1) => return 0,
                 _ => {}
             }
-            if path_exists(path.as_bytes()) {
+            if path_exists(&path) {
                 return 0;
             }
-            let mut meta_path = FixedPath::new();
+            let mut meta_path = PathGuard::new();
             if get_meta_path(path.as_bytes(), &mut meta_path).is_err() {
                 return -libc::ENAMETOOLONG;
             }
-            if path_exists(meta_path.as_bytes()) {
-                let c = CString::new(meta_path.as_bytes()).unwrap();
-                crate::sys::unlink(&c);
+            if path_exists(&meta_path) {
+                crate::sys::unlink(meta_path.as_c_str());
             }
             0
         }
@@ -2474,35 +2439,32 @@ impl FakeId0 {
             }
 
             Event::Link2SymlinkRename { link, target } if USERLAND => {
-                let mut old_meta = FixedPath::new();
+                let mut old_meta = PathGuard::new();
                 if let Err(e) = get_meta_path(link.as_bytes(), &mut old_meta) {
                     return e;
                 }
-                if !path_exists(old_meta.as_bytes()) {
+                if !path_exists(&old_meta) {
                     return 0;
                 }
-                let mut new_meta = FixedPath::new();
+                let mut new_meta = PathGuard::new();
                 if let Err(e) = get_meta_path(target.as_bytes(), &mut new_meta) {
                     return e;
                 }
-                let o = CString::new(old_meta.as_bytes()).unwrap();
-                let n = CString::new(new_meta.as_bytes()).unwrap();
-                if crate::sys::rename(&o, &n) < 0 {
+                if crate::sys::rename(old_meta.as_c_str(), new_meta.as_c_str()) < 0 {
                     return -crate::sys::errno();
                 }
                 0
             }
 
             Event::Link2SymlinkUnlink { link } if USERLAND => {
-                let mut meta = FixedPath::new();
+                let mut meta = PathGuard::new();
                 if let Err(e) = get_meta_path(link.as_bytes(), &mut meta) {
                     return e;
                 }
-                if !path_exists(meta.as_bytes()) {
+                if !path_exists(&meta) {
                     return 0;
                 }
-                let c = CString::new(meta.as_bytes()).unwrap();
-                if crate::sys::unlink(&c) < 0 {
+                if crate::sys::unlink(meta.as_c_str()) < 0 {
                     return -crate::sys::errno();
                 }
                 0

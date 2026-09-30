@@ -29,17 +29,14 @@ pub fn translate_and_check_exec(
     {
         return e;
     }
-    let c = match std::ffi::CString::new(host_path.as_bytes()) {
-        Ok(c) => c,
-        Err(_) => return -libc::EINVAL,
-    };
-    if crate::sys::access(&c, libc::F_OK) < 0 {
+    let c = host_path.as_c_str();
+    if crate::sys::access(c, libc::F_OK) < 0 {
         return -libc::ENOENT;
     }
-    if crate::sys::access(&c, libc::X_OK) < 0 {
+    if crate::sys::access(c, libc::X_OK) < 0 {
         return -libc::EACCES;
     }
-    if crate::sys::lstat(&c).is_err() {
+    if crate::sys::lstat(c).is_err() {
         return -libc::EPERM;
     }
     0

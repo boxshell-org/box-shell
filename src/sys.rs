@@ -482,17 +482,18 @@ pub(crate) fn realpath(path: &CStr) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-/// `getcwd` into a PATH_MAX buffer.
-pub(crate) fn getcwd() -> Option<Vec<u8>> {
-    let mut buf = vec![0u8; crate::PATH_MAX];
-    // SAFETY: buf is a valid writable slice of PATH_MAX bytes.
+/// `getcwd` into a caller-provided buffer → bytes written (excl. NUL).
+pub(crate) fn getcwd_into(buf: &mut [u8]) -> Option<usize> {
+    // SAFETY: buf is a valid writable slice.
     let ret = unsafe { libc::getcwd(buf.as_mut_ptr() as *mut _, buf.len()) };
     if ret.is_null() {
         return None;
     }
-    let len = buf.iter().position(|&b| b == 0).unwrap_or(crate::PATH_MAX);
-    buf.truncate(len);
-    Some(buf)
+    Some(
+        buf.iter()
+            .position(|&b| b == 0)
+            .unwrap_or(buf.len().saturating_sub(1)),
+    )
 }
 
 /// `pipe2(O_CLOEXEC)` → `(read_end, write_end)`, or `Err(errno)`.

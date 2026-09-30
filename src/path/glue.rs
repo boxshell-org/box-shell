@@ -48,11 +48,11 @@ pub fn build_glue(
     let skip_create = std::env::var_os("PROOT_DONT_POLLUTE_ROOTFS").is_some() && !belongs_to_gluefs;
 
     if !skip_create {
-        let c = std::ffi::CString::new(host_path.as_bytes()).unwrap();
+        let c = host_path.as_c_str();
         let status = if (typ & libc::S_IFMT) == libc::S_IFDIR {
-            crate::sys::mkdir(&c, mode)
+            crate::sys::mkdir(c, mode)
         } else {
-            crate::sys::mknod(&c, mode | typ, 0)
+            crate::sys::mknod(c, mode | typ, 0)
         };
         // Remove guest-rootfs placeholders on termination.
         if status >= 0 && !belongs_to_gluefs {

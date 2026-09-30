@@ -5,7 +5,7 @@
 //! call failed but PRoot can still answer it (e.g. old kernels).
 
 use crate::Word;
-use crate::fpath::FixedPath;
+use crate::fpath::{FixedPath, PathGuard};
 use crate::tracee::Tracee;
 use crate::tracee::mem::{read_data, read_string, write_data};
 use crate::tracee::reg::{Reg, RegVersion, peek_reg};
@@ -84,7 +84,7 @@ pub fn handle_statx_syscall(tracee: &mut Tracee, from_sigsys: bool) -> i32 {
         RegVersion::Original
     };
     let mut state = StatxSyscallState::default();
-    let mut guest_path = FixedPath::new();
+    let mut guest_path = PathGuard::new();
     let mut do_fstat = false;
 
     // Read arguments and translate the path.
@@ -140,11 +140,11 @@ pub fn handle_statx_syscall(tracee: &mut Tracee, from_sigsys: bool) -> i32 {
                 std::ffi::CString::new(format!("/proc/{}/fd/{}", tracee.pid, dirfd)).unwrap();
             crate::sys::stat(&link)
         } else {
-            let c = std::ffi::CString::new(state.host_path.as_bytes()).unwrap();
+            let c = state.host_path.as_c_str();
             if do_lstat {
-                crate::sys::lstat(&c)
+                crate::sys::lstat(c)
             } else {
-                crate::sys::stat(&c)
+                crate::sys::stat(c)
             }
         };
         let sb = match sb {

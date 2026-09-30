@@ -21,14 +21,14 @@ pub enum Origin {
 }
 
 pub static GLOBAL_VERBOSE_LEVEL: AtomicI32 = AtomicI32::new(0);
-static TOOL_NAME: std::sync::RwLock<&'static str> = std::sync::RwLock::new("proot");
+static TOOL_NAME: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
 
 pub fn set_tool_name(name: &'static str) {
-    *TOOL_NAME.write().unwrap() = name;
+    let _ = TOOL_NAME.set(name);
 }
 
 pub fn tool_name() -> &'static str {
-    TOOL_NAME.read().map(|g| *g).unwrap_or("proot")
+    TOOL_NAME.get().copied().unwrap_or("proot")
 }
 
 pub fn global_verbose() -> i32 {

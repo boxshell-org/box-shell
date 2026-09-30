@@ -157,8 +157,9 @@ pub fn read_data(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
 /// returns the length *including* the terminator, or `-errno`.
 pub fn read_string(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
     let max_size = dest.len();
-    // Chunked process_vm_readv so a chunk never crosses a page boundary.
-    const CHUNK: usize = 1024;
+    // Chunked process_vm_readv so a chunk never crosses a *guest* page
+    // boundary (a partial read would silently truncate the string).
+    let chunk = crate::sys::page_size().max(1024) as u64;
     let mut offset = 0usize;
     loop {
         if offset >= max_size {
@@ -166,7 +167,7 @@ pub fn read_string(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
         }
         let cur = src + offset as u64;
         // Strictly the next boundary even when `cur` is already aligned.
-        let next_chunk = (cur / CHUNK as u64 + 1) * CHUNK as u64;
+        let next_chunk = (cur / chunk + 1) * chunk;
         let mut size = (next_chunk - cur) as usize;
         size = size.min(max_size - offset);
         let n = crate::sys::process_vm_read(tracee.pid, &mut dest[offset..offset + size], cur);
@@ -178,6 +179,15 @@ pub fn read_string(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
                     continue;
                 }
             }
+        }
+        // A short read still delivered `n` bytes: the terminator may be
+        // among them even though the next page is unreadable.
+        if n > 0
+            && let Some(p) = dest[offset..offset + n as usize]
+                .iter()
+                .position(|&b| b == 0)
+        {
+            return (offset + p + 1) as i32;
         }
         break;
     }
@@ -329,8 +339,19 @@ pub fn alloc_mem(tracee: &mut Tracee, size: i64) -> Word {
 
 /// `clear_mem()` — zero `size` bytes in the tracee.
 pub fn clear_mem(tracee: &Tracee, address: Word, size: usize) -> i32 {
-    let zeros = vec![0u8; size];
-    write_data(tracee, address, &zeros)
+    const ZEROS: [u8; 4096] = [0; 4096];
+    let mut remaining = size;
+    let mut addr = address;
+    while remaining > 0 {
+        let n = remaining.min(ZEROS.len());
+        let status = write_data(tracee, addr, &ZEROS[..n]);
+        if status < 0 {
+            return status;
+        }
+        remaining -= n;
+        addr += n as u64;
+    }
+    0
 }
 
 /// `mem_prepare_after_execve()` — on x86_64 the only post-execve work was
@@ -341,13 +362,13 @@ pub fn mem_prepare_after_execve(_tracee: &mut Tracee) {}
 pub fn mem_prepare_before_first_execve(_tracee: &mut Tracee) {}
 
 /// `read_path()` — read a NUL-terminated path (PATH_MAX bound) from the
-/// tracee.
+/// tracee, straight into `path`'s storage.
 pub fn read_path(tracee: &Tracee, path: &mut crate::fpath::FixedPath, src: Word) -> i32 {
-    let mut buf = [0u8; crate::PATH_MAX];
-    let size = read_string(tracee, &mut buf, src);
+    let size = read_string(tracee, path.as_mut_bytes(), src);
     if size < 0 {
         return size;
     }
-    path.set(&buf[..size as usize - 1]);
+    // `size` includes the terminator, which read_string already wrote.
+    path.set_len_terminated(size as usize - 1);
     size
 }

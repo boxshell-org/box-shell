@@ -444,6 +444,12 @@ pub fn terminate_tracee(pid: i32) {
 /// this orphans children, releases ptracees, zombifies dead ptracees that
 /// still owe their ptracer an event, and wakes idle ptracers.
 pub fn free_terminated_tracees() {
+    // Runs every event-loop iteration; skip the snapshot allocation in
+    // the common case where nobody has terminated.
+    let any_dead = TRACEES.with(|map| map.borrow().values().any(|rc| rc.borrow().terminated));
+    if !any_dead {
+        return;
+    }
     let dead: Vec<Rc<RefCell<Tracee>>> = TRACEES.with(|map| {
         map.borrow()
             .values()

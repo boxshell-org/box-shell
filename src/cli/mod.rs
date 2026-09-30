@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::HOST_ROOTFS;
 use crate::extension::{self, AnyExtension};
-use crate::fpath::FixedPath;
+use crate::fpath::{FixedPath, PathGuard};
 use crate::note::{Origin, Severity, note};
 use crate::path::{self, binding, canon};
 use crate::tracee::event::TraceeRef;
@@ -877,7 +877,7 @@ fn print_config(tracee: &Tracee, argv: &[String]) {
 fn initialize_cwd(tracee: &mut Tracee) -> Result<(), i32> {
     let cwd = tracee.fs.borrow().cwd.clone();
 
-    let mut base = FixedPath::new();
+    let mut base = PathGuard::new();
     if cwd.as_bytes().first() != Some(&b'/') {
         // Relative cwd: resolved against the (reconfigured) tracee's cwd.
         match tracee
@@ -920,9 +920,9 @@ fn initialize_cwd(tracee: &mut Tracee) -> Result<(), i32> {
     }
     path.chop_finality();
 
-    tracee.fs.borrow_mut().cwd = path.clone();
-    let value = std::ffi::CString::new(path.as_bytes()).unwrap_or_default();
-    crate::sys::setenv(c"PWD", &value, true);
+    tracee.fs.borrow_mut().cwd.set(path.as_bytes());
+    let value = path.as_c_str();
+    crate::sys::setenv(c"PWD", value, true);
     Ok(())
 }
 
@@ -930,7 +930,7 @@ fn initialize_cwd(tracee: &mut Tracee) -> Result<(), i32> {
 fn initialize_exe(tracee: &mut Tracee, exe: Option<&str>) -> Result<(), i32> {
     let exe = exe.unwrap_or("/bin/sh");
     let reconf_paths = tracee.reconf_paths.clone();
-    let mut path = FixedPath::new();
+    let mut path = PathGuard::new();
     path::which(
         Some(tracee),
         reconf_paths.as_deref(),
@@ -951,7 +951,7 @@ fn post_initialize_exe(tracee: &mut Tracee) -> Result<(), i32> {
     }
     let qemu0 = tracee.qemu.as_ref().unwrap()[0].clone();
     let reconf_paths = tracee.reconf_paths.clone();
-    let mut path = FixedPath::new();
+    let mut path = PathGuard::new();
     // With no sub-reconfiguration, resolve against the host namespace.
     match tracee
         .reconf_tracee
@@ -984,7 +984,7 @@ fn pre_initialize_bindings(tracee: &mut Tracee) -> Result<(), i32> {
     if tracee.fs.borrow().cwd.is_empty() {
         handle_option_w(tracee, Some("."));
     }
-    if binding::get_root(tracee).is_empty() {
+    if binding::with_root(tracee, |r| r.is_empty()) {
         handle_option_r(tracee, Some("/"));
     }
     Ok(())

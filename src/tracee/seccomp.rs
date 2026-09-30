@@ -601,10 +601,10 @@ fn statfs_via_sigsys(tracee: &mut Tracee) {
     let _ =
         crate::path::translate_path(tracee, &mut path, libc::AT_FDCWD, original.as_bytes(), true);
 
-    let c = std::ffi::CString::new(path.as_bytes()).unwrap();
+    let c = path.as_c_str();
     // statfs64 exposes f_flags and f_spare publicly on this libc target;
     // plain statfs hides them behind private fields.
-    let st = match crate::sys::statfs64(&c) {
+    let st = match crate::sys::statfs64(c) {
         Ok(st) => st,
         Err(e) => {
             set_result_after_seccomp(

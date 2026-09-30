@@ -1,6 +1,6 @@
 //! Canonicalization engine — port of path/canon.c.
 
-use crate::fpath::FixedPath;
+use crate::fpath::{FixedPath, PathGuard};
 use crate::path::binding::substitute_binding;
 use crate::path::f2fs::should_skip_file_access_due_to_f2fs_bug;
 use crate::path::proc_emul::{Action, readlink_proc};
@@ -13,7 +13,7 @@ const MAXSYMLINKS: u32 = 32;
 /// `next_component()` — extract the next component from `cursor`, skipping
 /// leading separators.  Returns (component, finality); `cursor` is advanced
 /// past the component and any trailing separators.
-fn next_component(cursor: &mut &[u8]) -> Result<(Vec<u8>, Finality), i32> {
+fn next_component<'a>(cursor: &mut &'a [u8]) -> Result<(&'a [u8], Finality), i32> {
     while cursor.first() == Some(&b'/') {
         *cursor = &cursor[1..];
     }
@@ -25,7 +25,7 @@ fn next_component(cursor: &mut &[u8]) -> Result<(Vec<u8>, Finality), i32> {
     if i >= NAME_MAX {
         return Err(-libc::ENAMETOOLONG);
     }
-    let component = start[..i].to_vec();
+    let component = &start[..i];
     *cursor = &start[i..];
     let want_dir = cursor.first() == Some(&b'/');
     while cursor.first() == Some(&b'/') {
@@ -75,8 +75,7 @@ fn substitute_binding_stat(
         status = -1;
         crate::sys::set_errno(libc::ENOENT);
     } else {
-        let c = std::ffi::CString::new(host_path.as_bytes()).map_err(|_| -libc::EINVAL)?;
-        status = match crate::sys::lstat(&c) {
+        status = match crate::sys::lstat(host_path.as_c_str()) {
             Ok(v) => {
                 st = v;
                 0
@@ -145,6 +144,12 @@ pub fn canonicalize(
 
     let mut cursor: &[u8] = user_path;
     let mut finality = Finality::NotFinal;
+    // Scratch buffers live across iterations: `set()`/`join_paths2()`
+    // overwrite them wholesale, and they come from the scratch pool so the
+    // PATH_MAX memset is paid once per process, not per component.
+    let mut scratch_path = PathGuard::new();
+    let mut host_path = PathGuard::new();
+    let mut hp = PathGuard::new();
     while !finality.is_final() {
         let (component, f) = next_component(&mut cursor)?;
         finality = f;
@@ -163,10 +168,8 @@ pub fn canonicalize(
             continue;
         }
 
-        let mut scratch_path = FixedPath::new();
-        join_paths2(&mut scratch_path, guest_path.as_bytes(), &component)?;
+        join_paths2(&mut scratch_path, guest_path.as_bytes(), component)?;
 
-        let mut host_path = FixedPath::new();
         let is_link = substitute_binding_stat(
             tracee,
             finality,
@@ -177,8 +180,7 @@ pub fn canonicalize(
 
         // Nothing special unless it's a link we must dereference.
         if !is_link || (finality == Finality::Normal && !deref_final) {
-            let gp = guest_path.clone();
-            join_paths2(guest_path, gp.as_bytes(), &component)?;
+            guest_path.push_component(component)?;
             continue;
         }
 
@@ -186,25 +188,27 @@ pub fn canonicalize(
         // new root.
         let mut canonicalize_now = false;
         {
-            let mut proc_base = guest_path.clone();
             let mut comparison = compare_paths(b"/proc", guest_path.as_bytes());
+            let mut alias_base = PathGuard::new();
+            let mut aliased = false;
             if comparison != Comparison::PathsAreEqual && comparison != Comparison::Path1IsPrefix {
                 // Check whether guest_path aliases /proc via a binding.
-                let mut alias_base = guest_path.clone();
+                alias_base.set(guest_path.as_bytes());
                 let _ = substitute_binding(tracee, Side::Guest, &mut alias_base);
                 if alias_base.as_bytes() != guest_path.as_bytes() {
                     comparison = compare_paths(b"/proc", alias_base.as_bytes());
-                    proc_base = alias_base;
+                    aliased = true;
                 }
             }
 
             match comparison {
                 Comparison::PathsAreEqual | Comparison::Path1IsPrefix => {
+                    let proc_base = if aliased { &alias_base } else { &*guest_path };
                     match readlink_proc(
                         tracee,
                         &mut scratch_path,
-                        &proc_base,
-                        &component,
+                        proc_base,
+                        component,
                         comparison,
                     )? {
                         Action::Canonicalize => canonicalize_now = true,
@@ -223,20 +227,15 @@ pub fn canonicalize(
         }
 
         if !canonicalize_now {
-            let mut buf = vec![0u8; PATH_MAX];
-            let n = {
-                let c = std::ffi::CString::new(host_path.as_bytes()).map_err(|_| -libc::EINVAL)?;
-                let r = crate::sys::readlink(&c, &mut buf);
-                if r < 0 {
-                    return Err(-crate::sys::errno());
-                }
-                if r as usize == PATH_MAX {
-                    return Err(-libc::ENAMETOOLONG);
-                }
-                r as usize
-            };
-            buf.truncate(n);
-            scratch_path.set(&buf);
+            // readlink() reports a length with no terminator.
+            let r = crate::sys::readlink(host_path.as_c_str(), scratch_path.as_mut_bytes());
+            if r < 0 {
+                return Err(-crate::sys::errno());
+            }
+            if r as usize == PATH_MAX {
+                return Err(-libc::ENAMETOOLONG);
+            }
+            scratch_path.set_len_terminated(r as usize);
 
             if tracee.glue_type == 0 {
                 let status =
@@ -261,16 +260,14 @@ pub fn canonicalize(
         )?;
 
         // A non-final canonicalized component must exist and be a directory.
-        let mut hp = FixedPath::new();
         substitute_binding_stat(tracee, finality, recursion_level, guest_path, &mut hp)?;
     }
 
     if recursion_level == 0 {
-        let gp = guest_path.clone();
         match finality {
             Finality::Normal => {}
-            Finality::Slash => join_paths2(guest_path, gp.as_bytes(), b"")?,
-            Finality::Dot => join_paths2(guest_path, gp.as_bytes(), b".")?,
+            Finality::Slash => guest_path.push_component(b"")?,
+            Finality::Dot => guest_path.push_component(b".")?,
             _ => return Err(-libc::EINVAL),
         }
     }
