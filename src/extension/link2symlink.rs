@@ -287,25 +287,16 @@ fn is_l2s_file(host_path: &[u8]) -> bool {
     name[name.len() - 4..].iter().all(|b| b.is_ascii_digit())
 }
 
-/// `resolve_faked_hard_link()` — copy into `final_path` the file the
-/// faked hard link `link` (a host path) refers to. -errno if `link`
-/// isn't a faked hard link or is broken.
-fn resolve_faked_hard_link(link: &[u8], final_path: &mut Vec<u8>) -> i32 {
-    let intermediate = match readlink_to_vec(link) {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+/// `resolve_faked_hard_link()` — the file the faked hard link `link` (a
+/// host path) refers to.  `Err(-errno)` if `link` isn't a faked hard
+/// link or is broken.
+fn resolve_faked_hard_link(link: &[u8]) -> Result<Vec<u8>, i32> {
+    let intermediate = readlink_to_vec(link)?;
     let name = base_name(&intermediate);
     if !name.starts_with(PREFIX) {
-        return -libc::EINVAL;
+        return Err(-libc::EINVAL);
     }
-    match readlink_to_vec(&intermediate) {
-        Ok(v) => {
-            *final_path = v;
-            0
-        }
-        Err(e) => e,
-    }
+    readlink_to_vec(&intermediate)
 }
 
 /// `remember_fd()` — record that descriptor `fd` of `pid` was opened
@@ -315,23 +306,18 @@ fn resolve_faked_hard_link(link: &[u8], final_path: &mut Vec<u8>) -> i32 {
 fn remember_fd(pid: i32, fd: i32, link: &[u8]) {
     FD_CACHE.with(|c| {
         let mut cache = c.borrow_mut();
-        let mut slot = FD_CACHE_SIZE;
-        for (index, e) in cache.iter().enumerate() {
-            if let Some(e) = e {
-                if e.pid == pid && e.fd == fd {
-                    slot = index;
-                    break;
-                }
-            }
-        }
-        if slot == FD_CACHE_SIZE {
-            slot = FD_CACHE_INDEX.with(|i| {
-                let mut i = i.borrow_mut();
-                let s = *i;
-                *i = (*i + 1) % FD_CACHE_SIZE;
-                s
+        // An entry for the same (pid, fd) wins; otherwise the ring slot.
+        let slot = cache
+            .iter()
+            .position(|e| e.as_ref().is_some_and(|e| e.pid == pid && e.fd == fd))
+            .unwrap_or_else(|| {
+                FD_CACHE_INDEX.with(|i| {
+                    let mut i = i.borrow_mut();
+                    let s = *i;
+                    *i = (*i + 1) % FD_CACHE_SIZE;
+                    s
+                })
             });
-        }
         cache[slot] = Some(FdEntry {
             pid,
             fd,
@@ -373,10 +359,9 @@ fn readlink_proc_fd(state: &mut crate::syscall::ReadlinkProcFdState) {
     };
     // Descriptor numbers get reused and links get removed: ensure the
     // remembered name still leads to this very file.
-    let mut final_path = Vec::new();
-    if resolve_faked_hard_link(&link, &mut final_path) < 0 {
+    let Ok(final_path) = resolve_faked_hard_link(&link) else {
         return;
-    }
+    };
     if final_path != state.host_path.as_bytes() {
         return;
     }
@@ -420,10 +405,7 @@ fn l2s_link_to_host_path(config: &L2sConfig, host_path: &[u8]) -> Option<Vec<u8>
     }
     // Ensure this link is indeed a faked hard link to this very file:
     // the tracee may have named the l2s file directly.
-    let mut final_path = Vec::new();
-    if resolve_faked_hard_link(link, &mut final_path) < 0 {
-        return None;
-    }
+    let final_path = resolve_faked_hard_link(link).ok()?;
     if final_path != host_path {
         return None;
     }
@@ -954,8 +936,7 @@ fn translated_path(tracee: &mut Tracee, config: &mut L2sConfig, translated_path:
     // The canonicalization dereferenced the faked hard links this path
     // was made of, except its last component when it was asked not to —
     // lstat(2), open(O_NOFOLLOW), ... — in which case that is done here.
-    let mut final_path = Vec::new();
-    if resolve_faked_hard_link(translated_path.as_bytes(), &mut final_path) == 0 {
+    if let Ok(final_path) = resolve_faked_hard_link(translated_path.as_bytes()) {
         config.dereferenced_link.set(translated_path.as_bytes());
         translated_path.set(&final_path);
     }

@@ -14,20 +14,20 @@ use std::os::unix::io::RawFd;
 // ==================================================================
 
 /// Read the thread-local `errno`.
-pub fn errno() -> i32 {
+pub(crate) fn errno() -> i32 {
     // SAFETY: __errno_location() always returns a valid pointer to the
     // thread-local errno.
     unsafe { *libc::__errno_location() }
 }
 
 /// Write the thread-local `errno`.
-pub fn set_errno(value: i32) {
+pub(crate) fn set_errno(value: i32) {
     // SAFETY: see `errno`.
     unsafe { *libc::__errno_location() = value }
 }
 
 /// Reset `errno` to 0 (the pre-syscall convention used throughout).
-pub fn clear_errno() {
+pub(crate) fn clear_errno() {
     set_errno(0);
 }
 
@@ -37,14 +37,14 @@ pub fn clear_errno() {
 
 /// A zero-initialized instance of `T`. Intended for C structs that are
 /// filled by the kernel (stat, siginfo_t, utsname, ...).
-pub fn zeroed<T>() -> T {
+pub(crate) fn zeroed<T>() -> T {
     // SAFETY: all uses are `#[repr(C)]` FFI structs for which the
     // all-zero bit pattern is a valid, fully-initialized value.
     unsafe { std::mem::zeroed() }
 }
 
 /// Byte view of a POD value (for pushing structs into tracee memory).
-pub fn as_bytes<T>(value: &T) -> &[u8] {
+pub(crate) fn as_bytes<T>(value: &T) -> &[u8] {
     // SAFETY: any initialized `&T` is readable as `size_of::<T>()` bytes;
     // callers only use this on #[repr(C)] structs that are fully initialized
     // (built via `zeroed()` or with every field set).
@@ -53,7 +53,7 @@ pub fn as_bytes<T>(value: &T) -> &[u8] {
 
 /// Mutable byte view of a POD value (for reading structs out of tracee
 /// memory into a typed value).
-pub fn as_bytes_mut<T>(value: &mut T) -> &mut [u8] {
+pub(crate) fn as_bytes_mut<T>(value: &mut T) -> &mut [u8] {
     // SAFETY: see `as_bytes`. Mutating padding is harmless here: the
     // written-back regions are produced by the kernel or by `read_data`.
     unsafe { std::slice::from_raw_parts_mut(value as *mut T as *mut u8, size_of::<T>()) }
@@ -63,38 +63,26 @@ pub fn as_bytes_mut<T>(value: &mut T) -> &mut [u8] {
 // Process identity
 // ==================================================================
 
-pub fn getuid() -> libc::uid_t {
+pub(crate) fn getuid() -> libc::uid_t {
     // SAFETY: getuid() has no failure modes.
     unsafe { libc::getuid() }
 }
-
-pub fn geteuid() -> libc::uid_t {
-    // SAFETY: geteuid() has no failure modes.
-    unsafe { libc::geteuid() }
-}
-
-pub fn getgid() -> libc::gid_t {
+pub(crate) fn getgid() -> libc::gid_t {
     // SAFETY: getgid() has no failure modes.
     unsafe { libc::getgid() }
 }
-
-pub fn getegid() -> libc::gid_t {
-    // SAFETY: getegid() has no failure modes.
-    unsafe { libc::getegid() }
-}
-
-pub fn getpid() -> libc::pid_t {
+pub(crate) fn getpid() -> libc::pid_t {
     // SAFETY: getpid() has no failure modes.
     unsafe { libc::getpid() }
 }
 
-pub fn getpgid(pid: libc::pid_t) -> libc::pid_t {
+pub(crate) fn getpgid(pid: libc::pid_t) -> libc::pid_t {
     // SAFETY: standard libc call; errno reports failure.
     unsafe { libc::getpgid(pid) }
 }
 
 /// `(real, effective, saved)` uids, or `Err(errno)`.
-pub fn getresuid() -> Result<(libc::uid_t, libc::uid_t, libc::uid_t), i32> {
+pub(crate) fn getresuid() -> Result<(libc::uid_t, libc::uid_t, libc::uid_t), i32> {
     let (mut r, mut e, mut s) = (0, 0, 0);
     // SAFETY: out params point at live locals.
     if unsafe { libc::getresuid(&mut r, &mut e, &mut s) } != 0 {
@@ -104,7 +92,7 @@ pub fn getresuid() -> Result<(libc::uid_t, libc::uid_t, libc::uid_t), i32> {
 }
 
 /// `(real, effective, saved)` gids, or `Err(errno)`.
-pub fn getresgid() -> Result<(libc::gid_t, libc::gid_t, libc::gid_t), i32> {
+pub(crate) fn getresgid() -> Result<(libc::gid_t, libc::gid_t, libc::gid_t), i32> {
     let (mut r, mut e, mut s) = (0, 0, 0);
     // SAFETY: out params point at live locals.
     if unsafe { libc::getresgid(&mut r, &mut e, &mut s) } != 0 {
@@ -117,14 +105,14 @@ pub fn getresgid() -> Result<(libc::gid_t, libc::gid_t, libc::gid_t), i32> {
 // Process control
 // ==================================================================
 
-pub fn fork() -> libc::pid_t {
+pub(crate) fn fork() -> libc::pid_t {
     // SAFETY: the tracer is single-threaded; both parent and child
     // continue with a valid process image.
     unsafe { libc::fork() }
 }
 
 /// `waitpid`; returns `(pid, raw_status)` or `Err(errno)`.
-pub fn waitpid(pid: libc::pid_t, flags: i32) -> Result<(libc::pid_t, i32), i32> {
+pub(crate) fn waitpid(pid: libc::pid_t, flags: i32) -> Result<(libc::pid_t, i32), i32> {
     let mut status: i32 = 0;
     // SAFETY: &mut status is a valid out-pointer.
     let ret = unsafe { libc::waitpid(pid, &mut status, flags) };
@@ -135,26 +123,26 @@ pub fn waitpid(pid: libc::pid_t, flags: i32) -> Result<(libc::pid_t, i32), i32> 
     }
 }
 
-pub fn kill(pid: libc::pid_t, sig: i32) -> i32 {
+pub(crate) fn kill(pid: libc::pid_t, sig: i32) -> i32 {
     // SAFETY: standard libc call; errno reports failure.
     unsafe { libc::kill(pid, sig) }
 }
 
-pub fn tkill(pid: libc::pid_t, sig: i32) -> i32 {
+pub(crate) fn tkill(pid: libc::pid_t, sig: i32) -> i32 {
     // SAFETY: variadic syscall with fixed args; errno reports failure.
     unsafe { libc::syscall(libc::SYS_tkill, pid, sig) as i32 }
 }
 
 /// Install `handler` via the legacy `signal()` interface. Returns the
 /// previous handler (as a usize).
-pub fn signal(signum: i32, handler: usize) -> usize {
+pub(crate) fn signal(signum: i32, handler: usize) -> usize {
     // SAFETY: standard libc call; handler is a valid `sighandler_t`
     // (SIG_DFL/SIG_IGN or a function address, per libc's representation).
     unsafe { libc::signal(signum, handler) as usize }
 }
 
 /// `strerror(errno)` → owned message string.
-pub fn strerror(errno: i32) -> String {
+pub(crate) fn strerror(errno: i32) -> String {
     // SAFETY: strerror returns a pointer to a static, NUL-terminated
     // string for any input on glibc.
     unsafe { CStr::from_ptr(libc::strerror(errno)) }
@@ -163,7 +151,7 @@ pub fn strerror(errno: i32) -> String {
 }
 
 /// `prlimit64(pid, resource, new, old)` → 0 or -1.
-pub fn prlimit64(
+pub(crate) fn prlimit64(
     pid: libc::pid_t,
     resource: u32,
     new: Option<&libc::rlimit64>,
@@ -176,7 +164,11 @@ pub fn prlimit64(
 }
 
 /// `sigaction(signum, act, oldact)`.
-pub fn sigaction(signum: i32, act: &libc::sigaction, oldact: Option<&mut libc::sigaction>) -> i32 {
+pub(crate) fn sigaction(
+    signum: i32,
+    act: &libc::sigaction,
+    oldact: Option<&mut libc::sigaction>,
+) -> i32 {
     let old_ptr = match oldact {
         Some(o) => o as *mut libc::sigaction,
         None => std::ptr::null_mut(),
@@ -186,7 +178,7 @@ pub fn sigaction(signum: i32, act: &libc::sigaction, oldact: Option<&mut libc::s
 }
 
 /// Fill every bit of `set`.
-pub fn sigfillset(set: &mut libc::sigset_t) {
+pub(crate) fn sigfillset(set: &mut libc::sigset_t) {
     // SAFETY: standard libc call on a valid set.
     unsafe {
         libc::sigfillset(set);
@@ -201,13 +193,13 @@ pub fn at_exit(f: extern "C" fn()) {
     }
 }
 
-pub fn exit_immediately(code: i32) -> ! {
+pub(crate) fn exit_immediately(code: i32) -> ! {
     // SAFETY: _exit never returns.
     unsafe { libc::_exit(code) }
 }
 
 /// `execvp`; only returns the errno on failure.
-pub fn execvp(path: &CStr, argv: &[*const libc::c_char]) -> i32 {
+pub(crate) fn execvp(path: &CStr, argv: &[*const libc::c_char]) -> i32 {
     // SAFETY: path/argv are NUL-terminated argv-style arrays for the
     // duration of the call; on success the image is replaced.
     unsafe {
@@ -216,13 +208,13 @@ pub fn execvp(path: &CStr, argv: &[*const libc::c_char]) -> i32 {
     errno()
 }
 
-pub fn sysconf(name: i32) -> i64 {
+pub(crate) fn sysconf(name: i32) -> i64 {
     // SAFETY: standard libc call.
     unsafe { libc::sysconf(name) }
 }
 
 /// Host page size, cached (0x1000 when sysconf fails).
-pub fn page_size() -> crate::Word {
+pub(crate) fn page_size() -> crate::Word {
     static PAGE: std::sync::OnceLock<crate::Word> = std::sync::OnceLock::new();
     *PAGE.get_or_init(|| {
         let v = sysconf(libc::_SC_PAGESIZE);
@@ -231,7 +223,7 @@ pub fn page_size() -> crate::Word {
 }
 
 /// `uname`, or `Err(errno)`.
-pub fn uname() -> Result<libc::utsname, i32> {
+pub(crate) fn uname() -> Result<libc::utsname, i32> {
     let mut uts: libc::utsname = zeroed();
     // SAFETY: &mut uts is a valid out-pointer.
     if unsafe { libc::uname(&mut uts) } < 0 {
@@ -252,7 +244,7 @@ pub unsafe fn cstr_from_field(field: &[libc::c_char]) -> &CStr {
 }
 
 /// `clock_gettime`, or `Err(errno)`.
-pub fn clock_gettime(clk: libc::clockid_t) -> Result<libc::timespec, i32> {
+pub(crate) fn clock_gettime(clk: libc::clockid_t) -> Result<libc::timespec, i32> {
     let mut ts: libc::timespec = zeroed();
     // SAFETY: &mut ts is a valid out-pointer.
     if unsafe { libc::clock_gettime(clk, &mut ts) } < 0 {
@@ -261,24 +253,24 @@ pub fn clock_gettime(clk: libc::clockid_t) -> Result<libc::timespec, i32> {
     Ok(ts)
 }
 
-pub fn time() -> libc::time_t {
+pub(crate) fn time() -> libc::time_t {
     // SAFETY: passing NULL is supported.
     unsafe { libc::time(std::ptr::null_mut()) }
 }
 
-pub fn prctl(option: i32, a2: usize, a3: usize, a4: usize, a5: usize) -> i32 {
+pub(crate) fn prctl(option: i32, a2: usize, a3: usize, a4: usize, a5: usize) -> i32 {
     // SAFETY: standard libc call; errno reports failure.
     unsafe { libc::prctl(option, a2, a3, a4, a5) }
 }
 
 /// `setitimer(which, new, NULL)`.
-pub fn setitimer(which: i32, new: &libc::itimerval) -> i32 {
+pub(crate) fn setitimer(which: i32, new: &libc::itimerval) -> i32 {
     // SAFETY: standard libc call; errno reports failure.
     unsafe { libc::setitimer(which, new, std::ptr::null_mut()) }
 }
 
 /// `poll(&mut fds[..], nfds, timeout)` over a slice.
-pub fn poll(fds: &mut [libc::pollfd], timeout: i32) -> i32 {
+pub(crate) fn poll(fds: &mut [libc::pollfd], timeout: i32) -> i32 {
     // SAFETY: fds is a valid slice of pollfds.
     unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) }
 }
@@ -288,55 +280,48 @@ pub fn poll(fds: &mut [libc::pollfd], timeout: i32) -> i32 {
 // ==================================================================
 
 /// `open(path, flags, mode)` → raw fd or -1 (errno set).
-pub fn open(path: &CStr, flags: i32, mode: libc::mode_t) -> RawFd {
+pub(crate) fn open(path: &CStr, flags: i32, mode: libc::mode_t) -> RawFd {
     // SAFETY: path is NUL-terminated for the call duration.
     unsafe { libc::open(path.as_ptr(), flags, mode) }
 }
 
-pub fn close(fd: RawFd) -> i32 {
+pub(crate) fn close(fd: RawFd) -> i32 {
     // SAFETY: closing an fd the caller owns is safe; double-close is the
     // caller's logic concern, not a memory-safety issue.
     unsafe { libc::close(fd) }
 }
 
 /// `read(fd, buf)`.
-pub fn read(fd: RawFd, buf: &mut [u8]) -> isize {
+pub(crate) fn read(fd: RawFd, buf: &mut [u8]) -> isize {
     // SAFETY: buf is a valid writable slice for the call.
     unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) }
 }
 
 /// `write(fd, buf)`.
-pub fn write(fd: RawFd, buf: &[u8]) -> isize {
+pub(crate) fn write(fd: RawFd, buf: &[u8]) -> isize {
     // SAFETY: buf is a valid readable slice for the call.
     unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) }
 }
 
 /// `pread(fd, buf, off)`.
-pub fn pread(fd: RawFd, buf: &mut [u8], off: libc::off_t) -> isize {
+pub(crate) fn pread(fd: RawFd, buf: &mut [u8], off: libc::off_t) -> isize {
     // SAFETY: buf is a valid writable slice for the call.
     unsafe { libc::pread(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), off) }
 }
 
 /// `ftruncate(fd, len)`.
-pub fn ftruncate(fd: RawFd, len: libc::off_t) -> i32 {
+pub(crate) fn ftruncate(fd: RawFd, len: libc::off_t) -> i32 {
     // SAFETY: standard libc call; errno reports failure.
     unsafe { libc::ftruncate(fd, len) }
 }
-
-/// `dup(fd)` → new fd or -1.
-pub fn dup(fd: RawFd) -> RawFd {
-    // SAFETY: standard libc call; errno reports failure.
-    unsafe { libc::dup(fd) }
-}
-
 /// `dup2(fd, fd2)` → fd2 or -1.
-pub fn dup2(fd: RawFd, fd2: RawFd) -> RawFd {
+pub(crate) fn dup2(fd: RawFd, fd2: RawFd) -> RawFd {
     // SAFETY: standard libc call; errno reports failure.
     unsafe { libc::dup2(fd, fd2) }
 }
 
 /// Wrap a raw fd as an owned `File` (the fd must be uniquely owned).
-pub fn file_from_fd(fd: RawFd) -> std::fs::File {
+pub(crate) fn file_from_fd(fd: RawFd) -> std::fs::File {
     use std::os::unix::io::FromRawFd;
     // SAFETY: the caller transfers unique ownership of `fd`.
     unsafe { std::fs::File::from_raw_fd(fd) }
@@ -344,7 +329,7 @@ pub fn file_from_fd(fd: RawFd) -> std::fs::File {
 
 /// Anonymous temp-file fd, like `tmpfile()` but returning a bare fd:
 /// `O_TMPFILE` on $TMPDIR (then /tmp), falling back to create+unlink.
-pub fn tmpfile_fd() -> RawFd {
+pub(crate) fn tmpfile_fd() -> RawFd {
     use std::os::unix::ffi::OsStrExt;
     let mut dirs: Vec<CString> = Vec::new();
     if let Some(d) = std::env::var_os("TMPDIR") {
@@ -365,21 +350,21 @@ pub fn tmpfile_fd() -> RawFd {
 }
 
 /// `fcntl(fd, cmd, arg)`.
-pub fn fcntl(fd: RawFd, cmd: i32, arg: i32) -> i32 {
+pub(crate) fn fcntl(fd: RawFd, cmd: i32, arg: i32) -> i32 {
     // SAFETY: standard variadic call with an integer arg; errno reports
     // failure.
     unsafe { libc::fcntl(fd, cmd, arg) }
 }
 
 /// `ioctl(fd, request, argp)` over a POD in/out value.
-pub fn ioctl_val<T>(fd: RawFd, request: libc::c_ulong, arg: &mut T) -> i32 {
+pub(crate) fn ioctl_val<T>(fd: RawFd, request: libc::c_ulong, arg: &mut T) -> i32 {
     // SAFETY: arg is a valid pointer for the request's in/out struct;
     // callers pass the right struct type for `request`.
     unsafe { libc::ioctl(fd, request, arg as *mut T) }
 }
 
 /// `stat(path)`, or `Err(errno)`.
-pub fn stat(path: &CStr) -> Result<libc::stat, i32> {
+pub(crate) fn stat(path: &CStr) -> Result<libc::stat, i32> {
     let mut st: libc::stat = zeroed();
     // SAFETY: &mut st is a valid out-pointer.
     if unsafe { libc::stat(path.as_ptr(), &mut st) } < 0 {
@@ -389,7 +374,7 @@ pub fn stat(path: &CStr) -> Result<libc::stat, i32> {
 }
 
 /// `lstat(path)`, or `Err(errno)`.
-pub fn lstat(path: &CStr) -> Result<libc::stat, i32> {
+pub(crate) fn lstat(path: &CStr) -> Result<libc::stat, i32> {
     let mut st: libc::stat = zeroed();
     // SAFETY: &mut st is a valid out-pointer.
     if unsafe { libc::lstat(path.as_ptr(), &mut st) } < 0 {
@@ -400,7 +385,7 @@ pub fn lstat(path: &CStr) -> Result<libc::stat, i32> {
 
 /// `statfs64(path)` → filled `statfs64`, or `Err(errno)` (errno may be
 /// 0 on failure — the C reference maps that to -EPERM at call sites).
-pub fn statfs64(path: &CStr) -> Result<libc::statfs64, i32> {
+pub(crate) fn statfs64(path: &CStr) -> Result<libc::statfs64, i32> {
     let mut st: libc::statfs64 = zeroed();
     clear_errno();
     // SAFETY: &mut st is a valid out-pointer.
@@ -409,104 +394,83 @@ pub fn statfs64(path: &CStr) -> Result<libc::statfs64, i32> {
     }
     Ok(st)
 }
-
-/// `fstat(fd)`, or `Err(errno)`.
-pub fn fstat(fd: RawFd) -> Result<libc::stat, i32> {
-    let mut st: libc::stat = zeroed();
-    // SAFETY: &mut st is a valid out-pointer.
-    if unsafe { libc::fstat(fd, &mut st) } < 0 {
-        return Err(errno());
-    }
-    Ok(st)
-}
-
-/// `fstatat(dirfd, path, flags)`, or `Err(errno)`.
-pub fn fstatat(dirfd: i32, path: &CStr, flags: i32) -> Result<libc::stat, i32> {
-    let mut st: libc::stat = zeroed();
-    // SAFETY: &mut st is a valid out-pointer.
-    if unsafe { libc::fstatat(dirfd, path.as_ptr(), &mut st, flags) } < 0 {
-        return Err(errno());
-    }
-    Ok(st)
-}
-
 /// `access(path, mode)` → 0 or -1.
-pub fn access(path: &CStr, mode: i32) -> i32 {
+pub(crate) fn access(path: &CStr, mode: i32) -> i32 {
     // SAFETY: path is NUL-terminated for the call duration.
     unsafe { libc::access(path.as_ptr(), mode) }
 }
 
 /// `faccessat(dirfd, path, mode, flags)` → 0 or -1.
-pub fn faccessat(dirfd: i32, path: &CStr, mode: i32, flags: i32) -> i32 {
+pub(crate) fn faccessat(dirfd: i32, path: &CStr, mode: i32, flags: i32) -> i32 {
     // SAFETY: path is NUL-terminated for the call duration.
     unsafe { libc::faccessat(dirfd, path.as_ptr(), mode, flags) }
 }
 
-pub fn chmod(path: &CStr, mode: libc::mode_t) -> i32 {
+pub(crate) fn chmod(path: &CStr, mode: libc::mode_t) -> i32 {
     // SAFETY: path is NUL-terminated for the call duration.
     unsafe { libc::chmod(path.as_ptr(), mode) }
 }
 
-pub fn fchmod(fd: RawFd, mode: libc::mode_t) -> i32 {
+pub(crate) fn fchmod(fd: RawFd, mode: libc::mode_t) -> i32 {
     // SAFETY: standard libc call; errno reports failure.
     unsafe { libc::fchmod(fd, mode) }
 }
 
-pub fn unlink(path: &CStr) -> i32 {
+pub(crate) fn unlink(path: &CStr) -> i32 {
     // SAFETY: path is NUL-terminated for the call duration.
     unsafe { libc::unlink(path.as_ptr()) }
 }
 
-pub fn unlinkat(dirfd: i32, path: &CStr, flags: i32) -> i32 {
+pub(crate) fn unlinkat(dirfd: i32, path: &CStr, flags: i32) -> i32 {
     // SAFETY: path is NUL-terminated for the call duration.
     unsafe { libc::unlinkat(dirfd, path.as_ptr(), flags) }
 }
 
-pub fn rename(old: &CStr, new: &CStr) -> i32 {
+pub(crate) fn rename(old: &CStr, new: &CStr) -> i32 {
     // SAFETY: both paths are NUL-terminated for the call duration.
     unsafe { libc::rename(old.as_ptr(), new.as_ptr()) }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn renameat(old_dir: i32, old: &CStr, new_dir: i32, new: &CStr) -> i32 {
+pub(crate) fn renameat(old_dir: i32, old: &CStr, new_dir: i32, new: &CStr) -> i32 {
     // SAFETY: both paths are NUL-terminated for the call duration.
     unsafe { libc::renameat(old_dir, old.as_ptr(), new_dir, new.as_ptr()) }
 }
 
-pub fn symlink(target: &CStr, linkpath: &CStr) -> i32 {
+pub(crate) fn symlink(target: &CStr, linkpath: &CStr) -> i32 {
     // SAFETY: both paths are NUL-terminated for the call duration.
     unsafe { libc::symlink(target.as_ptr(), linkpath.as_ptr()) }
 }
 
-pub fn symlinkat(target: &CStr, dirfd: i32, linkpath: &CStr) -> i32 {
+pub(crate) fn symlinkat(target: &CStr, dirfd: i32, linkpath: &CStr) -> i32 {
     // SAFETY: both paths are NUL-terminated for the call duration.
     unsafe { libc::symlinkat(target.as_ptr(), dirfd, linkpath.as_ptr()) }
 }
 
-pub fn mkdir(path: &CStr, mode: libc::mode_t) -> i32 {
+pub(crate) fn mkdir(path: &CStr, mode: libc::mode_t) -> i32 {
     // SAFETY: path is NUL-terminated for the call duration.
     unsafe { libc::mkdir(path.as_ptr(), mode) }
 }
 
-pub fn mknod(path: &CStr, mode: libc::mode_t, dev: libc::dev_t) -> i32 {
+pub(crate) fn mknod(path: &CStr, mode: libc::mode_t, dev: libc::dev_t) -> i32 {
     // SAFETY: path is NUL-terminated for the call duration.
     unsafe { libc::mknod(path.as_ptr(), mode, dev) }
 }
 
 /// `readlink(path, buf)` → bytes written, or -1.
-pub fn readlink(path: &CStr, buf: &mut [u8]) -> isize {
+pub(crate) fn readlink(path: &CStr, buf: &mut [u8]) -> isize {
     // SAFETY: buf is a valid writable slice for the call.
     unsafe { libc::readlink(path.as_ptr(), buf.as_mut_ptr() as *mut _, buf.len()) }
 }
 
 /// `readlinkat(dirfd, path, buf)` → bytes written, or -1.
-pub fn readlinkat(dirfd: i32, path: &CStr, buf: &mut [u8]) -> isize {
+pub(crate) fn readlinkat(dirfd: i32, path: &CStr, buf: &mut [u8]) -> isize {
     // SAFETY: buf is a valid writable slice for the call.
     unsafe { libc::readlinkat(dirfd, path.as_ptr(), buf.as_mut_ptr() as *mut _, buf.len()) }
 }
 
 /// `realpath(path)` → resolved bytes, or None (errno set).
-pub fn realpath(path: &CStr) -> Option<Vec<u8>> {
+pub(crate) fn realpath(path: &CStr) -> Option<Vec<u8>> {
     let mut buf = vec![0u8; crate::PATH_MAX];
     // SAFETY: buf is PATH_MAX bytes, the size realpath requires.
     let ret = unsafe { libc::realpath(path.as_ptr(), buf.as_mut_ptr() as *mut _) };
@@ -519,7 +483,7 @@ pub fn realpath(path: &CStr) -> Option<Vec<u8>> {
 }
 
 /// `getcwd` into a PATH_MAX buffer.
-pub fn getcwd() -> Option<Vec<u8>> {
+pub(crate) fn getcwd() -> Option<Vec<u8>> {
     let mut buf = vec![0u8; crate::PATH_MAX];
     // SAFETY: buf is a valid writable slice of PATH_MAX bytes.
     let ret = unsafe { libc::getcwd(buf.as_mut_ptr() as *mut _, buf.len()) };
@@ -532,7 +496,7 @@ pub fn getcwd() -> Option<Vec<u8>> {
 }
 
 /// `pipe2(O_CLOEXEC)` → `(read_end, write_end)`, or `Err(errno)`.
-pub fn pipe_cloexec() -> Result<(RawFd, RawFd), i32> {
+pub(crate) fn pipe_cloexec() -> Result<(RawFd, RawFd), i32> {
     let mut fds = [0i32; 2];
     // SAFETY: fds is a valid 2-int out-array.
     if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
@@ -542,7 +506,7 @@ pub fn pipe_cloexec() -> Result<(RawFd, RawFd), i32> {
 }
 
 /// `setenv(name, value, overwrite)`.
-pub fn setenv(name: &CStr, value: &CStr, overwrite: bool) -> i32 {
+pub(crate) fn setenv(name: &CStr, value: &CStr, overwrite: bool) -> i32 {
     // SAFETY: name/value are NUL-terminated for the call duration.
     unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), overwrite as i32) }
 }
@@ -552,21 +516,10 @@ pub fn setenv(name: &CStr, value: &CStr, overwrite: bool) -> i32 {
 // ==================================================================
 
 /// `socket(domain, type, protocol)` → fd or -1.
-pub fn socket(domain: i32, ty: i32, protocol: i32) -> RawFd {
+pub(crate) fn socket(domain: i32, ty: i32, protocol: i32) -> RawFd {
     // SAFETY: standard libc call; errno reports failure.
     unsafe { libc::socket(domain, ty, protocol) }
 }
-
-/// `socketpair(domain, type, protocol)` → `(fd1, fd2)` or `Err(errno)`.
-pub fn socketpair(domain: i32, ty: i32, protocol: i32) -> Result<(RawFd, RawFd), i32> {
-    let mut fds = [0i32; 2];
-    // SAFETY: fds is a valid 2-int out-array.
-    if unsafe { libc::socketpair(domain, ty, protocol, fds.as_mut_ptr()) } < 0 {
-        return Err(errno());
-    }
-    Ok((fds[0], fds[1]))
-}
-
 /// Borrow `sa` as a generic `sockaddr` pointer + length pair.
 fn sockaddr_parts<T>(sa: &T) -> (*const libc::sockaddr, libc::socklen_t) {
     (
@@ -576,32 +529,24 @@ fn sockaddr_parts<T>(sa: &T) -> (*const libc::sockaddr, libc::socklen_t) {
 }
 
 /// `bind(fd, sa, size_of::<S>())` — `S` is the concrete sockaddr type.
-pub fn bind<S>(fd: RawFd, sa: &S) -> i32 {
+pub(crate) fn bind<S>(fd: RawFd, sa: &S) -> i32 {
     let (ptr, len) = sockaddr_parts(sa);
     // SAFETY: ptr/len describe the live struct `sa`.
     unsafe { libc::bind(fd, ptr, len) }
 }
-
-/// `connect(fd, sa, size_of::<S>())`.
-pub fn connect<S>(fd: RawFd, sa: &S) -> i32 {
-    let (ptr, len) = sockaddr_parts(sa);
-    // SAFETY: ptr/len describe the live struct `sa`.
-    unsafe { libc::connect(fd, ptr, len) }
-}
-
-pub fn listen(fd: RawFd, backlog: i32) -> i32 {
+pub(crate) fn listen(fd: RawFd, backlog: i32) -> i32 {
     // SAFETY: standard libc call; errno reports failure.
     unsafe { libc::listen(fd, backlog) }
 }
 
 /// `accept(fd, NULL, NULL)` → fd or -1.
-pub fn accept(fd: RawFd) -> RawFd {
+pub(crate) fn accept(fd: RawFd) -> RawFd {
     // SAFETY: NULL peer address is supported.
     unsafe { libc::accept(fd, std::ptr::null_mut(), std::ptr::null_mut()) }
 }
 
 /// `sendto(fd, buf, flags, dest)`.
-pub fn sendto<S>(fd: RawFd, buf: &[u8], flags: i32, dest: Option<&S>) -> isize {
+pub(crate) fn sendto<S>(fd: RawFd, buf: &[u8], flags: i32, dest: Option<&S>) -> isize {
     let (ptr, len) = match dest {
         Some(sa) => sockaddr_parts(sa),
         None => (std::ptr::null(), 0),
@@ -620,25 +565,18 @@ pub fn sendto<S>(fd: RawFd, buf: &[u8], flags: i32, dest: Option<&S>) -> isize {
 }
 
 /// `sendmsg(fd, msg, flags)`.
-pub fn sendmsg(fd: RawFd, msg: &libc::msghdr, flags: i32) -> isize {
+pub(crate) fn sendmsg(fd: RawFd, msg: &libc::msghdr, flags: i32) -> isize {
     // SAFETY: msg describes valid buffers built by the caller.
     unsafe { libc::sendmsg(fd, msg, flags) }
 }
-
-/// `recvmsg(fd, msg, flags)`.
-pub fn recvmsg(fd: RawFd, msg: &mut libc::msghdr, flags: i32) -> isize {
-    // SAFETY: msg describes valid buffers built by the caller.
-    unsafe { libc::recvmsg(fd, msg, flags) }
-}
-
 /// `recv(fd, buf, flags)`.
-pub fn recv(fd: RawFd, buf: &mut [u8], flags: i32) -> isize {
+pub(crate) fn recv(fd: RawFd, buf: &mut [u8], flags: i32) -> isize {
     // SAFETY: buf is a valid writable slice for the call.
     unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), flags) }
 }
 
 /// `setsockopt(fd, level, name, &value, size_of::<T>())`.
-pub fn setsockopt_val<T>(fd: RawFd, level: i32, name: i32, value: &T) -> i32 {
+pub(crate) fn setsockopt_val<T>(fd: RawFd, level: i32, name: i32, value: &T) -> i32 {
     // SAFETY: value is a valid pointer of size_of::<T>() bytes.
     unsafe {
         libc::setsockopt(
@@ -650,24 +588,8 @@ pub fn setsockopt_val<T>(fd: RawFd, level: i32, name: i32, value: &T) -> i32 {
         )
     }
 }
-
-/// `getsockopt(fd, level, name, &mut value, &mut len)`.
-pub fn getsockopt_val<T>(fd: RawFd, level: i32, name: i32, value: &mut T) -> i32 {
-    let mut len = size_of::<T>() as libc::socklen_t;
-    // SAFETY: value is a valid writable pointer of size_of::<T>() bytes.
-    unsafe {
-        libc::getsockopt(
-            fd,
-            level,
-            name,
-            value as *mut T as *mut libc::c_void,
-            &mut len,
-        )
-    }
-}
-
 /// `if_nametoindex(name)` → index or 0.
-pub fn if_nametoindex(name: &CStr) -> libc::c_uint {
+pub(crate) fn if_nametoindex(name: &CStr) -> libc::c_uint {
     // SAFETY: name is NUL-terminated for the call duration.
     unsafe { libc::if_nametoindex(name.as_ptr()) }
 }
@@ -677,13 +599,13 @@ pub fn if_nametoindex(name: &CStr) -> libc::c_uint {
 // ==================================================================
 
 /// Owned `getifaddrs` list; frees on drop.
-pub struct IfAddrs {
+pub(crate) struct IfAddrs {
     head: *mut libc::ifaddrs,
 }
 
 impl IfAddrs {
     /// `getifaddrs()` → list, or `Err(errno)`.
-    pub fn get() -> Result<IfAddrs, i32> {
+    pub(crate) fn get() -> Result<IfAddrs, i32> {
         let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
         // SAFETY: head is a valid out-pointer.
         if unsafe { libc::getifaddrs(&mut head) } != 0 {
@@ -693,7 +615,7 @@ impl IfAddrs {
     }
 
     /// Iterate over the interface addresses.
-    pub fn iter(&self) -> IfAddrsIter<'_> {
+    pub(crate) fn iter(&self) -> IfAddrsIter<'_> {
         IfAddrsIter {
             cur: self.head,
             _list: std::marker::PhantomData,
@@ -708,7 +630,7 @@ impl Drop for IfAddrs {
     }
 }
 
-pub struct IfAddrsIter<'a> {
+pub(crate) struct IfAddrsIter<'a> {
     cur: *const libc::ifaddrs,
     _list: std::marker::PhantomData<&'a IfAddrs>,
 }
@@ -729,18 +651,18 @@ impl<'a> Iterator for IfAddrsIter<'a> {
 }
 
 /// One interface-address entry.
-pub struct IfAddr<'a> {
+pub(crate) struct IfAddr<'a> {
     inner: &'a libc::ifaddrs,
 }
 
 impl<'a> IfAddr<'a> {
     /// Interface name (NUL-terminated by the kernel).
-    pub fn name(&self) -> &'a CStr {
+    pub(crate) fn name(&self) -> &'a CStr {
         // SAFETY: getifaddrs fills ifa_name with a valid C string.
         unsafe { CStr::from_ptr(self.inner.ifa_name) }
     }
 
-    pub fn flags(&self) -> libc::c_uint {
+    pub(crate) fn flags(&self) -> libc::c_uint {
         self.inner.ifa_flags
     }
 
@@ -763,34 +685,34 @@ impl<'a> IfAddr<'a> {
     }
 
     /// `ifa_addr` viewed as `sockaddr_in` when the family is AF_INET.
-    pub fn addr_in(&self) -> Option<&'a libc::sockaddr_in> {
+    pub(crate) fn addr_in(&self) -> Option<&'a libc::sockaddr_in> {
         sockaddr_as_in(self.addr()?)
     }
 
     /// `ifa_addr` viewed as `sockaddr_in6` when the family is AF_INET6.
-    pub fn addr_in6(&self) -> Option<&'a libc::sockaddr_in6> {
+    pub(crate) fn addr_in6(&self) -> Option<&'a libc::sockaddr_in6> {
         sockaddr_as_in6(self.addr()?)
     }
 
     /// `ifa_addr` viewed as `sockaddr_ll` when the family is AF_PACKET.
-    pub fn addr_ll(&self) -> Option<&'a libc::sockaddr_ll> {
+    pub(crate) fn addr_ll(&self) -> Option<&'a libc::sockaddr_ll> {
         sockaddr_as_ll(self.addr()?)
     }
 
     /// `ifa_netmask` viewed as `sockaddr_in` when the family is AF_INET.
-    pub fn netmask_in(&self) -> Option<&'a libc::sockaddr_in> {
+    pub(crate) fn netmask_in(&self) -> Option<&'a libc::sockaddr_in> {
         sockaddr_as_in(self.netmask()?)
     }
 
     /// `ifa_netmask` viewed as `sockaddr_in6` when the family is
     /// AF_INET6.
-    pub fn netmask_in6(&self) -> Option<&'a libc::sockaddr_in6> {
+    pub(crate) fn netmask_in6(&self) -> Option<&'a libc::sockaddr_in6> {
         sockaddr_as_in6(self.netmask()?)
     }
 }
 
 /// Family-checked view of a `sockaddr` as `sockaddr_in`.
-pub fn sockaddr_as_in(sa: &libc::sockaddr) -> Option<&libc::sockaddr_in> {
+pub(crate) fn sockaddr_as_in(sa: &libc::sockaddr) -> Option<&libc::sockaddr_in> {
     if sa.sa_family as i32 != libc::AF_INET {
         return None;
     }
@@ -800,7 +722,7 @@ pub fn sockaddr_as_in(sa: &libc::sockaddr) -> Option<&libc::sockaddr_in> {
 }
 
 /// Family-checked view of a `sockaddr` as `sockaddr_in6`.
-pub fn sockaddr_as_in6(sa: &libc::sockaddr) -> Option<&libc::sockaddr_in6> {
+pub(crate) fn sockaddr_as_in6(sa: &libc::sockaddr) -> Option<&libc::sockaddr_in6> {
     if sa.sa_family as i32 != libc::AF_INET6 {
         return None;
     }
@@ -809,7 +731,7 @@ pub fn sockaddr_as_in6(sa: &libc::sockaddr) -> Option<&libc::sockaddr_in6> {
 }
 
 /// Family-checked view of a `sockaddr` as `sockaddr_ll` (AF_PACKET).
-pub fn sockaddr_as_ll(sa: &libc::sockaddr) -> Option<&libc::sockaddr_ll> {
+pub(crate) fn sockaddr_as_ll(sa: &libc::sockaddr) -> Option<&libc::sockaddr_ll> {
     if sa.sa_family as i32 != libc::AF_PACKET {
         return None;
     }
@@ -824,7 +746,7 @@ pub fn sockaddr_as_ll(sa: &libc::sockaddr) -> Option<&libc::sockaddr_ll> {
 /// `ptrace(request, pid, addr, data)` — addr/data are taken as raw
 /// `usize` words since most requests use them as scalars or opaque
 /// remote addresses; pointer-valued callers cast with `as usize`.
-pub fn ptrace(request: libc::c_uint, pid: libc::pid_t, addr: usize, data: usize) -> i64 {
+pub(crate) fn ptrace(request: libc::c_uint, pid: libc::pid_t, addr: usize, data: usize) -> i64 {
     // SAFETY: standard ptrace call; addr/data semantics are per-request
     // and provided by the caller. errno reports failure.
     unsafe {
@@ -839,7 +761,7 @@ pub fn ptrace(request: libc::c_uint, pid: libc::pid_t, addr: usize, data: usize)
 
 /// `process_vm_readv` single-iovec: copy `local.len()` bytes from
 /// `remote` in `pid`'s address space → bytes read or -1.
-pub fn process_vm_read(pid: libc::pid_t, local: &mut [u8], remote: u64) -> isize {
+pub(crate) fn process_vm_read(pid: libc::pid_t, local: &mut [u8], remote: u64) -> isize {
     let liovec = libc::iovec {
         iov_base: local.as_mut_ptr() as *mut _,
         iov_len: local.len(),
@@ -855,7 +777,7 @@ pub fn process_vm_read(pid: libc::pid_t, local: &mut [u8], remote: u64) -> isize
 
 /// `process_vm_writev` single-iovec: write `local` into `remote` in
 /// `pid`'s address space → bytes written or -1.
-pub fn process_vm_write(pid: libc::pid_t, local: &[u8], remote: u64) -> isize {
+pub(crate) fn process_vm_write(pid: libc::pid_t, local: &[u8], remote: u64) -> isize {
     let liovec = libc::iovec {
         iov_base: local.as_ptr() as *mut _,
         iov_len: local.len(),
@@ -871,7 +793,7 @@ pub fn process_vm_write(pid: libc::pid_t, local: &[u8], remote: u64) -> isize {
 
 /// `process_vm_writev` scatter-gather: write `srcs` concatenated at
 /// `remote` in `pid`'s address space → bytes written or -1.
-pub fn process_vm_writev_bufs(pid: libc::pid_t, srcs: &[&[u8]], remote: u64) -> isize {
+pub(crate) fn process_vm_writev_bufs(pid: libc::pid_t, srcs: &[&[u8]], remote: u64) -> isize {
     let local: Vec<libc::iovec> = srcs
         .iter()
         .map(|s| libc::iovec {
@@ -889,7 +811,7 @@ pub fn process_vm_writev_bufs(pid: libc::pid_t, srcs: &[&[u8]], remote: u64) -> 
 }
 
 /// `PTRACE_GETSIGINFO` → filled `siginfo_t`, or `Err(errno)`.
-pub fn ptrace_getsiginfo(pid: libc::pid_t) -> Result<libc::siginfo_t, i32> {
+pub(crate) fn ptrace_getsiginfo(pid: libc::pid_t) -> Result<libc::siginfo_t, i32> {
     let mut si: libc::siginfo_t = zeroed();
     let status = ptrace(
         crate::ptrace::ptc::PTRACE_GETSIGINFO as u32,
@@ -901,7 +823,7 @@ pub fn ptrace_getsiginfo(pid: libc::pid_t) -> Result<libc::siginfo_t, i32> {
 }
 
 /// `PTRACE_GETEVENTMSG` → message word, or `Err(errno)`.
-pub fn ptrace_geteventmsg(pid: libc::pid_t) -> Result<libc::c_ulong, i32> {
+pub(crate) fn ptrace_geteventmsg(pid: libc::pid_t) -> Result<libc::c_ulong, i32> {
     let mut msg: libc::c_ulong = 0;
     let status = ptrace(
         crate::ptrace::ptc::PTRACE_GETEVENTMSG as u32,
@@ -913,7 +835,7 @@ pub fn ptrace_geteventmsg(pid: libc::pid_t) -> Result<libc::c_ulong, i32> {
 }
 
 /// `PTRACE_SETOPTIONS(pid, mask)`.
-pub fn ptrace_setoptions(pid: libc::pid_t, mask: usize) -> i64 {
+pub(crate) fn ptrace_setoptions(pid: libc::pid_t, mask: usize) -> i64 {
     ptrace(crate::ptrace::ptc::PTRACE_SETOPTIONS as u32, pid, 0, mask)
 }
 
@@ -926,16 +848,4 @@ pub fn ptrace_setoptions(pid: libc::pid_t, mask: usize) -> i64 {
 pub unsafe fn siginfo_si_pid(si: *const libc::siginfo_t) -> libc::pid_t {
     // SAFETY: caller guarantees `si` is valid.
     unsafe { (*si).si_pid() }
-}
-
-// ==================================================================
-// Device numbers
-// ==================================================================
-
-pub fn major(dev: libc::dev_t) -> libc::c_uint {
-    libc::major(dev)
-}
-
-pub fn minor(dev: libc::dev_t) -> libc::c_uint {
-    libc::minor(dev)
 }

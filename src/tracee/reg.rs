@@ -263,11 +263,6 @@ pub fn set_sysnum(tracee: &mut Tracee, sysnum: Sysnum) {
     poke_reg(tracee, Reg::SysargNum, n);
 }
 
-/// Human-readable name of a Sysnum.
-pub fn stringify_sysnum(s: Sysnum) -> &'static str {
-    s.name()
-}
-
 /// Verbose register dump.
 pub fn print_current_regs(tracee: &Tracee, verbose_level: i32, message: &str) {
     if tracee.verbose < verbose_level {
@@ -279,7 +274,7 @@ pub fn print_current_regs(tracee: &Tracee, verbose_level: i32, message: &str) {
         "vpid {}: {}: {}({:#x}, {:#x}, {:#x}, {:#x}, {:#x}, {:#x}) = {:#x} [{:#x}, {:?}]",
         tracee.vpid,
         message,
-        stringify_sysnum(get_sysnum(tracee, RegVersion::Current)),
+        get_sysnum(tracee, RegVersion::Current).name(),
         peek_reg(tracee, RegVersion::Current, Reg::Sysarg1),
         peek_reg(tracee, RegVersion::Current, Reg::Sysarg2),
         peek_reg(tracee, RegVersion::Current, Reg::Sysarg3),

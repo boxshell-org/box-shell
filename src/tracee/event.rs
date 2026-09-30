@@ -432,14 +432,14 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
                         SECCOMP_PTRACE_EVENT_SUPPORTED
                             .store(kernel_supports_ptrace_event_seccomp(), Ordering::Relaxed);
                     }
-                    signal = handle_sigtrap_syscall(tracee, &mut signal);
+                    signal = handle_sigtrap_syscall(tracee);
                 }
             }
             s if s == libc::SIGTRAP | 0x80 => {
-                signal = handle_sigtrap_syscall(tracee, &mut signal);
+                signal = handle_sigtrap_syscall(tracee);
             }
             s if s == libc::SIGTRAP | (crate::ptrace::ptc::PTRACE_EVENT_SECCOMP << 8)
-                || s == libc::SIGTRAP | (0x08 /* PTRACE_EVENT_SECCOMP2 */ << 8) =>
+                || s == libc::SIGTRAP | (crate::ptrace::ptc::PTRACE_EVENT_SECCOMP2 << 8) =>
             {
                 signal = handle_seccomp_stop(tracee, sysexit_necessary);
             }
@@ -514,7 +514,7 @@ pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
 /// Shared handling for SIGTRAP and SIGTRAP|0x80 (syscall stops).
 /// The stop signal itself is swallowed (C does `signal = 0` in these cases);
 /// only a suppressed chain signal may be redelivered.
-fn handle_sigtrap_syscall(tracee: &mut Tracee, _signal: &mut i32) -> i32 {
+fn handle_sigtrap_syscall(tracee: &mut Tracee) -> i32 {
     let mut signal = 0;
 
     if tracee.exe.is_none() {

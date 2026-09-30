@@ -44,17 +44,8 @@ impl Finality {
     }
 }
 
-pub const NOT_FINAL: Finality = Finality::NotFinal;
-pub const FINAL_NORMAL: Finality = Finality::Normal;
-pub const FINAL_SLASH: Finality = Finality::Slash;
-pub const FINAL_DOT: Finality = Finality::Dot;
-
 /// `compare_paths()` on byte strings.
-pub fn compare_paths(p1: &[u8], p2: &[u8]) -> Comparison {
-    compare_paths2(p1, p2)
-}
-
-pub fn compare_paths2(path1: &[u8], path2: &[u8]) -> Comparison {
+pub fn compare_paths(path1: &[u8], path2: &[u8]) -> Comparison {
     let mut length1 = path1.len();
     let mut length2 = path2.len();
     if length1 == 0 || length2 == 0 {

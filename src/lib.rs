@@ -37,7 +37,6 @@ pub mod sys;
 pub mod syscall;
 pub mod sysnum;
 pub mod tracee;
-pub mod util;
 
 /// Machine word of the *host* architecture PRoot runs on.
 pub type Word = u64;

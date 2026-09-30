@@ -9,9 +9,7 @@
 use std::rc::Rc;
 
 use crate::fpath::FixedPath;
-use crate::path::{
-    Comparison, Side, compare_paths, compare_paths2, getcwd2, join_paths2, realpath2,
-};
+use crate::path::{Comparison, Side, compare_paths, getcwd2, join_paths2, realpath2};
 use crate::tracee::Tracee;
 
 pub struct Binding {
@@ -40,7 +38,7 @@ pub fn get_binding(tracee: &Tracee, side: Side, path: &[u8]) -> Option<Rc<Bindin
     };
     for binding in list.iter() {
         let reference = binding.path(side);
-        let cmp = compare_paths2(reference.as_bytes(), path);
+        let cmp = compare_paths(reference.as_bytes(), path);
         if cmp != Comparison::PathsAreEqual && cmp != Comparison::Path1IsPrefix {
             continue;
         }
@@ -118,7 +116,7 @@ fn insort_binding(tracee: &Tracee, side: Side, binding: Rc<Binding>) {
 
     for (i, iter) in list.iter().enumerate() {
         let iterator_path = iter.path(side);
-        match compare_paths2(binding_path.as_bytes(), iterator_path.as_bytes()) {
+        match compare_paths(binding_path.as_bytes(), iterator_path.as_bytes()) {
             Comparison::PathsAreEqual => {
                 if side == Side::Host {
                     previous = Some(i);

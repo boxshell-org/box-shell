@@ -35,10 +35,9 @@ pub fn global_verbose() -> i32 {
     GLOBAL_VERBOSE_LEVEL.load(Ordering::Relaxed)
 }
 
-/// Print a notice on stderr.  `tracee_verbose` is `Option<i32>`: when Some,
-/// `-1` or lower suppresses INFO messages entirely (the C version checks
-/// `tracee->verbose` inside `note()` when severity is INFO?  — actually it
-/// doesn't; VERBOSE() gates at the call site.  We keep the same split.)
+/// Print a notice on stderr.  INFO is suppressed when the global verbose
+/// level is negative; per-tracee verbosity gates at call sites via the
+/// `verbose!` macro (the same split as the C code).
 pub fn note(severity: Severity, origin: Origin, args: std::fmt::Arguments) {
     if severity == Severity::Info && global_verbose() < 0 {
         return;
