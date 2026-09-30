@@ -722,4 +722,123 @@ mod tests {
         // Trailing junk after digits: sscanf still consumed the fd.
         assert_eq!(parse_proc_fd(b"/proc/12/fd/3x"), Some((12, 3)));
     }
+
+    // ------ readlink_exit arena tests ------
+    use crate::sysnum::detranslate_sysnum;
+    use crate::testutil::{Arena, TempDir, fork_child};
+    use crate::tracee::mem::write_data;
+    use crate::tracee::reg::get_abi;
+
+    /// Tracee rooted at `root` with extra bindings, backed by a live child.
+    fn live_tracee(
+        root: &[u8],
+        bindings: &[(&[u8], &[u8])],
+        arena: &Arena,
+        child: &crate::testutil::Child,
+    ) -> Tracee {
+        let mut t = child.tracee_with_sp(arena);
+        t.fs.borrow_mut().cwd.set(b"/");
+        crate::path::binding::new_binding(&mut t, root, Some(b"/"), true).unwrap();
+        for (h, g) in bindings {
+            crate::path::binding::new_binding(&mut t, h, Some(g), true).unwrap();
+        }
+        crate::path::binding::initialize_bindings(&mut t);
+        t
+    }
+
+    fn set_readlink_regs(t: &mut Tracee, input: Word, output: Word, max: Word) {
+        // Original bank: the syscall + args as the guest issued them.
+        poke_reg(
+            t,
+            Reg::SysargNum,
+            detranslate_sysnum(get_abi(t), Sysnum::readlink),
+        );
+        poke_reg(t, Reg::Sysarg2, output);
+        poke_reg(t, Reg::Sysarg3, max);
+        t.regs[RegVersion::Original.idx()] = t.regs[RegVersion::Current.idx()];
+        // Modified bank: arg1 holds the *translated* host path address.
+        poke_reg(t, Reg::Sysarg1, input);
+        t.regs[RegVersion::Modified.idx()] = t.regs[RegVersion::Current.idx()];
+    }
+
+    #[test]
+    fn readlink_detranslates_through_binding() {
+        // Regression for the bug the C suite caught: a symlink reached via
+        // /ced/L whose content is the host path must print /ced/t.
+        let root = TempDir::new("rl-root");
+        root.dir("bin");
+        let host = TempDir::new("rl-host");
+        host.dir("hdir");
+        let hdir = host.abs("hdir");
+        let mut t_path = hdir.clone();
+        t_path.extend_from_slice(b"/t");
+
+        let arena = Arena::new(2);
+        let child = fork_child(&arena).unwrap();
+        let mut t = live_tracee(&root.abs("."), &[(&hdir, b"/ced")], &arena, &child);
+
+        // Remote: input=host path of the link, output=raw link content.
+        let input = arena.addr() + 0x800;
+        let output = arena.addr() + 0x1000;
+        let mut link_host = hdir.clone();
+        link_host.extend_from_slice(b"/L\0");
+        write_data(&t, input, &link_host);
+        write_data(&t, output, &t_path);
+        let out_len = t_path.len() as Word;
+        set_readlink_regs(&mut t, input, output, 4096);
+
+        let flow = readlink_exit(&mut t, out_len);
+        assert!(matches!(flow, Flow::Result(6)));
+        let mut buf = vec![0u8; 64];
+        assert_eq!(read_data(&t, &mut buf, output), 0);
+        assert_eq!(&buf[..6], b"/ced/t");
+    }
+
+    #[test]
+    fn readlink_negative_result_passthrough() {
+        let arena = Arena::new(1);
+        let child = fork_child(&arena).unwrap();
+        let mut t = live_tracee(b"/", &[], &arena, &child);
+        let flow = readlink_exit(&mut t, (-libc::ENOENT as i64) as Word);
+        assert!(matches!(flow, Flow::End));
+    }
+
+    #[test]
+    fn readlink_zero_maxsize_is_einval() {
+        let arena = Arena::new(1);
+        let child = fork_child(&arena).unwrap();
+        let mut t = live_tracee(b"/", &[], &arena, &child);
+        set_readlink_regs(&mut t, 0, arena.addr() + 0x100, 0);
+        let flow = readlink_exit(&mut t, 5);
+        assert!(matches!(flow, Flow::Result(s) if s == -libc::EINVAL));
+    }
+
+    #[test]
+    fn readlink_plain_path_untouched() {
+        // Referer inside the guestfs → no binding detranslation; the
+        // buffer stays as the kernel wrote it.
+        let root = TempDir::new("rl-plain");
+        root.dir("d");
+        let arena = Arena::new(2);
+        let child = fork_child(&arena).unwrap();
+        let mut t = live_tracee(&root.abs("."), &[], &arena, &child);
+        // Link lives inside the rootfs, content = guest-abs path that
+        // stays within the rootfs → host path = root+content.
+        let mut referer = root.abs(".");
+        referer.extend_from_slice(b"/d/L\0");
+        let target_content = b"/d/t"; // guest path; host = root + /d/t
+        let input = arena.addr() + 0x800;
+        let output = arena.addr() + 0x1000;
+        write_data(&t, input, &referer);
+        let mut host_target = root.abs(".");
+        host_target.extend_from_slice(target_content);
+        write_data(&t, output, &host_target);
+        set_readlink_regs(&mut t, input, output, 4096);
+        let flow = readlink_exit(&mut t, host_target.len() as Word);
+        // Detranslation strips the root prefix → guest "/d/t".
+        assert!(matches!(flow, Flow::Result(4)));
+        let mut buf = vec![0u8; 64];
+        assert_eq!(read_data(&t, &mut buf, output), 0);
+        assert_eq!(&buf[..4], b"/d/t");
+    }
 }
