@@ -461,7 +461,7 @@ fn move_and_symlink_path(
     let original_b = original.as_bytes().to_vec();
 
     // Sanity check: directories can't be linked.
-    let c = CString::new(original_b.clone()).unwrap_or_default();
+    let c = CString::new(original_b.as_slice()).unwrap_or_default();
     let statl = match crate::sys::lstat(&c) {
         Ok(s) => s,
         Err(e) => return -e,
@@ -550,8 +550,8 @@ fn move_and_symlink_path(
         }
 
         // Symlink the original path to the intermediate one.
-        let i_c = CString::new(intermediate.clone()).unwrap_or_default();
-        let o_c = CString::new(original_b.clone()).unwrap_or_default();
+        let i_c = CString::new(intermediate.as_slice()).unwrap_or_default();
+        let o_c = CString::new(original_b.as_slice()).unwrap_or_default();
         if crate::sys::symlink(&i_c, &o_c) < 0 {
             return -path_errno();
         }
@@ -605,7 +605,7 @@ fn move_and_symlink_path(
     let target_addr = peek_reg(tracee, RegVersion::Current, link_target_sysarg);
     let mut status = read_path(tracee, &mut final_arg, target_addr);
     if status >= 0 {
-        let i_c = CString::new(intermediate.clone()).unwrap_or_default();
+        let i_c = CString::new(intermediate.as_slice()).unwrap_or_default();
         let f_c = CString::new(final_arg.as_bytes()).unwrap_or_default();
         if crate::sys::symlink(&i_c, &f_c) < 0 {
             status = -path_errno();
@@ -641,7 +641,7 @@ fn decrement_link_count(tracee: &mut Tracee, sysarg: Reg) -> i32 {
     let original_b = original.as_bytes().to_vec();
 
     // Check if it is a converted link already.
-    let c = CString::new(original_b.clone()).unwrap_or_default();
+    let c = CString::new(original_b.as_slice()).unwrap_or_default();
     let statl = match crate::sys::lstat(&c) {
         Ok(s) => s,
         Err(_) => return 0,
@@ -792,7 +792,7 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut L2sConfig) -> i32 {
             let original_b = original.as_bytes().to_vec();
 
             // Check if it is a link.
-            let c = CString::new(original_b.clone()).unwrap_or_default();
+            let c = CString::new(original_b.as_slice()).unwrap_or_default();
             let statl = crate::sys::lstat(&c).unwrap_or_else(|_| crate::sys::zeroed());
 
             let name = base_name(&original_b);
@@ -825,7 +825,7 @@ fn handle_sysexit_end(tracee: &mut Tracee, config: &mut L2sConfig) -> i32 {
                 };
             }
 
-            let c = CString::new(final_path.clone()).unwrap_or_default();
+            let c = CString::new(final_path.as_slice()).unwrap_or_default();
             let mut final_stat = match crate::sys::lstat(&c) {
                 Ok(s) => s,
                 Err(e) => return -e,
@@ -966,7 +966,7 @@ fn handle_linkat_from_proc_fd(tracee: &mut Tracee) -> i32 {
     let proc_path_b = proc_path.as_bytes().to_vec();
 
     // Ensure the provided path is a symlink to a " (deleted)" file.
-    let c = CString::new(proc_path_b.clone()).unwrap_or_default();
+    let c = CString::new(proc_path_b.as_slice()).unwrap_or_default();
     let mut buf = [0u8; PATH_MAX];
     let status = crate::sys::readlink(&c, &mut buf);
     if status < 10 || status as usize >= PATH_MAX {
@@ -1004,7 +1004,7 @@ fn handle_linkat_from_proc_fd(tracee: &mut Tracee) -> i32 {
     }
 
     // Point of no return — errors below are propagated.
-    let t_c = CString::new(target_b.clone()).unwrap_or_default();
+    let t_c = CString::new(target_b.as_slice()).unwrap_or_default();
     crate::sys::unlink(&t_c); // ignore result
     let target_fd = crate::sys::open(
         &t_c,

@@ -1277,9 +1277,7 @@ fn handle_chroot_exit(tracee: &mut Tracee, config: &Config, from_sigsys: bool) -
     }
 
     // realpath()
-    if let Some(resolved) = crate::sys::realpath(path.as_c_str()) {
-        path_host_absolute.set(&resolved);
-    } else {
+    if !crate::sys::realpath(path.as_c_str(), &mut path_host_absolute) {
         path_host_absolute.set(path.as_bytes());
     }
 

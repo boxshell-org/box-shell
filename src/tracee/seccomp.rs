@@ -278,25 +278,27 @@ fn handle_seccomp_event_common(tracee: &mut Tracee) -> i32 {
             // utimes(path, timeval[2]) → utimensat(AT_FDCWD, path,
             // timespec[2], 0); timeval has seconds+microseconds.
             let w = crate::tracee::reg::sizeof_word(tracee);
-            let mut times = vec![0u8; w * 4];
+            let mut times_buf = [0u8; 64];
+            let times = &mut times_buf[..w * 4];
             set_sysnum(tracee, Sysnum::utimensat);
             let mut ret: i64 = 0;
             if peek_reg(tracee, RegVersion::Current, Reg::Sysarg2) != 0 {
                 if read_data(
                     tracee,
-                    &mut times,
+                    times,
                     peek_reg(tracee, RegVersion::Current, Reg::Sysarg2),
                 ) < 0
                 {
                     ret = -libc::EFAULT as i64;
                 } else {
                     // timeval{sec,usec} ×2 → timespec{sec,nsec} ×2.
-                    let mut timens = vec![0u8; w * 4];
+                    let mut timens_buf = [0u8; 64];
+                    let timens = &mut timens_buf[..w * 4];
                     for i in 0..2 {
-                        let (sec, usec) = read_2words(&times, i * 2 * w, w);
-                        write_2words(&mut timens, i * 2 * w, w, sec, (usec as i64 * 1000) as u64);
+                        let (sec, usec) = read_2words(times, i * 2 * w, w);
+                        write_2words(timens, i * 2 * w, w, sec, (usec as i64 * 1000) as u64);
                     }
-                    let r = set_sysarg_data(tracee, &timens, Reg::Sysarg2);
+                    let r = set_sysarg_data(tracee, timens, Reg::Sysarg2);
                     if r < 0 {
                         ret = r as i64;
                     }
@@ -321,20 +323,22 @@ fn handle_seccomp_event_common(tracee: &mut Tracee) -> i32 {
             set_sysnum(tracee, Sysnum::utimensat);
             let mut ret: i64 = 0;
             if peek_reg(tracee, RegVersion::Current, Reg::Sysarg2) != 0 {
-                let mut times = vec![0u8; w * 2];
+                let mut times_buf = [0u8; 16];
+                let times = &mut times_buf[..w * 2];
                 if read_data(
                     tracee,
-                    &mut times,
+                    times,
                     peek_reg(tracee, RegVersion::Current, Reg::Sysarg2),
                 ) < 0
                 {
                     ret = -libc::EFAULT as i64;
                 } else {
-                    let (actime, modtime) = read_2words(&times, 0, w);
-                    let mut timens = vec![0u8; w * 4];
-                    write_2words(&mut timens, 0, w, actime, 0);
-                    write_2words(&mut timens, 2 * w, w, modtime, 0);
-                    let r = set_sysarg_data(tracee, &timens, Reg::Sysarg2);
+                    let (actime, modtime) = read_2words(times, 0, w);
+                    let mut timens_buf = [0u8; 64];
+                    let timens = &mut timens_buf[..w * 4];
+                    write_2words(timens, 0, w, actime, 0);
+                    write_2words(timens, 2 * w, w, modtime, 0);
+                    let r = set_sysarg_data(tracee, timens, Reg::Sysarg2);
                     if r < 0 {
                         ret = r as i64;
                     }
@@ -355,33 +359,34 @@ fn handle_seccomp_event_common(tracee: &mut Tracee) -> i32 {
         Sysnum::sendmmsg => {
             // Convert to socketcall(SYS_SENDMMSG) — 32-bit bionic path.
             let w = crate::tracee::reg::sizeof_word(tracee);
-            let mut args = vec![0u8; w * 4];
+            let mut args_buf = [0u8; 64];
+            let args = &mut args_buf[..w * 4];
             write_word(
-                &mut args,
+                args,
                 0,
                 w,
                 peek_reg(tracee, RegVersion::Current, Reg::Sysarg1),
             );
             write_word(
-                &mut args,
+                args,
                 w,
                 w,
                 peek_reg(tracee, RegVersion::Current, Reg::Sysarg2),
             );
             write_word(
-                &mut args,
+                args,
                 2 * w,
                 w,
                 peek_reg(tracee, RegVersion::Current, Reg::Sysarg3),
             );
             write_word(
-                &mut args,
+                args,
                 3 * w,
                 w,
                 peek_reg(tracee, RegVersion::Current, Reg::Sysarg4),
             );
             let targs = alloc_mem(tracee, (w * 4) as i64);
-            let _ = write_data(tracee, targs, &args);
+            let _ = write_data(tracee, targs, args);
             set_sysnum(tracee, Sysnum::socketcall);
             poke_reg(tracee, Reg::Sysarg1, 19 /* SYS_SENDMMSG */ as Word);
             poke_reg(tracee, Reg::Sysarg2, targs);
@@ -453,18 +458,20 @@ fn handle_seccomp_event_common(tracee: &mut Tracee) -> i32 {
             let mut timespec_arg: Word = 0;
             let mut fail: Option<i64> = None;
             if timeval_arg != 0 {
-                let mut tv = vec![0u8; w * 2];
-                if read_data(tracee, &mut tv, timeval_arg) != 0 {
+                let mut tv_buf = [0u8; 16];
+                let tv = &mut tv_buf[..w * 2];
+                if read_data(tracee, tv, timeval_arg) != 0 {
                     fail = Some(-libc::EFAULT as i64);
                 } else {
-                    let (sec, usec) = read_2words(&tv, 0, w);
+                    let (sec, usec) = read_2words(tv, 0, w);
                     if usec as i64 >= 1_000_000 || (usec as i64) < 0 {
                         fail = Some(-libc::EINVAL as i64);
                     } else {
-                        let mut ts = vec![0u8; w * 2];
-                        write_2words(&mut ts, 0, w, sec, (usec as i64 * 1000) as u64);
+                        let mut ts_buf = [0u8; 16];
+                        let ts = &mut ts_buf[..w * 2];
+                        write_2words(ts, 0, w, sec, (usec as i64 * 1000) as u64);
                         timespec_arg = alloc_mem(tracee, (w * 2) as i64);
-                        if write_data(tracee, timespec_arg, &ts) != 0 {
+                        if write_data(tracee, timespec_arg, ts) != 0 {
                             fail = Some(-libc::EFAULT as i64);
                         }
                     }
@@ -486,16 +493,17 @@ fn handle_seccomp_event_common(tracee: &mut Tracee) -> i32 {
             let mut timespec_arg: Word = 0;
             let mut failed = false;
             if ms_arg >= 0 {
-                let mut ts = vec![0u8; w * 2];
+                let mut ts_buf = [0u8; 16];
+                let ts = &mut ts_buf[..w * 2];
                 write_2words(
-                    &mut ts,
+                    ts,
                     0,
                     w,
                     (ms_arg / 1000) as u64,
                     ((ms_arg % 1000) * 1_000_000) as u64,
                 );
                 timespec_arg = alloc_mem(tracee, (w * 2) as i64);
-                if write_data(tracee, timespec_arg, &ts) != 0 {
+                if write_data(tracee, timespec_arg, ts) != 0 {
                     set_result_after_seccomp(tracee, (-(libc::EFAULT as i64)) as Word);
                     failed = true;
                 }

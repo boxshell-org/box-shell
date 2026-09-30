@@ -469,17 +469,16 @@ pub(crate) fn readlinkat(dirfd: i32, path: &CStr, buf: &mut [u8]) -> isize {
     unsafe { libc::readlinkat(dirfd, path.as_ptr(), buf.as_mut_ptr() as *mut _, buf.len()) }
 }
 
-/// `realpath(path)` → resolved bytes, or None (errno set).
-pub(crate) fn realpath(path: &CStr) -> Option<Vec<u8>> {
-    let mut buf = vec![0u8; crate::PATH_MAX];
-    // SAFETY: buf is PATH_MAX bytes, the size realpath requires.
-    let ret = unsafe { libc::realpath(path.as_ptr(), buf.as_mut_ptr() as *mut _) };
+/// `realpath(path)` → resolved path written to `out`; false on failure
+/// (errno set).
+pub(crate) fn realpath(path: &CStr, out: &mut crate::fpath::FixedPath) -> bool {
+    // SAFETY: the buffer is PATH_MAX bytes, the size realpath requires.
+    let ret = unsafe { libc::realpath(path.as_ptr(), out.as_mut_bytes().as_mut_ptr() as *mut _) };
     if ret.is_null() {
-        return None;
+        return false;
     }
-    let len = buf.iter().position(|&b| b == 0).unwrap_or(crate::PATH_MAX);
-    buf.truncate(len);
-    Some(buf)
+    out.sync_len_from_nul();
+    true
 }
 
 /// `getcwd` into a caller-provided buffer → bytes written (excl. NUL).

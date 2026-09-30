@@ -134,9 +134,11 @@ pub fn realpath2(
     match tracee {
         None => {
             let c = std::ffi::CString::new(path).map_err(|_| -libc::EINVAL)?;
-            let buf = crate::sys::realpath(&c).ok_or_else(|| -crate::sys::errno())?;
-            host_path.set(&buf);
-            Ok(())
+            if crate::sys::realpath(&c, host_path) {
+                Ok(())
+            } else {
+                Err(-crate::sys::errno())
+            }
         }
         Some(t) => crate::path::translate_path(t, host_path, libc::AT_FDCWD, path, deref_final),
     }

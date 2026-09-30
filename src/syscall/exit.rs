@@ -544,15 +544,14 @@ fn readlink_exit(tracee: &mut Tracee, syscall_result: Word) -> Flow {
     }
 
     // The kernel does not NUL-terminate readlink's output.  Read straight
-    // into the path buffer; the unfetched tail is zeroed as a fresh buffer
-    // would be, so a partial read behaves like the old zeroed scratch.
+    // into the path buffer (read_data is all-or-error, so the fetched span
+    // is fully populated on success).
     let mut referee = PathGuard::new();
     let cap = old_size.min(crate::PATH_MAX);
     let s = read_data(tracee, &mut referee.as_mut_bytes()[..cap], output);
     if s < 0 {
         return Flow::Result(s);
     }
-    referee.as_mut_bytes()[s as usize..cap].fill(0);
     referee.set_len_terminated(cap);
 
     let mut referer = PathGuard::new();
