@@ -61,7 +61,7 @@ fn handle_sysexit_end(tracee: &mut Tracee) -> i32 {
     let mut target = [0u8; PATH_MAX];
     let size = crate::sys::readlink(&path, &mut target);
     if size < 0 {
-        return -crate::path::errno();
+        return -crate::sys::errno();
     }
 
     // Overwrite st_size with the target length.

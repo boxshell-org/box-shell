@@ -45,14 +45,14 @@ Copyright (C) 2015 STMicroelectronics, licensed under GPL v2 or later.",
     options: PROOT_OPTIONS,
 };
 
-/* ------------------------------------------------------------------ */
-/* Option table                                                        */
-/* ------------------------------------------------------------------ */
+// ------------------------------------------------------------------
+// Option table
+// ------------------------------------------------------------------
 
 pub struct Argument {
     pub name: &'static str,
-    /// '\0' means the option takes no value.
-    pub separator: char,
+    /// `None` means the option takes no value.
+    pub separator: Option<char>,
     pub value: Option<&'static str>,
 }
 
@@ -108,12 +108,12 @@ static PROOT_OPTIONS: &[Opt] = &[
         arguments: &[
             Argument {
                 name: "-r",
-                separator: ' ',
+                separator: Some(' '),
                 value: Some("path"),
             },
             Argument {
                 name: "--rootfs",
-                separator: '=',
+                separator: Some('='),
                 value: Some("path"),
             },
         ],
@@ -132,22 +132,22 @@ static PROOT_OPTIONS: &[Opt] = &[
         arguments: &[
             Argument {
                 name: "-b",
-                separator: ' ',
+                separator: Some(' '),
                 value: Some("path"),
             },
             Argument {
                 name: "--bind",
-                separator: '=',
+                separator: Some('='),
                 value: Some("path"),
             },
             Argument {
                 name: "-m",
-                separator: ' ',
+                separator: Some(' '),
                 value: Some("path"),
             },
             Argument {
                 name: "--mount",
-                separator: '=',
+                separator: Some('='),
                 value: Some("path"),
             },
         ],
@@ -170,12 +170,12 @@ static PROOT_OPTIONS: &[Opt] = &[
         arguments: &[
             Argument {
                 name: "-q",
-                separator: ' ',
+                separator: Some(' '),
                 value: Some("command"),
             },
             Argument {
                 name: "--qemu",
-                separator: '=',
+                separator: Some('='),
                 value: Some("command"),
             },
         ],
@@ -193,17 +193,17 @@ static PROOT_OPTIONS: &[Opt] = &[
         arguments: &[
             Argument {
                 name: "-w",
-                separator: ' ',
+                separator: Some(' '),
                 value: Some("path"),
             },
             Argument {
                 name: "--pwd",
-                separator: '=',
+                separator: Some('='),
                 value: Some("path"),
             },
             Argument {
                 name: "--cwd",
-                separator: '=',
+                separator: Some('='),
                 value: Some("path"),
             },
         ],
@@ -217,7 +217,7 @@ static PROOT_OPTIONS: &[Opt] = &[
         class: "Regular options",
         arguments: &[Argument {
             name: "--kill-on-exit",
-            separator: '\0',
+            separator: None,
             value: None,
         }],
         handler: handle_option_kill_on_exit,
@@ -231,12 +231,12 @@ static PROOT_OPTIONS: &[Opt] = &[
         arguments: &[
             Argument {
                 name: "-v",
-                separator: ' ',
+                separator: Some(' '),
                 value: Some("value"),
             },
             Argument {
                 name: "--verbose",
-                separator: '=',
+                separator: Some('='),
                 value: Some("value"),
             },
         ],
@@ -251,17 +251,17 @@ static PROOT_OPTIONS: &[Opt] = &[
         arguments: &[
             Argument {
                 name: "-V",
-                separator: '\0',
+                separator: None,
                 value: None,
             },
             Argument {
                 name: "--version",
-                separator: '\0',
+                separator: None,
                 value: None,
             },
             Argument {
                 name: "--about",
-                separator: '\0',
+                separator: None,
                 value: None,
             },
         ],
@@ -274,17 +274,17 @@ static PROOT_OPTIONS: &[Opt] = &[
         arguments: &[
             Argument {
                 name: "-h",
-                separator: '\0',
+                separator: None,
                 value: None,
             },
             Argument {
                 name: "--help",
-                separator: '\0',
+                separator: None,
                 value: None,
             },
             Argument {
                 name: "--usage",
-                separator: '\0',
+                separator: None,
                 value: None,
             },
         ],
@@ -297,12 +297,12 @@ static PROOT_OPTIONS: &[Opt] = &[
         arguments: &[
             Argument {
                 name: "-k",
-                separator: ' ',
+                separator: Some(' '),
                 value: Some("string"),
             },
             Argument {
                 name: "--kernel-release",
-                separator: '=',
+                separator: Some('='),
                 value: Some("string"),
             },
         ],
@@ -319,12 +319,12 @@ static PROOT_OPTIONS: &[Opt] = &[
         arguments: &[
             Argument {
                 name: "-0",
-                separator: '\0',
+                separator: None,
                 value: None,
             },
             Argument {
                 name: "--root-id",
-                separator: '\0',
+                separator: None,
                 value: None,
             },
         ],
@@ -344,12 +344,12 @@ static PROOT_OPTIONS: &[Opt] = &[
         arguments: &[
             Argument {
                 name: "-i",
-                separator: ' ',
+                separator: Some(' '),
                 value: Some("string"),
             },
             Argument {
                 name: "--change-id",
-                separator: '=',
+                separator: Some('='),
                 value: Some("string"),
             },
         ],
@@ -365,12 +365,12 @@ static PROOT_OPTIONS: &[Opt] = &[
         arguments: &[
             Argument {
                 name: "--link2symlink",
-                separator: '\0',
+                separator: None,
                 value: None,
             },
             Argument {
                 name: "-l",
-                separator: '\0',
+                separator: None,
                 value: None,
             },
         ],
@@ -383,7 +383,7 @@ static PROOT_OPTIONS: &[Opt] = &[
         class: "Extension options",
         arguments: &[Argument {
             name: "--sysvipc",
-            separator: '\0',
+            separator: None,
             value: None,
         }],
         handler: handle_option_sysvipc,
@@ -396,7 +396,7 @@ static PROOT_OPTIONS: &[Opt] = &[
         class: "Extension options",
         arguments: &[Argument {
             name: "-H",
-            separator: '\0',
+            separator: None,
             value: None,
         }],
         handler: handle_option_h_upper,
@@ -411,7 +411,7 @@ static PROOT_OPTIONS: &[Opt] = &[
         class: "Extension options",
         arguments: &[Argument {
             name: "-p",
-            separator: '\0',
+            separator: None,
             value: None,
         }],
         handler: handle_option_p,
@@ -426,7 +426,7 @@ static PROOT_OPTIONS: &[Opt] = &[
         class: "Extension options",
         arguments: &[Argument {
             name: "-L",
-            separator: '\0',
+            separator: None,
             value: None,
         }],
         handler: handle_option_l_upper,
@@ -439,7 +439,7 @@ static PROOT_OPTIONS: &[Opt] = &[
         class: "Alias options",
         arguments: &[Argument {
             name: "-R",
-            separator: ' ',
+            separator: Some(' '),
             value: Some("path"),
         }],
         handler: handle_option_r_upper,
@@ -475,7 +475,7 @@ static PROOT_OPTIONS: &[Opt] = &[
         class: "Alias options",
         arguments: &[Argument {
             name: "-S",
-            separator: ' ',
+            separator: Some(' '),
             value: Some("path"),
         }],
         handler: handle_option_s_upper,
@@ -498,9 +498,9 @@ static PROOT_OPTIONS: &[Opt] = &[
     },
 ];
 
-/* ------------------------------------------------------------------ */
-/* Option handlers                                                     */
-/* ------------------------------------------------------------------ */
+// ------------------------------------------------------------------
+// Option handlers
+// ------------------------------------------------------------------
 
 fn handle_option_r(tracee: &mut Tracee, value: Option<&str>) -> i32 {
     // `chroot $PATH` == `mount --bind $PATH /`.
@@ -706,9 +706,9 @@ fn handle_option_s_upper(tracee: &mut Tracee, value: Option<&str>) -> i32 {
     0
 }
 
-/* ------------------------------------------------------------------ */
-/* Usage / version                                                     */
-/* ------------------------------------------------------------------ */
+// ------------------------------------------------------------------
+// Usage / version
+// ------------------------------------------------------------------
 
 /// `print_usage()`.
 pub fn print_usage(tracee: &mut Tracee, cli: &Cli, detailed: bool) {
@@ -748,8 +748,8 @@ pub fn print_usage(tracee: &mut Tracee, cli: &Cli, detailed: bool) {
             } else {
                 print!(", {}", argument.name);
             }
-            if argument.separator != '\0' {
-                print!("{}*{}*", argument.separator, argument.value.unwrap_or(""));
+            if let Some(sep) = argument.separator {
+                print!("{}*{}*", sep, argument.value.unwrap_or(""));
             } else {
                 print!("\t");
             }
@@ -774,7 +774,7 @@ pub fn print_version(cli: &Cli) {
     println!("built-in accelerators: process_vm = yes, seccomp_filter = yes");
 }
 
-fn print_execve_help(tracee: &Tracee, argv0: &str, status: i32) {
+fn print_execve_help(argv0: &str, status: i32) {
     note(
         Severity::Error,
         Origin::System,
@@ -792,7 +792,6 @@ fn print_execve_help(tracee: &Tracee, argv0: &str, status: i32) {
 "It seems that termux-exec is active and is prepending /data/data/com.termux/... to executable paths
 If this is path is not available inside proot, please \"unset LD_PRELOAD\""),
                 );
-                let _ = tracee;
                 return;
             }
         }
@@ -819,7 +818,7 @@ To workaround it, set the env. variable PROOT_NO_SECCOMP to 1."));
     );
 }
 
-fn print_argv(tracee: &Tracee, prompt: &str, argv: &[String]) {
+fn print_argv(prompt: &str, argv: &[String]) {
     let mut string = String::with_capacity(4096);
     string.push_str(prompt);
     string.push_str(" =");
@@ -831,7 +830,6 @@ fn print_argv(tracee: &Tracee, prompt: &str, argv: &[String]) {
         string.push_str(a);
     }
     note(Severity::Info, Origin::User, format_args!("{}", string));
-    let _ = tracee;
 }
 
 fn print_config(tracee: &Tracee, argv: &[String]) {
@@ -855,9 +853,9 @@ fn print_config(tracee: &Tracee, argv: &[String]) {
     if let Some(exe) = &tracee.exe {
         note(Severity::Info, Origin::User, format_args!("exe = {}", exe));
     }
-    print_argv(tracee, "argv", argv);
+    print_argv("argv", argv);
     if let Some(qemu) = &tracee.qemu {
-        print_argv(tracee, "qemu", qemu);
+        print_argv("qemu", qemu);
     }
     note(
         Severity::Info,
@@ -871,9 +869,9 @@ fn print_config(tracee: &Tracee, argv: &[String]) {
     );
 }
 
-/* ------------------------------------------------------------------ */
-/* Initialization helpers                                              */
-/* ------------------------------------------------------------------ */
+// ------------------------------------------------------------------
+// Initialization helpers
+// ------------------------------------------------------------------
 
 /// `initialize_cwd()` — canonicalize fs.cwd in the guest namespace.
 fn initialize_cwd(tracee: &mut Tracee) -> Result<(), i32> {
@@ -992,9 +990,9 @@ fn pre_initialize_bindings(tracee: &mut Tracee) -> Result<(), i32> {
     Ok(())
 }
 
-/* ------------------------------------------------------------------ */
-/* parse_config()                                                      */
-/* ------------------------------------------------------------------ */
+// ------------------------------------------------------------------
+// parse_config()
+// ------------------------------------------------------------------
 
 /// Returns the index of the command in `argv`, or an error.
 pub fn parse_config(tracee: &mut Tracee, args: &[String]) -> Result<usize, i32> {
@@ -1013,11 +1011,10 @@ pub fn parse_config(tracee: &mut Tracee, args: &[String]) -> Result<usize, i32> 
     'outer: while i < argc {
         let arg = args[i].as_str();
 
-        if let Some((name, handler)) = pending.take() {
+        if let Some((_, handler)) = pending.take() {
             if handler(tracee, Some(arg)) < 0 {
                 return Err(-1);
             }
-            let _ = name;
             i += 1;
             continue;
         }
@@ -1034,9 +1031,10 @@ pub fn parse_config(tracee: &mut Tracee, args: &[String]) -> Result<usize, i32> 
                 }
 
                 let rest = &arg[name.len()..];
+                let sep = argument.separator.map_or(b'\0', |c| c as u8);
                 // Ambiguity: extra characters that aren't the separator.
-                if !rest.is_empty() && rest.as_bytes()[0] != argument.separator as u8 {
-                    print_error_separator(tracee, argument);
+                if !rest.is_empty() && rest.as_bytes()[0] != sep {
+                    print_error_separator(argument);
                     return Err(-1);
                 }
 
@@ -1048,7 +1046,7 @@ pub fn parse_config(tracee: &mut Tracee, args: &[String]) -> Result<usize, i32> 
                     continue 'outer;
                 }
 
-                if !rest.is_empty() && rest.as_bytes()[0] == argument.separator as u8 {
+                if !rest.is_empty() && rest.as_bytes()[0] == sep {
                     if (option.handler)(tracee, Some(&rest[1..])) < 0 {
                         return Err(-1);
                     }
@@ -1056,8 +1054,8 @@ pub fn parse_config(tracee: &mut Tracee, args: &[String]) -> Result<usize, i32> 
                     continue 'outer;
                 }
 
-                if argument.separator != ' ' {
-                    print_error_separator(tracee, argument);
+                if argument.separator != Some(' ') {
+                    print_error_separator(argument);
                     return Err(-1);
                 }
 
@@ -1099,23 +1097,21 @@ pub fn parse_config(tracee: &mut Tracee, args: &[String]) -> Result<usize, i32> 
     Ok(argc_offset)
 }
 
-fn print_error_separator(tracee: &Tracee, argument: &Argument) {
-    let _ = tracee;
-    if argument.separator == '\0' {
-        note(
+fn print_error_separator(argument: &Argument) {
+    match argument.separator {
+        None => note(
             Severity::Error,
             Origin::User,
             format_args!("option '{}' expects no value.", argument.name),
-        );
-    } else {
-        note(
+        ),
+        Some(sep) => note(
             Severity::Error,
             Origin::User,
             format_args!(
                 "option '{}' and its value must be separated by '{}'.",
-                argument.name, argument.separator
+                argument.name, sep
             ),
-        );
+        ),
     }
 }
 
@@ -1153,9 +1149,9 @@ fn expand_front_variable(string: &str) -> String {
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Entry point                                                         */
-/* ------------------------------------------------------------------ */
+// ------------------------------------------------------------------
+// Entry point
+// ------------------------------------------------------------------
 
 /// `main()` — port of cli/cli.c's main.
 pub fn run(tracee_rc: &TraceeRef, args: &[String]) -> i32 {
@@ -1204,11 +1200,7 @@ pub fn run(tracee_rc: &TraceeRef, args: &[String]) -> i32 {
     let status = tracee::event::launch_process(tracee_rc, &argv_tail);
     if status < 0 {
         let exe = tracee_rc.borrow().exe.clone();
-        print_execve_help(
-            &tracee_rc.borrow(),
-            exe.as_ref().map(|s| s.as_str()).unwrap_or(""),
-            status,
-        );
+        print_execve_help(exe.as_ref().map(|s| s.as_str()).unwrap_or(""), status);
         return -1;
     }
 

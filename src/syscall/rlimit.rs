@@ -38,8 +38,8 @@ pub fn translate_setrlimit_exit(tracee: &Tracee, is_prlimit: bool) -> i32 {
             tracee_stack_limit = libc::RLIM_INFINITY;
         }
     }
-    if crate::path::errno() != 0 {
-        return -crate::path::errno();
+    if crate::sys::errno() != 0 {
+        return -crate::sys::errno();
     }
 
     // prlimit64(0, RLIMIT_STACK, …) on ourselves.

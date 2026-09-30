@@ -172,7 +172,7 @@ pub struct Tracee {
     /// fd the tracee used to open /proc/self/auxv (-1 = inactive).
     pub auxv_fd: i32,
 
-    /* ---- inherited private resources ---- */
+    // ---- inherited private resources ----
     pub verbose: i32,
     pub seccomp: Seccomp,
     pub sysexit_pending: bool,
@@ -183,23 +183,23 @@ pub struct Tracee {
     pub no_new_privs: bool,
     pub seen_execve: bool,
 
-    /* ---- CLONE_FS/VM-shared resources ---- */
+    // ---- CLONE_FS/VM-shared resources ----
     pub fs: Rc<RefCell<FileSystemNameSpace>>,
     pub heap: Rc<RefCell<Heap>>,
 
-    /* ---- shared until execve ---- */
+    // ---- shared until execve ----
     /// Path to the executable, a'la /proc/self/exe (guest canonical).
     pub exe: Option<Rc<String>>,
     pub new_exe: Option<String>,
     pub host_exe: Option<String>,
 
-    /* ---- configuration ---- */
+    // ---- configuration ----
     pub qemu: Option<Rc<Vec<String>>>,
     pub skip_proot_loader: bool,
     pub glue: Option<Rc<String>>,
     pub extensions: Vec<Option<AnyExtension>>,
 
-    /* ---- read-only shared ---- */
+    // ---- read-only shared ----
     pub host_ldso_paths: Option<Rc<String>>,
     pub guest_ldso_paths: Option<Rc<String>>,
 
@@ -284,9 +284,9 @@ impl Default for Tracee {
     }
 }
 
-/* ================================================================== */
-/* Global tracee registry                                              */
-/* ================================================================== */
+// ==================================================================
+// Global tracee registry
+// ==================================================================
 
 thread_local! {
     static TRACEES: RefCell<HashMap<i32, Rc<RefCell<Tracee>>>> = RefCell::new(HashMap::new());
@@ -317,8 +317,6 @@ pub fn with_tracee_mut_try<R>(pid: i32, f: impl FnOnce(&mut Tracee) -> R) -> Opt
         .and_then(|rc| rc.try_borrow_mut().ok().map(|mut t| f(&mut t)))
 }
 
-/// Get an `Rc` handle on the tracee with @pid, creating+registering a fresh
-/// one when `create` is true.
 /// Get an `Rc` handle on the tracee with @pid, creating+registering a fresh
 /// one when `create` is true.
 pub fn get_tracee(pid: i32, create: bool) -> Option<Rc<RefCell<Tracee>>> {
@@ -418,9 +416,9 @@ pub fn is_in_sysexit2(tracee: &Tracee, sysnum: Sysnum) -> bool {
     is_in_sysexit(tracee) && crate::tracee::reg::get_sysnum(tracee, RegVersion::Original) == sysnum
 }
 
-/* ================================================================== */
-/* Lifecycle                                                           */
-/* ================================================================== */
+// ==================================================================
+// Lifecycle
+// ==================================================================
 
 /// `terminate_tracee()` — mark a tracee dead; actual removal happens in
 /// `free_terminated_tracees()` at a safe point in the event loop.

@@ -6,7 +6,6 @@
 
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::Mutex;
 
 use crate::HOST_ROOTFS;
 use crate::execve::aoxp::{
@@ -25,7 +24,6 @@ const ARG_MAX: usize = 131072;
 /// `ldso_env_passthru()` — move every `LD_*` env into `define env`-prefixed
 /// runner arguments and blank them from `envp`.  `offset` is where to insert
 /// in `argv`; `undefine`/`define` are the runner flags ("-U"/"-E" for QEMU).
-#[allow(unused_assignments)] // the `known` scratch var mirrors C's shared flag
 pub fn ldso_env_passthru(
     tracee: &Tracee,
     envp: &mut XPointerArray,
@@ -57,13 +55,13 @@ pub fn ldso_env_passthru(
             }
         }
 
+        // Errors are not fatal here (per the C code).  Each pair is inserted
+        // at `offset` so later entries push earlier ones right, like the C code.
         macro_rules! passthru {
-            ($name:expr_2021, $seen:expr_2021) => {
-                if is_env_name(&env, $name) {
-                    $seen = true;
-                    // Errors are not fatal here (per the C code).
-                    // Each pair is inserted at `offset` so later entries push
-                    // earlier ones right, like the C code.
+            ($name:expr_2021) => {{
+                if !is_env_name(&env, $name) {
+                    false
+                } else {
                     if resize_array_of_xpointers(argv, offset, 2) >= 0 {
                         let mut v = env.clone();
                         while v.last() == Some(&0) {
@@ -72,35 +70,41 @@ pub fn ldso_env_passthru(
                         write_xpointees(argv, offset, &[define.as_bytes(), &v]);
                     }
                     write_xpointee_string(envp, i, b"");
-                    continue;
+                    true
                 }
-            };
+            }};
         }
 
-        passthru!("LD_LIBRARY_PATH", has_seen_library_path);
-        let mut known = false;
-        passthru!("LD_PRELOAD", known);
-        passthru!("LD_BIND_NOW", known);
-        passthru!("LD_TRACE_LOADED_OBJECTS", known);
-        passthru!("LD_AOUT_LIBRARY_PATH", known);
-        passthru!("LD_AOUT_PRELOAD", known);
-        passthru!("LD_AUDIT", known);
-        passthru!("LD_BIND_NOT", known);
-        passthru!("LD_DEBUG", known);
-        passthru!("LD_DEBUG_OUTPUT", known);
-        passthru!("LD_DYNAMIC_WEAK", known);
-        passthru!("LD_HWCAP_MASK", known);
-        passthru!("LD_KEEPDIR", known);
-        passthru!("LD_NOWARN", known);
-        passthru!("LD_ORIGIN_PATH", known);
-        passthru!("LD_POINTER_GUARD", known);
-        passthru!("LD_PROFILE", known);
-        passthru!("LD_PROFILE_OUTPUT", known);
-        passthru!("LD_SHOW_AUXV", known);
-        passthru!("LD_USE_LOAD_BIAS", known);
-        passthru!("LD_VERBOSE", known);
-        passthru!("LD_WARN", known);
-        let _ = known;
+        // First matching name wins (an else-if chain in the C code).
+        for name in [
+            "LD_LIBRARY_PATH",
+            "LD_PRELOAD",
+            "LD_BIND_NOW",
+            "LD_TRACE_LOADED_OBJECTS",
+            "LD_AOUT_LIBRARY_PATH",
+            "LD_AOUT_PRELOAD",
+            "LD_AUDIT",
+            "LD_BIND_NOT",
+            "LD_DEBUG",
+            "LD_DEBUG_OUTPUT",
+            "LD_DYNAMIC_WEAK",
+            "LD_HWCAP_MASK",
+            "LD_KEEPDIR",
+            "LD_NOWARN",
+            "LD_ORIGIN_PATH",
+            "LD_POINTER_GUARD",
+            "LD_PROFILE",
+            "LD_PROFILE_OUTPUT",
+            "LD_SHOW_AUXV",
+            "LD_USE_LOAD_BIAS",
+            "LD_VERBOSE",
+            "LD_WARN",
+        ] {
+            if passthru!(name) {
+                has_seen_library_path |= name == "LD_LIBRARY_PATH";
+                break;
+            }
+        }
     }
 
     if !has_seen_library_path && resize_array_of_xpointers(argv, offset, 2) >= 0 {
@@ -159,7 +163,7 @@ fn find_program_header(
 /// of `fd`, and append it to `xpaths` (':'-joined).
 fn add_xpaths(file: &mut std::fs::File, offset: u64, xpaths: &mut Option<Vec<u8>>) -> i32 {
     if file.seek(SeekFrom::Start(offset)).is_err() {
-        return -crate::path::errno();
+        return -crate::sys::errno();
     }
     let mut paths = Vec::new();
     // Read until the NUL-terminated string ends (or EOF).
@@ -168,7 +172,7 @@ fn add_xpaths(file: &mut std::fs::File, offset: u64, xpaths: &mut Option<Vec<u8>
         let n = match file.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => n,
-            Err(_) => return -crate::path::errno(),
+            Err(_) => return -crate::sys::errno(),
         };
         let mut end = n;
         if let Some(nul) = buf[..n].iter().position(|b| *b == 0) {
@@ -198,7 +202,6 @@ fn read_ldso_rpaths(
     fd: RawFd,
     elf_header: &ElfHeader,
 ) -> Result<Rpaths, i32> {
-    let _ = fd;
     // Find PT_DYNAMIC.
     let mut dynamic: Option<ProgramHeader> = None;
     let st = iterate_program_headers(fd, elf_header, |eh, ph| {
@@ -219,9 +222,9 @@ fn read_ldso_rpaths(
     let dyn_off = dynamic.p_offset(elf_header);
     let dyn_size = dynamic.p_filesz(elf_header);
     let entry_size = if elf_header.is_class32() {
-        std::mem::size_of::<crate::execve::elf::DynamicEntry32>()
+        size_of::<crate::execve::elf::DynamicEntry32>()
     } else {
-        std::mem::size_of::<crate::execve::elf::DynamicEntry64>()
+        size_of::<crate::execve::elf::DynamicEntry64>()
     } as u64;
     if dyn_size % entry_size != 0 {
         return Err(-libc::ENOEXEC);
@@ -305,7 +308,7 @@ pub fn rebuild_host_ldso_paths(
     host_path: &[u8],
     envp: &mut XPointerArray,
 ) -> i32 {
-    static INITIAL_LDSO_PATHS: Mutex<Option<String>> = Mutex::new(None);
+    static INITIAL_LDSO_PATHS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
     let (fd, elf_header) = match open_elf(host_path) {
         Ok(x) => x,
@@ -334,14 +337,9 @@ pub fn rebuild_host_ldso_paths(
     }
 
     // 2. Initial LD_LIBRARY_PATH.
-    let initial = {
-        let mut g = INITIAL_LDSO_PATHS.lock().unwrap();
-        if g.is_none() {
-            *g = Some(std::env::var("LD_LIBRARY_PATH").unwrap_or_else(|_| "/".to_string()));
-        }
-        g.clone().unwrap()
-    };
-    if !initial.is_empty() && add_host_ldso_paths(&mut host_ldso_paths, &initial) < 0 {
+    let initial = INITIAL_LDSO_PATHS
+        .get_or_init(|| std::env::var("LD_LIBRARY_PATH").unwrap_or_else(|_| "/".to_string()));
+    if !initial.is_empty() && add_host_ldso_paths(&mut host_ldso_paths, initial) < 0 {
         return 0;
     }
 

@@ -681,8 +681,10 @@ fn read_2words(buf: &[u8], off: usize, w: usize) -> (u64, u64) {
         )
     } else {
         (
-            u32::from_ne_bytes(buf[off..off + 4].try_into().unwrap()) as u64,
-            u32::from_ne_bytes(buf[off + 4..off + 8].try_into().unwrap()) as u64,
+            u64::from(u32::from_ne_bytes(buf[off..off + 4].try_into().unwrap())),
+            u64::from(u32::from_ne_bytes(
+                buf[off + 4..off + 8].try_into().unwrap(),
+            )),
         )
     };
     (a, b)

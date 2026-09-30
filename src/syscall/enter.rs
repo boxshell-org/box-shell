@@ -353,9 +353,9 @@ pub fn apply_emulated_pivot_root(tracee: &mut Tracee) {
     emulate_pivot_root(tracee, new_root.as_bytes(), put_old.as_bytes());
 }
 
-/* ================================================================== */
-/* /proc/<pid>/{uid_map,gid_map,setgroups} redirect                    */
-/* ================================================================== */
+// ==================================================================
+// /proc/<pid>/{uid_map,gid_map,setgroups} redirect
+// ==================================================================
 
 /// `is_proc_userns_file()`.
 fn is_proc_userns_file(path: &[u8]) -> bool {
@@ -388,9 +388,9 @@ fn maybe_redirect_userns_file(tracee: &mut Tracee, reg: Reg) {
     let _ = set_sysarg_path(tracee, b"/dev/null", reg);
 }
 
-/* ================================================================== */
-/* The dispatch                                                        */
-/* ================================================================== */
+// ==================================================================
+// The dispatch
+// ==================================================================
 
 /// `translate_syscall_enter()`.
 pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
@@ -517,11 +517,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
                     crate::syscall::socket::translate_socketcall_enter(tracee, &mut address, size);
                 if status > 0 {
                     poke_reg(tracee, Reg::Sysarg2, address);
-                    poke_reg(
-                        tracee,
-                        Reg::Sysarg3,
-                        std::mem::size_of::<libc::sockaddr_un>() as Word,
-                    );
+                    poke_reg(tracee, Reg::Sysarg3, size_of::<libc::sockaddr_un>() as Word);
                     status = 0;
                 }
             }
@@ -558,7 +554,7 @@ pub fn translate_syscall_enter(tracee: &mut Tracee) -> i32 {
             let domain = peek_reg(tracee, RegVersion::Current, Reg::Sysarg1);
             let protocol = peek_reg(tracee, RegVersion::Current, Reg::Sysarg3);
             if domain == libc::AF_NETLINK as Word && protocol == 0
-            /* NETLINK_ROUTE */
+            // NETLINK_ROUTE
             {
                 if netlink::host_blocks_af_netlink(tracee) {
                     let ty = peek_reg(tracee, RegVersion::Current, Reg::Sysarg2);
@@ -1283,7 +1279,7 @@ fn socketcall_enter(tracee: &mut Tracee, mut special: bool) -> i32 {
     poke_reg(tracee, Reg::Sysarg5, saved);
     poke_reg(tracee, Reg::Sysarg6, size);
     pokew!(arg(2), new_addr);
-    pokew!(arg(3), std::mem::size_of::<libc::sockaddr_un>() as Word);
+    pokew!(arg(3), size_of::<libc::sockaddr_un>() as Word);
     0
 }
 

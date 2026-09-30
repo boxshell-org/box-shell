@@ -19,7 +19,7 @@ use crate::tracee::reg::{
     Reg, RegVersion, is_32on64_mode, peek_reg, poke_reg, save_current_regs, set_sysnum, sizeof_word,
 };
 
-/* Load actions (loader/script.h). */
+// Load actions (loader/script.h).
 const LOAD_ACTION_OPEN_NEXT: u64 = 0;
 const LOAD_ACTION_OPEN: u64 = 1;
 const LOAD_ACTION_MMAP_FILE: u64 = 2;
@@ -27,14 +27,6 @@ const LOAD_ACTION_MMAP_ANON: u64 = 3;
 const LOAD_ACTION_MAKE_STACK_EXEC: u64 = 4;
 const LOAD_ACTION_START_TRACED: u64 = 5;
 const LOAD_ACTION_START: u64 = 6;
-
-fn page_size() -> Word {
-    static ONCE: std::sync::OnceLock<Word> = std::sync::OnceLock::new();
-    *ONCE.get_or_init(|| {
-        let v = crate::sys::sysconf(libc::_SC_PAGESIZE);
-        if v > 0 { v as Word } else { 0x1000 }
-    })
-}
 
 /// `fill_file_with_auxv()` — serialize `vectors` to `path` at the ptracee's
 /// word size.
@@ -109,7 +101,7 @@ fn transcript_mappings(script: &mut Vec<u64>, mappings: &[Mapping]) {
 fn transfer_load_script(tracee: &mut Tracee) -> i32 {
     let stack_pointer = peek_reg(tracee, RegVersion::Current, Reg::StackPointer);
     let w = sizeof_word(tracee) as Word;
-    let page_mask = !(page_size() - 1);
+    let page_mask = !(crate::sys::page_size() - 1);
 
     // argv[0]'s address on the initial stack — the true AT_EXECFN.
     tracee.execfn_addr = peek_word(tracee, stack_pointer + w);
@@ -156,7 +148,7 @@ fn transfer_load_script(tracee: &mut Tracee) -> i32 {
         string1_address + string1_size + string2_size
     };
 
-    /* ---- build the script as a sequence of 64-bit words ---- */
+    // ---- build the script as a sequence of 64-bit words ----
     let mut script: Vec<u64> = Vec::new();
 
     // open the executable
@@ -191,7 +183,7 @@ fn transfer_load_script(tracee: &mut Tracee) -> i32 {
     script.push(load_info.elf_header.e_entry());
     script.push(string3_address);
 
-    /* ---- serialize (u32 words when the tracee is a 32-bit process) ---- */
+    // ---- serialize (u32 words when the tracee is a 32-bit process) ----
     let use32 = is_32on64_mode(tracee);
     let mut buffer = Vec::with_capacity(script.len() * 8 + strings_size as usize);
     for word in &script {

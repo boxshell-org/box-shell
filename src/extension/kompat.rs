@@ -824,7 +824,7 @@ fn handle_sysexit_end(
             if !needs_kompat(config, kernel_version(2, 6, 27)) {
                 return 0;
             }
-            let mut fds = [0u8; 2 * std::mem::size_of::<Word>()];
+            let mut fds = [0u8; 2 * size_of::<Word>()];
             let addr = peek_reg(tracee, RegVersion::Modified, Reg::Sysarg1);
             if read_data(tracee, &mut fds, addr) < 0 {
                 return 0;
@@ -862,7 +862,7 @@ fn handle_sysexit_end(
             if !needs_kompat(config, kernel_version(2, 6, 27)) {
                 return 0;
             }
-            let mut fds = [0u8; 2 * std::mem::size_of::<Word>()];
+            let mut fds = [0u8; 2 * size_of::<Word>()];
             let addr = peek_reg(tracee, RegVersion::Modified, Reg::Sysarg4);
             if read_data(tracee, &mut fds, addr) < 0 {
                 return 0;

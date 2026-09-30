@@ -14,7 +14,7 @@ use crate::tracee::mem::{peek_word, read_data, write_data};
 use crate::tracee::reg::{Reg, RegVersion, peek_reg};
 use crate::tracee::{FakeNetlinkSocket, MAX_FAKE_NETLINK_REPLY, Tracee};
 
-/* rtnetlink/netlink constants (ABI-stable). */
+// rtnetlink/netlink constants (ABI-stable).
 const NLMSG_HDR_LEN: usize = 16;
 const RTM_NEWLINK: u16 = 16;
 const RTM_NEWADDR: u16 = 20;
@@ -70,9 +70,9 @@ fn rta_space(payload: usize) -> usize {
     rta_align(rta_length(payload))
 }
 
-/* ================================================================== */
-/* fd bookkeeping                                                      */
-/* ================================================================== */
+// ==================================================================
+// fd bookkeeping
+// ==================================================================
 
 /// `fake_netlink_socket()` — index of the bookkeeping entry for @fd.
 pub fn fake_netlink_idx(tracee: &Tracee, fd: i32) -> Option<usize> {
@@ -106,9 +106,9 @@ pub fn unmark_netlink_route_fd(tracee: &mut Tracee, fd: i32) {
     }
 }
 
-/* ================================================================== */
-/* Host capability probe                                               */
-/* ================================================================== */
+// ==================================================================
+// Host capability probe
+// ==================================================================
 
 /// `host_blocks_af_netlink()` — probe socket()+bind()+a doomed sendto().
 /// Cached process-wide.
@@ -125,16 +125,16 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
     let fd = crate::sys::socket(
         libc::AF_NETLINK,
         libc::SOCK_RAW | libc::SOCK_CLOEXEC,
-        0, /* NETLINK_ROUTE */
+        0, // NETLINK_ROUTE
     );
     if fd < 0 {
-        let e = crate::path::errno();
+        let e = crate::sys::errno();
         CACHED.store(PROBE_BLOCKED, Ordering::Relaxed);
         crate::verbose!(
             Some(tracee),
             1,
             "AF_NETLINK socket denied by host ({}); enabling AF_UNIX fallback for sandbox helpers",
-            crate::strerror(e)
+            crate::sys::strerror(e)
         );
         return true;
     }
@@ -145,14 +145,14 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
     snl[1] = ((libc::AF_NETLINK >> 8) & 0xff) as u8;
     let rc = crate::sys::bind(fd, &snl);
     if rc < 0 {
-        let e = crate::path::errno();
+        let e = crate::sys::errno();
         crate::sys::close(fd);
         CACHED.store(PROBE_BLOCKED, Ordering::Relaxed);
         crate::verbose!(
             Some(tracee),
             1,
             "AF_NETLINK bind denied by host ({}); enabling AF_UNIX fallback for sandbox helpers",
-            crate::strerror(e)
+            crate::sys::strerror(e)
         );
         return true;
     }
@@ -169,7 +169,7 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
     // ifa_family = AF_UNSPEC already zeroed.
 
     let rc = crate::sys::sendto(fd, &req, libc::MSG_DONTWAIT, Some(&snl));
-    let err = crate::path::errno();
+    let err = crate::sys::errno();
     crate::sys::close(fd);
 
     if rc < 0 && (err == libc::EACCES || err == libc::EPERM) {
@@ -178,7 +178,7 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
             Some(tracee),
             1,
             "AF_NETLINK sendto denied by host ({}); enabling AF_UNIX fallback for sandbox helpers",
-            crate::strerror(err)
+            crate::sys::strerror(err)
         );
         return true;
     }
@@ -187,9 +187,9 @@ pub fn host_blocks_af_netlink(tracee: &Tracee) -> bool {
     false
 }
 
-/* ================================================================== */
-/* msghdr/iovec walking                                                */
-/* ================================================================== */
+// ==================================================================
+// msghdr/iovec walking
+// ==================================================================
 
 /// `msghdr_first_iovec()` — (base, len) of `iov[0]` in the msghdr at
 /// @msghdr_addr.  msghdr layout: word msg_name; u32 msg_namelen (+pad);
@@ -201,7 +201,7 @@ pub fn msghdr_first_iovec(tracee: &Tracee, msghdr_addr: Word) -> Option<(Word, W
     let w = crate::tracee::reg::sizeof_word(tracee) as Word;
     crate::sys::clear_errno();
     let iov_ptr = peek_word(tracee, msghdr_addr + 2 * w);
-    let iov_count = if crate::path::errno() == 0 {
+    let iov_count = if crate::sys::errno() == 0 {
         peek_word(tracee, msghdr_addr + 3 * w)
     } else {
         0
@@ -211,7 +211,7 @@ pub fn msghdr_first_iovec(tracee: &Tracee, msghdr_addr: Word) -> Option<(Word, W
         return None;
     }
     let base = peek_word(tracee, iov_ptr);
-    let len = if crate::path::errno() == 0 {
+    let len = if crate::sys::errno() == 0 {
         peek_word(tracee, iov_ptr + w)
     } else {
         0
@@ -220,9 +220,9 @@ pub fn msghdr_first_iovec(tracee: &Tracee, msghdr_addr: Word) -> Option<(Word, W
     Some((base, len))
 }
 
-/* ================================================================== */
-/* Message builders                                                    */
-/* ================================================================== */
+// ==================================================================
+// Message builders
+// ==================================================================
 
 /// `nl_add_attr()`.
 fn nl_add_attr(buf: &mut [u8], off: usize, max: usize, ty: u16, data: &[u8]) -> usize {
@@ -235,10 +235,7 @@ fn nl_add_attr(buf: &mut [u8], off: usize, max: usize, ty: u16, data: &[u8]) -> 
     buf[off + 2..off + 4].copy_from_slice(&ty.to_ne_bytes());
     let data_off = off + rta_length(0);
     buf[data_off..data_off + data.len()].copy_from_slice(data);
-    let pad = off + space - (data_off + data.len());
-    for i in 0..pad {
-        buf[data_off + data.len() + i] = 0;
-    }
+    buf[data_off + data.len()..off + space].fill(0);
     off + space
 }
 
@@ -378,9 +375,7 @@ fn nl_build_error(buf: &mut [u8], off: usize, max: usize, seq: u32, pid: u32, er
     write_hdr(buf, off, len, NLMSG_ERROR, 0, seq, pid);
     buf[off + NLMSG_HDR_LEN..off + NLMSG_HDR_LEN + 4].copy_from_slice(&error.to_ne_bytes());
     // err.msg: zeroed original header.
-    for i in 0..NLMSG_HDR_LEN {
-        buf[off + NLMSG_HDR_LEN + 4 + i] = 0;
-    }
+    buf[off + NLMSG_HDR_LEN + 4..off + 2 * NLMSG_HDR_LEN + 4].fill(0);
     off + nlmsg_align(len)
 }
 
@@ -455,8 +450,8 @@ pub fn write_fake_netlink_sockname(
     }
     crate::sys::clear_errno();
     let in_size = crate::tracee::mem::peek_uint32(tracee, size_ptr);
-    if crate::path::errno() != 0 {
-        return -crate::path::errno();
+    if crate::sys::errno() != 0 {
+        return -crate::sys::errno();
     }
 
     let mut snl = [0u8; 12];
@@ -470,15 +465,11 @@ pub fn write_fake_netlink_sockname(
         }
     }
 
-    poke_uint32(tracee, size_ptr, snl.len() as u32);
-    if crate::path::errno() != 0 {
-        return -crate::path::errno();
+    crate::tracee::mem::poke_uint32(tracee, size_ptr, snl.len() as u32);
+    if crate::sys::errno() != 0 {
+        return -crate::sys::errno();
     }
     0
-}
-
-fn poke_uint32(tracee: &Tracee, addr: Word, v: u32) {
-    crate::tracee::mem::poke_uint32(tracee, addr, v)
 }
 
 fn nl_prefixlen(mask: &[u8]) -> u8 {
@@ -587,9 +578,9 @@ fn nl_build_loopback_addr(
     }
 }
 
-/* ================================================================== */
-/* Host interface enumeration (getifaddrs + ioctl MTU/hwaddr)          */
-/* ================================================================== */
+// ==================================================================
+// Host interface enumeration (getifaddrs + ioctl MTU/hwaddr)
+// ==================================================================
 
 struct HostIf {
     name: Vec<u8>,
@@ -886,9 +877,9 @@ fn relay_route_dump(req: &[u8], out: &mut [u8], max: usize, seq: u32, pid: u32) 
     off
 }
 
-/* ================================================================== */
-/* Reply construction / delivery                                       */
-/* ================================================================== */
+// ==================================================================
+// Reply construction / delivery
+// ==================================================================
 
 /// `build_fake_netlink_reply()` — fill `sock.reply` with the response the
 /// kernel would give to the request at `buf_addr`/`buf_len`.
@@ -1068,7 +1059,7 @@ pub fn scatter_fake_netlink_reply(
     let mut i: Word = 0;
     while i < iov_count && done < reply.len() {
         let base = peek_word(tracee, iov_ptr + i * 2 * w);
-        let len = if crate::path::errno() == 0 {
+        let len = if crate::sys::errno() == 0 {
             peek_word(tracee, iov_ptr + i * 2 * w + w)
         } else {
             0
@@ -1087,9 +1078,9 @@ pub fn scatter_fake_netlink_reply(
     done
 }
 
-/* ================================================================== */
-/* Real-socket ack rewriting (fake_netns)                              */
-/* ================================================================== */
+// ==================================================================
+// Real-socket ack rewriting (fake_netns)
+// ==================================================================
 
 /// `nl_type_reconfigures()` — rtnetlink groups: NEW/DEL/GET/SET;
 /// everything but GET reconfigures.
@@ -1195,13 +1186,17 @@ pub fn handle_netlink_reply_exit(tracee: &mut Tracee, is_recvfrom: bool) {
             if error != -libc::EPERM && error != -libc::EACCES {
                 break;
             }
-            poke_uint32(tracee, buf_addr + off as Word + NLMSG_HDR_LEN as Word, 0);
-            if crate::path::errno() == 0 {
+            crate::tracee::mem::poke_uint32(
+                tracee,
+                buf_addr + off as Word + NLMSG_HDR_LEN as Word,
+                0,
+            );
+            if crate::sys::errno() == 0 {
                 crate::verbose!(
                     Some(tracee),
                     1,
                     "netlink: acked the request denied to the tracee's would-be network namespace ({})",
-                    crate::strerror(-error)
+                    crate::sys::strerror(-error)
                 );
             }
             crate::sys::clear_errno();
@@ -1215,9 +1210,9 @@ pub fn handle_netlink_reply_exit(tracee: &mut Tracee, is_recvfrom: bool) {
     }
 }
 
-/* ================================================================== */
-/* ioctl(SIOCGIFINDEX)                                                 */
-/* ================================================================== */
+// ==================================================================
+// ioctl(SIOCGIFINDEX)
+// ==================================================================
 
 /// `maybe_fake_siocgifindex()` — resolve ifr_name → ifr_ifindex in the
 /// tracer (Android denies the ioctl itself).  Returns true when answered.

@@ -44,9 +44,9 @@ pub fn fetch_array_of_xpointers(
         if nb_entries != 0 && i >= nb_entries {
             break;
         }
-        clear_errno();
+        crate::sys::clear_errno();
         let pointer = peek_word(tracee, address + i as Word * w);
-        let e = crate::path::errno();
+        let e = crate::sys::errno();
         if e != 0 {
             return Err(-e);
         }
@@ -209,14 +209,14 @@ pub fn push_array_of_xpointers(tracee: &mut Tracee, array: &mut XPointerArray, r
     let mut pod = vec![0u8; n * w];
     let mut blob = Vec::with_capacity(total_size - n * w);
     let mut off = n * w;
-    for i in 0..n {
-        if let Some(local) = array.entries[i].local.take() {
-            array.entries[i].remote = base + off as Word;
+    for (i, entry) in array.entries.iter_mut().enumerate() {
+        if let Some(local) = entry.local.take() {
+            entry.remote = base + off as Word;
             off += local.len();
             blob.extend_from_slice(&local);
-            array.entries[i].local = Some(local);
+            entry.local = Some(local);
         }
-        let r = array.entries[i].remote;
+        let r = entry.remote;
         if is_32on64_mode(tracee) {
             pod[i * 4..i * 4 + 4].copy_from_slice(&(r as u32).to_ne_bytes());
         } else {
@@ -229,9 +229,4 @@ pub fn push_array_of_xpointers(tracee: &mut Tracee, array: &mut XPointerArray, r
     }
     poke_reg(tracee, reg, base);
     0
-}
-
-/// Clear thread-local errno before a `peek_word` (mirrors `errno = 0` in C).
-fn clear_errno() {
-    crate::sys::clear_errno();
 }

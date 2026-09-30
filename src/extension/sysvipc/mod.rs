@@ -80,7 +80,7 @@ pub struct MsqidDs {
     pub unused5: u64,
 }
 
-/* Message queues */
+// Message queues
 
 pub struct MsgQueueItem {
     pub mtype: i64,
@@ -96,7 +96,7 @@ pub struct MsgQueue {
     pub stats: MsqidDs,
 }
 
-/* Semaphores */
+// Semaphores
 
 #[derive(Default)]
 pub struct Semaphore {
@@ -106,7 +106,7 @@ pub struct Semaphore {
     pub sems: Vec<u16>,
 }
 
-/* Shared memory */
+// Shared memory
 
 /// `SysVIpcSharedMemMap` — a currently mapped region.
 #[derive(Clone)]

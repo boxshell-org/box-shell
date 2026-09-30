@@ -46,12 +46,12 @@ pub fn write_data(tracee: &Tracee, dest: Word, src: &[u8]) -> i32 {
         return 0;
     }
 
-    let ws = std::mem::size_of::<Word>();
+    let ws = size_of::<Word>();
     let full = src.len() / ws;
     let trailing = src.len() % ws;
 
-    for i in 0..full {
-        let w = Word::from_ne_bytes(src[i * ws..i * ws + ws].try_into().unwrap());
+    for (i, chunk) in src.chunks_exact(ws).enumerate() {
+        let w = Word::from_ne_bytes(chunk.try_into().unwrap());
         if ptrace_pokedata(tracee.pid, dest + (i * ws) as Word, w).is_err() {
             crate::note!(
                 crate::note::Severity::Warning,
@@ -117,13 +117,13 @@ pub fn read_data(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
         return 0;
     }
 
-    let ws = std::mem::size_of::<Word>();
+    let ws = size_of::<Word>();
     let full = dest.len() / ws;
     let trailing = dest.len() % ws;
 
-    for i in 0..full {
+    for (i, chunk) in dest.chunks_exact_mut(ws).enumerate() {
         match ptrace_peekdata(tracee.pid, src + (i * ws) as Word) {
-            Ok(w) => dest[i * ws..i * ws + ws].copy_from_slice(&w.to_ne_bytes()),
+            Ok(w) => chunk.copy_from_slice(&w.to_ne_bytes()),
             Err(_) => {
                 crate::note!(
                     crate::note::Severity::Warning,
@@ -165,7 +165,8 @@ pub fn read_string(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
             break;
         }
         let cur = src + offset as u64;
-        let next_chunk = (cur & !(CHUNK as u64 - 1)) + CHUNK as u64;
+        // Strictly the next boundary even when `cur` is already aligned.
+        let next_chunk = (cur / CHUNK as u64 + 1) * CHUNK as u64;
         let mut size = (next_chunk - cur) as usize;
         size = size.min(max_size - offset);
         let n = crate::sys::process_vm_read(tracee.pid, &mut dest[offset..offset + size], cur);
@@ -181,14 +182,14 @@ pub fn read_string(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
         break;
     }
     // Fallback: word-wise peek.
-    let ws = std::mem::size_of::<Word>();
+    let ws = size_of::<Word>();
     let full = max_size / ws;
     let trailing = max_size % ws;
-    for i in 0..full {
+    for (i, chunk) in dest[..full * ws].chunks_exact_mut(ws).enumerate() {
         match ptrace_peekdata(tracee.pid, src + (i * ws) as Word) {
             Ok(w) => {
                 let wb = w.to_ne_bytes();
-                dest[i * ws..i * ws + ws].copy_from_slice(&wb);
+                chunk.copy_from_slice(&wb);
                 if let Some(j) = wb.iter().position(|&b| b == 0) {
                     return (i * ws + j + 1) as i32;
                 }
@@ -200,15 +201,14 @@ pub fn read_string(tracee: &Tracee, dest: &mut [u8], src: Word) -> i32 {
         match ptrace_peekdata(tracee.pid, src + (full * ws) as Word) {
             Ok(w) => {
                 let wb = w.to_ne_bytes();
-                let mut j = 0;
-                while j < trailing {
-                    dest[full * ws + j] = wb[j];
-                    if wb[j] == 0 {
-                        break;
+                for (j, &b) in wb[..trailing].iter().enumerate() {
+                    dest[full * ws + j] = b;
+                    if b == 0 {
+                        return (full * ws + j + 1) as i32;
                     }
-                    j += 1;
                 }
-                return (full * ws + j + 1) as i32;
+                // No NUL inside the trailing bytes: C counts one past them.
+                return (full * ws + trailing + 1) as i32;
             }
             Err(_) => return -libc::EFAULT,
         }

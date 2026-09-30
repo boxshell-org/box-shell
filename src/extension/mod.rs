@@ -178,7 +178,7 @@ pub fn notify(tracee: &mut Tracee, event: &mut Event) -> i32 {
     0
 }
 
-/* ----- path-notification helpers used by path/canon.rs ----- */
+// ----- path-notification helpers used by path/canon.rs -----
 
 pub fn notify_guest_path(tracee: &mut Tracee, base: &mut FixedPath, path: &[u8]) -> i32 {
     notify(tracee, &mut Event::GuestPath { base, path })
@@ -223,7 +223,7 @@ pub fn has_extension(tracee: &Tracee, pred: impl Fn(&AnyExtension) -> bool) -> b
 /// them from `tracee.extensions`.
 pub fn remove_extension(tracee: &mut Tracee, pred: impl Fn(&AnyExtension) -> bool) {
     for i in 0..tracee.extensions.len() {
-        let matches = tracee.extensions[i].as_ref().map(&pred).unwrap_or(false);
+        let matches = tracee.extensions[i].as_ref().is_some_and(&pred);
         if matches {
             if let Some(mut ext) = tracee.extensions[i].take() {
                 ext.notify(tracee, &mut Event::Removed);

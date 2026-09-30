@@ -52,7 +52,7 @@ pub fn note(severity: Severity, origin: Origin, args: std::fmt::Arguments) {
     eprint!("{}", args);
     match origin {
         Origin::System => {
-            eprintln!(": {}", crate::strerror(crate::path::errno()));
+            eprintln!(": {}", crate::sys::strerror(crate::sys::errno()));
         }
         _ => eprintln!(),
     }

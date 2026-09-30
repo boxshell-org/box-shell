@@ -120,7 +120,7 @@ pub fn getcwd2(
 ) -> Result<(), i32> {
     match tracee {
         None => {
-            let buf = crate::sys::getcwd().ok_or_else(|| -errno())?;
+            let buf = crate::sys::getcwd().ok_or_else(|| -crate::sys::errno())?;
             guest_path.set(&buf);
             Ok(())
         }
@@ -145,7 +145,7 @@ pub fn realpath2(
     match tracee {
         None => {
             let c = std::ffi::CString::new(path).map_err(|_| -libc::EINVAL)?;
-            let buf = crate::sys::realpath(&c).ok_or_else(|| -errno())?;
+            let buf = crate::sys::realpath(&c).ok_or_else(|| -crate::sys::errno())?;
             host_path.set(&buf);
             Ok(())
         }
@@ -275,10 +275,6 @@ fn not_found(
         );
     }
     Err(-1)
-}
-
-pub fn errno() -> i32 {
-    crate::sys::errno()
 }
 
 /// `translate_path()` — the full guest→host canonicalization entry point.

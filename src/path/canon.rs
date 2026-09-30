@@ -85,7 +85,7 @@ fn substitute_binding_stat(
         };
         // /linkerconfig exists on Android but cannot be stat'ed.
         if status < 0
-            && crate::path::errno() == libc::EACCES
+            && crate::sys::errno() == libc::EACCES
             && host_path.as_bytes() == b"/linkerconfig"
         {
             st.st_mode = libc::S_IFDIR;
@@ -228,7 +228,7 @@ pub fn canonicalize(
                 let c = std::ffi::CString::new(host_path.as_bytes()).map_err(|_| -libc::EINVAL)?;
                 let r = crate::sys::readlink(&c, &mut buf);
                 if r < 0 {
-                    return Err(-crate::path::errno());
+                    return Err(-crate::sys::errno());
                 }
                 if r as usize == PATH_MAX {
                     return Err(-libc::ENAMETOOLONG);

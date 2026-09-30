@@ -117,7 +117,7 @@ fn open_l2s_directory() -> i32 {
         0,
     );
     if fd < 0 {
-        let e = crate::path::errno();
+        let e = crate::sys::errno();
         return if e > 0 { -e } else { -libc::ENOENT };
     }
     L2S_DIR.with(|c| c.borrow_mut().2 = fd);
@@ -147,7 +147,7 @@ fn l2s_entry(path: &[u8]) -> Result<(i32, &[u8]), i32> {
 }
 
 fn path_errno() -> i32 {
-    let e = crate::path::errno();
+    let e = crate::sys::errno();
     if e > 0 { e } else { libc::ENOENT }
 }
 
@@ -1031,7 +1031,7 @@ fn handle_linkat_from_proc_fd(tracee: &mut Tracee) -> i32 {
         stats.st_mode & 0o777,
     );
     if target_fd < 0 {
-        let mut status = -crate::path::errno();
+        let mut status = -crate::sys::errno();
         if status >= 0 {
             status = -libc::EPERM;
         }
@@ -1047,7 +1047,7 @@ fn handle_linkat_from_proc_fd(tracee: &mut Tracee) -> i32 {
             break;
         }
         if nread < 0 {
-            let mut status = -crate::path::errno();
+            let mut status = -crate::sys::errno();
             if status >= 0 {
                 status = -libc::EPERM;
             }
@@ -1059,7 +1059,7 @@ fn handle_linkat_from_proc_fd(tracee: &mut Tracee) -> i32 {
         while pos < nread {
             let nwrite = crate::sys::write(target_fd, &buf[pos as usize..nread as usize]);
             if nwrite <= 0 {
-                let mut status = -crate::path::errno();
+                let mut status = -crate::sys::errno();
                 if status >= 0 {
                     status = -libc::EPERM;
                 }

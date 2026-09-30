@@ -59,7 +59,7 @@ pub fn build_glue(
             crate::path::temp::set_placeholder_destructor(host_path);
         }
 
-        if status >= 0 || crate::path::errno() == libc::EEXIST || finality.is_final() {
+        if status >= 0 || crate::sys::errno() == libc::EEXIST || finality.is_final() {
             return typ;
         }
 

@@ -13,9 +13,9 @@ use crate::tracee::{Seccomp, Sigstop, Tracee, get_tracee, is_in_sysenter};
 
 pub type TraceeRef = Rc<RefCell<Tracee>>;
 
-/* ================================================================== */
-/* Seccomp/kernel capability probing                                   */
-/* ================================================================== */
+// ==================================================================
+// Seccomp/kernel capability probing
+// ==================================================================
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum EventmsgState {
@@ -71,9 +71,9 @@ pub fn seccomp_ptrace_event_is_supported() -> bool {
     SECCOMP_PTRACE_EVENT_SUPPORTED.load(Ordering::Relaxed)
 }
 
-/* ================================================================== */
-/* Process launch                                                      */
-/* ================================================================== */
+// ==================================================================
+// Process launch
+// ==================================================================
 
 /// `launch_process()` — fork a child that asks to be traced and execve()s
 /// `tracee.exe`.
@@ -97,7 +97,7 @@ pub fn launch_process(tracee_rc: &TraceeRef, argv: &[String]) -> i32 {
                 crate::note::Origin::System,
                 "fork()"
             );
-            -crate::path::errno()
+            -crate::sys::errno()
         }
         0 => {
             // Child: give the guest a sane SIGPIPE disposition, request
@@ -120,7 +120,7 @@ pub fn launch_process(tracee_rc: &TraceeRef, argv: &[String]) -> i32 {
             }
 
             let argv_c: Vec<std::ffi::CString> = if argv.is_empty() {
-                vec![std::ffi::CString::new("-sh").unwrap()]
+                vec![c"-sh".to_owned()]
             } else {
                 argv.iter()
                     .map(|a| std::ffi::CString::new(a.as_bytes()).unwrap())
@@ -147,9 +147,9 @@ pub fn launch_process(tracee_rc: &TraceeRef, argv: &[String]) -> i32 {
     }
 }
 
-/* ================================================================== */
-/* Event loop                                                          */
-/* ================================================================== */
+// ==================================================================
+// Event loop
+// ==================================================================
 
 /// `event_loop()` — waitpid(-1, __WALL) + dispatch until no tracee is left.
 /// Returns the exit status of the last terminated program.
@@ -220,14 +220,14 @@ pub fn event_loop() -> i32 {
     LAST_EXIT_STATUS.load(Ordering::Relaxed)
 }
 
-/* ================================================================== */
-/* Deferred child attach                                               */
-/*                                                                     */
-/* resolve_pending_child() runs while the parent's RefCell is still    */
-/* mutably borrowed, so it can't re-enter attach_child() directly.     */
-/* It enqueues the (parent, flags, child) triple here and the event    */
-/* loop attaches the child once the borrow is released.                */
-/* ================================================================== */
+// ==================================================================
+// Deferred child attach
+//
+// resolve_pending_child() runs while the parent's RefCell is still
+// mutably borrowed, so it can't re-enter attach_child() directly.
+// It enqueues the (parent, flags, child) triple here and the event
+// loop attaches the child once the borrow is released.
+// ==================================================================
 
 thread_local! {
     static DEFERRED_ATTACHES: RefCell<VecDeque<(i32, Word, i32)>> =
@@ -290,7 +290,7 @@ fn install_signal_handlers() {
                 sa.sa_sigaction = libc::SIG_IGN;
             }
         }
-        if crate::sys::sigaction(signum, &sa, None) < 0 && crate::path::errno() != libc::EINVAL {
+        if crate::sys::sigaction(signum, &sa, None) < 0 && crate::sys::errno() != libc::EINVAL {
             crate::note!(
                 crate::note::Severity::Warning,
                 crate::note::Origin::System,
@@ -333,9 +333,9 @@ extern "C" fn dump_tracees(_s: i32, _i: *mut libc::siginfo_t, _u: *mut libc::c_v
     // through normal note() paths elsewhere.
 }
 
-/* ================================================================== */
-/* Per-event dispatch                                                  */
-/* ================================================================== */
+// ==================================================================
+// Per-event dispatch
+// ==================================================================
 
 /// `handle_tracee_event()` — compute the restart signal for this stop.
 pub fn handle_tracee_event(tracee_rc: &TraceeRef, tracee_status: i32) -> i32 {
@@ -708,7 +708,7 @@ fn handle_seccomp_stop(tracee: &mut Tracee, sysexit_necessary: bool) -> i32 {
 /// starts at offset 16 (after signo/errno/code/__pad0), `_call_addr` occupies
 /// 8 bytes, so `_syscall` sits at offset 24.
 fn sigsys_syscall_nr(siginfo: &libc::siginfo_t) -> i32 {
-    const _: () = assert!(std::mem::size_of::<libc::siginfo_t>() == 128);
+    const _: () = assert!(size_of::<libc::siginfo_t>() == 128);
     // SAFETY: siginfo_t is 128 bytes (asserted above); offset 24 reads the
     // `_syscall` field of the `_sigsys` sifields member on x86_64.
     unsafe {
@@ -767,7 +767,7 @@ fn check_architecture(tracee: &mut Tracee) {
     }
     if let Ok((fd, ehdr)) = crate::execve::elf::open_elf(path.as_bytes()) {
         crate::sys::close(fd);
-        if !ehdr.is_class64() || std::mem::size_of::<Word>() == 8 {
+        if !ehdr.is_class64() || size_of::<Word>() == 8 {
             return;
         }
         crate::note!(
@@ -797,9 +797,9 @@ pub fn restart_tracee(tracee_rc: &TraceeRef, signal: i32) -> bool {
     true
 }
 
-/* ================================================================== */
-/* Fork/clone child registration (tracee.c)                            */
-/* ================================================================== */
+// ==================================================================
+// Fork/clone child registration (tracee.c)
+// ==================================================================
 
 /// Read Tgid/PPid/TracerPid from /proc/@pid/status.
 fn read_proc_status_ids(pid: i32) -> Option<(i32, i32, i32)> {
@@ -826,7 +826,7 @@ fn new_child_stack(parent: &mut Tracee) -> Word {
             crate::sys::clear_errno();
             let stack = crate::tracee::mem::peek_word(parent, args + 5 * 8);
             let size = crate::tracee::mem::peek_word(parent, args + 6 * 8);
-            if crate::path::errno() != 0 || stack == 0 {
+            if crate::sys::errno() != 0 || stack == 0 {
                 0
             } else {
                 stack + size

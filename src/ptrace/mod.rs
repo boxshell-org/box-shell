@@ -14,8 +14,9 @@ use crate::tracee::{Seccomp, Tracee, WaitsIn, get_tracee};
 
 /// PTrace request/option constants as `i32` (libc exposes them as `u32`
 /// on Linux/glibc, while all our bookkeeping is `i32`/`Word`), plus the
-/// requests libc lacks on this platform.
-#[allow(non_camel_case_types, dead_code)]
+/// requests libc lacks on this platform. The table mirrors the complete
+/// request vocabulary even where this port uses only a subset.
+#[allow(dead_code)]
 pub mod ptc {
     macro_rules! c {
         ($name:ident) => {
@@ -66,7 +67,7 @@ pub mod ptc {
     c!(PTRACE_O_TRACEEXEC);
     c!(PTRACE_O_TRACEEXIT);
     c!(PTRACE_O_TRACESECCOMP);
-    /* Not in this libc's tables. */
+    // Not in this libc's tables.
     c!(PTRACE_SET_SYSCALL = 23);
     c!(PTRACE_GET_THREAD_AREA = 25);
     c!(PTRACE_SET_THREAD_AREA = 26);
@@ -324,7 +325,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
             return 0;
         }
         crate::ptrace::ptc::PTRACE_GETREGS => {
-            let mut buffer = vec![0u8; std::mem::size_of::<libc::user_regs_struct>()];
+            let mut buffer = vec![0u8; size_of::<libc::user_regs_struct>()];
             let st = ptrace_req(
                 request,
                 ptracee_pid,
@@ -353,9 +354,9 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
             let size = if is_32on64_mode(ptracer) {
                 user::USER32_NB_REGS * 4
             } else {
-                std::mem::size_of::<libc::user_regs_struct>()
+                size_of::<libc::user_regs_struct>()
             };
-            let mut buffer = vec![0u8; std::mem::size_of::<libc::user_regs_struct>().max(size)];
+            let mut buffer = vec![0u8; size_of::<libc::user_regs_struct>().max(size)];
             let st = read_data(ptracer, &mut buffer[..size], data);
             if st < 0 {
                 return st;
@@ -365,7 +366,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
                 for (i, c) in buffer[..size].chunks_exact(4).enumerate() {
                     regs32[i] = u32::from_ne_bytes(c.try_into().unwrap());
                 }
-                let mut regs64 = vec![0u64; std::mem::size_of::<libc::user_regs_struct>() / 8];
+                let mut regs64 = vec![0u64; size_of::<libc::user_regs_struct>() / 8];
                 user::convert_user_regs_struct(true, &mut regs64, &mut regs32);
                 for (i, v) in regs64.iter().enumerate() {
                     buffer[i * 8..i * 8 + 8].copy_from_slice(&v.to_ne_bytes());
@@ -383,7 +384,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
             return 0;
         }
         crate::ptrace::ptc::PTRACE_GETFPREGS => {
-            let fp_sz = std::mem::size_of::<libc::user_fpregs_struct>()
+            let fp_sz = size_of::<libc::user_fpregs_struct>()
                 .max(user::USER32_NB_FPREGS * 4);
             let mut buffer = vec![0u8; fp_sz];
             let st = ptrace_req(request, ptracee_pid, 0, buffer.as_mut_ptr() as usize);
@@ -400,7 +401,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
                 buffer.iter_mut().for_each(|b| *b = 0);
                 user::USER32_NB_FPREGS * 4
             } else {
-                std::mem::size_of::<libc::user_fpregs_struct>()
+                size_of::<libc::user_fpregs_struct>()
             };
             return write_data(ptracer, data, &buffer[..size]);
         }
@@ -414,7 +415,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
                 );
                 return -libc::ENOTSUP;
             }
-            let size = std::mem::size_of::<libc::user_fpregs_struct>();
+            let size = size_of::<libc::user_fpregs_struct>();
             let mut buffer = vec![0u8; size];
             let st = read_data(ptracer, &mut buffer, data);
             if st < 0 {
@@ -535,7 +536,7 @@ pub fn translate_ptrace_exit(ptracer: &mut Tracee) -> i32 {
         crate::ptrace::ptc::PTRACE_SYSCALL
         | crate::ptrace::ptc::PTRACE_CONT
         | crate::ptrace::ptc::PTRACE_SINGLESTEP
-        | 33 /* SINGLEBLOCK */
+        | 33 // SINGLEBLOCK
         | crate::ptrace::ptc::PTRACE_DETACH
         | crate::ptrace::ptc::PTRACE_KILL => {}
         _ => {

@@ -31,23 +31,23 @@ const USER32_DEBUGREG_SIZE: usize = 8 * 4;
 /// Index map 32-bit-user.regs[i] → 64-bit-user.regs[j].
 const fn convert_user_regs_index(index: usize) -> usize {
     const MAPPING: [usize; USER32_NB_REGS] = [
-        5,  /* ?bx */
-        11, /* ?cx */
-        12, /* ?dx */
-        13, /* ?si */
-        14, /* ?di */
-        4,  /* ?bp */
-        10, /* ?ax */
-        23, /* ds */
-        24, /* es */
-        25, /* fs */
-        26, /* gs */
-        15, /* orig_?ax */
-        16, /* ?ip */
-        17, /* cs */
-        18, /* eflags */
-        19, /* ?sp */
-        20, /* ss */
+        5,  // ?bx
+        11, // ?cx
+        12, // ?dx
+        13, // ?si
+        14, // ?di
+        4,  // ?bp
+        10, // ?ax
+        23, // ds
+        24, // es
+        25, // fs
+        26, // gs
+        15, // orig_?ax
+        16, // ?ip
+        17, // cs
+        18, // eflags
+        19, // ?sp
+        20, // ss
     ];
     MAPPING[index]
 }

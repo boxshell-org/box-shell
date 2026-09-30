@@ -61,10 +61,10 @@ pub fn detranslate_sysnum(abi: Abi, sysnum: Sysnum) -> Word {
         return SYSCALL_AVOIDER;
     }
     let sysnums = get_sysnums(abi);
-    for (i, &s) in sysnums.table.iter().enumerate() {
-        if s == sysnum {
-            return i as Word + sysnums.offset;
-        }
-    }
-    SYSCALL_AVOIDER
+    sysnums
+        .table
+        .iter()
+        .position(|&s| s == sysnum)
+        .map(|i| i as Word + sysnums.offset)
+        .unwrap_or(SYSCALL_AVOIDER)
 }

@@ -5,7 +5,6 @@
 //! `exit.rs::transfer_load_script` will hand to the loader.
 
 use std::os::unix::io::AsRawFd;
-use std::sync::Mutex;
 
 use crate::execve::aoxp::{
     fetch_array_of_xpointers, push_array_of_xpointers, read_xpointee_as_string,
@@ -28,20 +27,10 @@ use crate::{HOST_ROOTFS, Word};
 /// Loader ELF embedded at build time (see build.rs).
 const LOADER_EXE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/loader.exe"));
 
-fn page_size() -> Word {
-    static PAGE: Mutex<Word> = Mutex::new(0);
-    let mut g = PAGE.lock().unwrap();
-    if *g == 0 {
-        let v = crate::sys::sysconf(libc::_SC_PAGESIZE);
-        *g = if v > 0 { v as Word } else { 0x1000 };
-    }
-    *g
-}
-
 /// `add_mapping()` — turn a PT_LOAD phdr into one or two `Mapping`s
 /// (file-backed part + anonymous BSS tail).
 fn add_mapping(load_info: &mut LoadInfo, elf_header: &ElfHeader, ph: &ProgramHeader) -> i32 {
-    let page = page_size();
+    let page = crate::sys::page_size();
     let mask = !(page - 1);
 
     let vaddr = ph.p_vaddr(elf_header);
@@ -343,17 +332,13 @@ fn extract_loader(tracee: &Tracee) -> Option<String> {
 /// `get_loader_path()` — $PROOT_LOADER override, else the extracted
 /// embedded loader (cached).
 fn get_loader_path(tracee: &Tracee) -> Option<String> {
-    static LOADER_PATH: Mutex<Option<String>> = Mutex::new(None);
+    static LOADER_PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     if let Ok(p) = std::env::var("PROOT_LOADER") {
         if !p.is_empty() {
             return Some(p);
         }
     }
-    let mut g = LOADER_PATH.lock().unwrap();
-    if g.is_none() {
-        *g = extract_loader(tracee);
-    }
-    g.clone()
+    LOADER_PATH.get_or_init(|| extract_loader(tracee)).clone()
 }
 
 /// `translate_execve_enter()`.
@@ -448,16 +433,13 @@ pub fn translate_execve_enter(tracee: &mut Tracee) -> i32 {
         return status;
     }
 
-    if load_info.interp.is_some() {
-        let mut interp = load_info.interp.take().unwrap();
+    if let Some(mut interp) = load_info.interp.take() {
         status = extract_load_info(tracee, &mut interp);
         if status < 0 {
             return status;
         }
         // An ELF interpreter is supposed to be standalone.
-        if interp.interp.is_some() {
-            interp.interp = None;
-        }
+        interp.interp = None;
         load_info.interp = Some(interp);
     }
 

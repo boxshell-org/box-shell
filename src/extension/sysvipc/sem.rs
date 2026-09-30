@@ -16,13 +16,9 @@ const IPC_EXCL: i32 = 0o2000;
 const IPC_NOWAIT: i16 = 0o4000;
 const IPC_RMID: i32 = 0;
 
-const GETPID: i32 = 11;
 const GETVAL: i32 = 12;
 const GETALL: i32 = 13;
-const GETNCNT: i32 = 14;
-const GETZCNT: i32 = 15;
 const SETVAL: i32 = 16;
-const SETALL: i32 = 17;
 const IPC_INFO: i32 = 3;
 const SEM_INFO: i32 = 19;
 

@@ -283,7 +283,7 @@ pub fn new_binding(
 }
 
 pub fn io_error_string(errno: i32) -> String {
-    crate::strerror(errno)
+    crate::sys::strerror(errno)
 }
 
 /// `remove_binding_from_all_lists()` — drop a binding from every list of

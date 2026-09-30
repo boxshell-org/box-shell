@@ -281,8 +281,8 @@ impl DynamicEntry {
 }
 
 pub fn known_phentsize(header: &ElfHeader, size: u64) -> bool {
-    (header.is_class32() && size == std::mem::size_of::<ProgramHeader32>() as u64)
-        || (header.is_class64() && size == std::mem::size_of::<ProgramHeader64>() as u64)
+    (header.is_class32() && size == size_of::<ProgramHeader32>() as u64)
+        || (header.is_class64() && size == size_of::<ProgramHeader64>() as u64)
 }
 
 /// `open_elf()` — open `t_path` and read+validate its ELF header.  On success
@@ -295,7 +295,7 @@ pub fn open_elf(t_path: &[u8]) -> Result<(RawFd, ElfHeader), i32> {
     }
     let mut ehdr: ElfHeader = crate::sys::zeroed();
     let n = crate::sys::read(fd, crate::sys::as_bytes_mut(&mut ehdr));
-    if n < std::mem::size_of::<ElfHeader32>() as isize {
+    if n < size_of::<ElfHeader32>() as isize {
         crate::sys::close(fd);
         return Err(-libc::ENOEXEC);
     }

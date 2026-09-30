@@ -30,17 +30,25 @@ const SCM_RIGHTS: i32 = 1;
 
 const SHMHELPER_SOCKET_LEN: usize = 108;
 
+/// Operation codes on the helper wire protocol (`HelperRequest::op`).
 #[derive(Clone, Copy, PartialEq)]
 #[repr(i32)]
 enum HelperOp {
     Distribute = 0,
     Alloc = 1,
     Free = 2,
-    LibandroidShmget = 3,
-    LibandroidShmat = 4,
-    LibandroidShmdt = 5,
-    LibandroidShmctlRmid = 6,
-    LibandroidShmctlStat = 7,
+}
+
+impl TryFrom<i32> for HelperOp {
+    type Error = ();
+    fn try_from(op: i32) -> Result<Self, ()> {
+        match op {
+            0 => Ok(Self::Distribute),
+            1 => Ok(Self::Alloc),
+            2 => Ok(Self::Free),
+            _ => Err(()),
+        }
+    }
 }
 
 /// `SysVIpcShmHelperRequest` — wire format with the helper.
@@ -146,7 +154,6 @@ fn launch_helper() -> Option<HelperConn> {
 /// `guest_buf` so a recvmsg can receive an SCM_RIGHTS fd.
 struct RecvmsgPointers {
     msghdr_ptr: Word,
-    cmsg_controllen_ptr: Word,
     cmsg_control_ptr: Word,
 }
 
@@ -155,7 +162,7 @@ fn recvmsg_pointers(
     guest_buf: Word,
     do_write: bool,
 ) -> Result<RecvmsgPointers, i32> {
-    let sockaddr_un_len = std::mem::size_of::<libc::sockaddr_un>() as Word;
+    let sockaddr_un_len = size_of::<libc::sockaddr_un>() as Word;
     #[cfg(target_arch = "x86_64")]
     let is32 = is_32on64_mode(tracee);
     #[cfg(not(target_arch = "x86_64"))]
@@ -198,7 +205,6 @@ fn recvmsg_pointers(
 
     Ok(RecvmsgPointers {
         msghdr_ptr: msghdr,
-        cmsg_controllen_ptr: msghdr_controllen,
         cmsg_control_ptr: guest_buf,
     })
 }
@@ -213,29 +219,19 @@ pub fn shmget(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
     let mut nsb = ns.borrow_mut();
     let shms = &mut nsb.shms;
 
-    let mut unused_slot = 0usize;
-    let mut found_unused_slot = false;
-    let mut found_shm = false;
-    let mut shm_index = 0usize;
-    for (i, s) in shms.iter().enumerate() {
-        if s.valid {
-            if shm_key != IPC_PRIVATE && s.key == shm_key {
-                shm_index = i;
-                found_shm = true;
-                break;
-            }
-        } else if !found_unused_slot {
-            unused_slot = i;
-            found_unused_slot = true;
-        }
-    }
+    // A matching valid slot wins; otherwise reuse the first invalid one.
+    let shm_match = shms
+        .iter()
+        .position(|s| s.valid && shm_key != IPC_PRIVATE && s.key == shm_key);
+    let unused_slot = shms.iter().position(|s| !s.valid);
+    let mut shm_index = shm_match.unwrap_or(0);
 
-    if !found_shm {
+    if shm_match.is_none() {
         if (shmflg & IPC_CREAT) == 0 {
             return -libc::ENOENT;
         }
-        let idx = if found_unused_slot {
-            unused_slot
+        let idx = if let Some(unused) = unused_slot {
+            unused
         } else {
             shms.push(SharedMem::default());
             shms.len() - 1
@@ -501,18 +497,17 @@ pub fn shmat_chain(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
                 return shmat_fail_close(tracee, config);
             };
             // cmsghdr: len(8) level(4) type(4) on 64-bit.
-            let cmsg_len = std::mem::size_of::<Word>() + 8;
+            let cmsg_len = size_of::<Word>() + 8;
             let mut cmsg = vec![0u8; cmsg_len];
             if read_data(tracee, &mut cmsg, pointers.cmsg_control_ptr) < 0 {
                 return shmat_fail_close(tracee, config);
             }
             let cmsg_level = i32::from_ne_bytes(
-                cmsg[std::mem::size_of::<Word>()..std::mem::size_of::<Word>() + 4]
+                cmsg[size_of::<Word>()..size_of::<Word>() + 4]
                     .try_into()
                     .unwrap(),
             );
-            let cmsg_type =
-                i32::from_ne_bytes(cmsg[std::mem::size_of::<Word>() + 4..].try_into().unwrap());
+            let cmsg_type = i32::from_ne_bytes(cmsg[size_of::<Word>() + 4..].try_into().unwrap());
             if cmsg_level != libc::SOL_SOCKET || cmsg_type != SCM_RIGHTS {
                 return shmat_fail_close(tracee, config);
             }
@@ -606,7 +601,7 @@ fn shmat_fail_close(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
 }
 
 fn sockaddr_un_len() -> Word {
-    std::mem::size_of::<libc::sockaddr_un>() as Word
+    size_of::<libc::sockaddr_un>() as Word
 }
 
 fn helper_addr() -> Vec<u8> {
@@ -867,22 +862,22 @@ pub fn shm_helper_main() -> ! {
         if status as usize != buf.len() {
             break;
         }
-        match request.op {
-            x if x == HelperOp::Alloc as i32 => {
+        match HelperOp::try_from(request.op) {
+            Ok(HelperOp::Alloc) => {
                 let fd = do_allocate(request.size);
                 crate::sys::write(1, &fd.to_ne_bytes());
             }
-            x if x == HelperOp::Free as i32 => {
+            Ok(HelperOp::Free) => {
                 crate::sys::close(request.fd);
             }
-            x if x == HelperOp::Distribute as i32 => {
+            Ok(HelperOp::Distribute) => {
                 let client = crate::sys::accept(socket_server_fd);
                 if client >= 0 {
                     sendfd(client, request.fd);
                     crate::sys::close(client);
                 }
             }
-            _ => {}
+            Err(()) => {}
         }
     }
     crate::sys::exit_immediately(0)
@@ -896,10 +891,10 @@ fn sendfd(socket: i32, fd: i32) {
         iov_base: &mut data as *mut _ as *mut _,
         iov_len: 1,
     };
-    let hdr_len = std::mem::size_of::<libc::cmsghdr>();
+    let hdr_len = size_of::<libc::cmsghdr>();
     let mut cmsg_space = [0u8; 64];
     let cmsg = libc::cmsghdr {
-        cmsg_len: hdr_len + std::mem::size_of::<i32>(),
+        cmsg_len: hdr_len + size_of::<i32>(),
         cmsg_level: libc::SOL_SOCKET,
         cmsg_type: SCM_RIGHTS,
     };

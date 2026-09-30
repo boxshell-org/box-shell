@@ -1,7 +1,5 @@
 //! `#!` interpreter-script expansion — port of execve/shebang.c.
 
-use std::os::unix::ffi::OsStrExt;
-
 use crate::execve::aoxp::{
     XPointerArray, fetch_array_of_xpointers, push_array_of_xpointers, resize_array_of_xpointers,
     write_xpointees,
@@ -68,7 +66,7 @@ fn extract_shebang_fd(fd: i32) -> Shebang {
         let mut b = [0u8; 1];
         let n = crate::sys::read(fd, &mut b);
         if n < 0 {
-            Err(-crate::path::errno())
+            Err(-crate::sys::errno())
         } else if n == 0 {
             Err(0) // sentinel: EOF
         } else {
@@ -80,7 +78,7 @@ fn extract_shebang_fd(fd: i32) -> Shebang {
     let mut magic = [0u8; 2];
     let n = crate::sys::read(fd, &mut magic);
     if n < 0 {
-        return Err(-crate::path::errno());
+        return Err(-crate::sys::errno());
     }
     if n < 2 || magic[0] != b'#' || magic[1] != b'!' {
         return Ok(None);
@@ -147,7 +145,6 @@ fn extract_shebang_fd(fd: i32) -> Shebang {
     }
 
     // Slurp the argument until EOL.
-    let mut i = 0usize;
     while current_length < BINPRM_BUF_SIZE {
         if tmp == b'\n' || tmp == b'\r' {
             break;
@@ -162,11 +159,9 @@ fn extract_shebang_fd(fd: i32) -> Shebang {
             Ok(b) => {
                 tmp = b;
                 current_length += 1;
-                i += 1;
             }
         }
     }
-    let _ = i;
     // Remove trailing blanks.
     while argument.last().is_some_and(|b| *b == b' ' || *b == b'\t') {
         argument.pop();
@@ -245,10 +240,4 @@ pub fn expand_shebang(
         }
     }
     Ok(if has_shebang { 1 } else { 0 })
-}
-
-/// Path OsStr → bytes helper (kept local for readability).
-#[allow(dead_code)]
-fn os_bytes(s: &std::ffi::OsStr) -> &[u8] {
-    s.as_bytes()
 }

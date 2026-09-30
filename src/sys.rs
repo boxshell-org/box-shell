@@ -9,9 +9,9 @@
 use std::ffi::{CStr, CString};
 use std::os::unix::io::RawFd;
 
-/* ================================================================== */
-/* errno                                                              */
-/* ================================================================== */
+// ==================================================================
+// errno
+// ==================================================================
 
 /// Read the thread-local `errno`.
 pub fn errno() -> i32 {
@@ -31,9 +31,9 @@ pub fn clear_errno() {
     set_errno(0);
 }
 
-/* ================================================================== */
-/* POD helpers                                                        */
-/* ================================================================== */
+// ==================================================================
+// POD helpers
+// ==================================================================
 
 /// A zero-initialized instance of `T`. Intended for C structs that are
 /// filled by the kernel (stat, siginfo_t, utsname, ...).
@@ -59,9 +59,9 @@ pub fn as_bytes_mut<T>(value: &mut T) -> &mut [u8] {
     unsafe { std::slice::from_raw_parts_mut(value as *mut T as *mut u8, size_of::<T>()) }
 }
 
-/* ================================================================== */
-/* Process identity                                                   */
-/* ================================================================== */
+// ==================================================================
+// Process identity
+// ==================================================================
 
 pub fn getuid() -> libc::uid_t {
     // SAFETY: getuid() has no failure modes.
@@ -113,9 +113,9 @@ pub fn getresgid() -> Result<(libc::gid_t, libc::gid_t, libc::gid_t), i32> {
     Ok((r, e, s))
 }
 
-/* ================================================================== */
-/* Process control                                                    */
-/* ================================================================== */
+// ==================================================================
+// Process control
+// ==================================================================
 
 pub fn fork() -> libc::pid_t {
     // SAFETY: the tracer is single-threaded; both parent and child
@@ -221,6 +221,15 @@ pub fn sysconf(name: i32) -> i64 {
     unsafe { libc::sysconf(name) }
 }
 
+/// Host page size, cached (0x1000 when sysconf fails).
+pub fn page_size() -> crate::Word {
+    static PAGE: std::sync::OnceLock<crate::Word> = std::sync::OnceLock::new();
+    *PAGE.get_or_init(|| {
+        let v = sysconf(libc::_SC_PAGESIZE);
+        if v > 0 { v as crate::Word } else { 0x1000 }
+    })
+}
+
 /// `uname`, or `Err(errno)`.
 pub fn uname() -> Result<libc::utsname, i32> {
     let mut uts: libc::utsname = zeroed();
@@ -274,9 +283,9 @@ pub fn poll(fds: &mut [libc::pollfd], timeout: i32) -> i32 {
     unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) }
 }
 
-/* ================================================================== */
-/* File system                                                        */
-/* ================================================================== */
+// ==================================================================
+// File system
+// ==================================================================
 
 /// `open(path, flags, mode)` → raw fd or -1 (errno set).
 pub fn open(path: &CStr, flags: i32, mode: libc::mode_t) -> RawFd {
@@ -538,9 +547,9 @@ pub fn setenv(name: &CStr, value: &CStr, overwrite: bool) -> i32 {
     unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), overwrite as i32) }
 }
 
-/* ================================================================== */
-/* Sockets                                                            */
-/* ================================================================== */
+// ==================================================================
+// Sockets
+// ==================================================================
 
 /// `socket(domain, type, protocol)` → fd or -1.
 pub fn socket(domain: i32, ty: i32, protocol: i32) -> RawFd {
@@ -663,9 +672,9 @@ pub fn if_nametoindex(name: &CStr) -> libc::c_uint {
     unsafe { libc::if_nametoindex(name.as_ptr()) }
 }
 
-/* ================================================================== */
-/* getifaddrs                                                         */
-/* ================================================================== */
+// ==================================================================
+// getifaddrs
+// ==================================================================
 
 /// Owned `getifaddrs` list; frees on drop.
 pub struct IfAddrs {
@@ -808,9 +817,9 @@ pub fn sockaddr_as_ll(sa: &libc::sockaddr) -> Option<&libc::sockaddr_ll> {
     Some(unsafe { &*(sa as *const libc::sockaddr as *const libc::sockaddr_ll) })
 }
 
-/* ================================================================== */
-/* ptrace                                                             */
-/* ================================================================== */
+// ==================================================================
+// ptrace
+// ==================================================================
 
 /// `ptrace(request, pid, addr, data)` — addr/data are taken as raw
 /// `usize` words since most requests use them as scalars or opaque
@@ -919,9 +928,9 @@ pub unsafe fn siginfo_si_pid(si: *const libc::siginfo_t) -> libc::pid_t {
     unsafe { (*si).si_pid() }
 }
 
-/* ================================================================== */
-/* Device numbers                                                     */
-/* ================================================================== */
+// ==================================================================
+// Device numbers
+// ==================================================================
 
 pub fn major(dev: libc::dev_t) -> libc::c_uint {
     libc::major(dev)

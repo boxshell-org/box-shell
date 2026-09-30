@@ -126,7 +126,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
                 Flow::End
             } else {
                 let address = peek_reg(tracee, RegVersion::Original, Reg::Sysarg1);
-                let mut uts = vec![0u8; std::mem::size_of::<libc::utsname>()];
+                let mut uts = vec![0u8; size_of::<libc::utsname>()];
                 match read_data(tracee, &mut uts, address) {
                     s if s < 0 => Flow::Result(s),
                     _ => {
@@ -306,7 +306,7 @@ pub fn translate_syscall_exit(tracee: &mut Tracee) {
             // FICLONE denied by the host (Android) → EOPNOTSUPP so cp(1)
             // falls back to copying instead of aborting.
             if peek_reg(tracee, RegVersion::Original, Reg::Sysarg2)
-                == 0x40049409 /* _IOW(0x94, 9, int) */
+                == 0x40049409 // _IOW(0x94, 9, int)
                 && peek_reg(tracee, RegVersion::Current, Reg::SysargResult) as i64
                     == -libc::EACCES as i64
             {

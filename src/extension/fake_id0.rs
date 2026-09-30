@@ -37,9 +37,9 @@ const USERLAND: bool = false;
 /// `IGNORE_SYSARG` — a sysarg slot that doesn't exist for this syscall form.
 const IGNORE: Option<Reg> = None;
 
-/* ================================================================== */
-/* Config                                                              */
-/* ================================================================== */
+// ==================================================================
+// Config
+// ==================================================================
 
 /// `Config` — per-extension fake-id state.
 #[derive(Clone)]
@@ -96,9 +96,9 @@ fn config_of_pid(pid: i32) -> Option<Config> {
     crate::tracee::with_tracee(pid, |t| config_of(t).cloned()).flatten()
 }
 
-/* ================================================================== */
-/* Meta-file helpers (helper_functions.c)                              */
-/* ================================================================== */
+// ==================================================================
+// Meta-file helpers (helper_functions.c)
+// ==================================================================
 
 /// Decimal→"octal-looking-decimal" (e.g. 0o755=493 → 755) — C dtoo().
 fn dtoo(mut n: i32) -> i32 {
@@ -391,10 +391,10 @@ fn read_sysarg_path(
     Ok(0)
 }
 
-/* ================================================================== */
-/* Sysenter handlers (open/mk/unlink/rename/chmod/chown/utimensat/     */
-/* access/exec/link/symlink/stat)                                      */
-/* ================================================================== */
+// ==================================================================
+// Sysenter handlers (open/mk/unlink/rename/chmod/chown/utimensat/
+// access/exec/link/symlink/stat)
+// ==================================================================
 
 /// `handle_open_enter_end()` — open/openat/creat: create meta files on
 /// O_CREAT and check emulated permissions otherwise.
@@ -1045,9 +1045,9 @@ fn handle_stat_enter(tracee: &mut Tracee, fd_sysarg: Reg) -> i32 {
     0
 }
 
-/* ================================================================== */
-/* Sendmsg / socket / getsockopt / chroot                              */
-/* ================================================================== */
+// ==================================================================
+// Sendmsg / socket / getsockopt / chroot
+// ==================================================================
 
 const MAX_CONTROLLEN: usize = 1024;
 const SCM_CREDENTIALS: i32 = 2;
@@ -1059,7 +1059,7 @@ const NETLINK_AUDIT: u64 = 9;
 /// `sendmsg_unpack_control_and_len()` — msghdr is different under 32on64.
 fn sendmsg_unpack_control_and_len(tracee: &Tracee, msghdr: &[u8]) -> (Word, usize) {
     if is_32on64_mode(tracee) {
-        let control = u32::from_ne_bytes(msghdr[16..20].try_into().unwrap()) as Word;
+        let control = u64::from(u32::from_ne_bytes(msghdr[16..20].try_into().unwrap()));
         let len = u32::from_ne_bytes(msghdr[20..24].try_into().unwrap()) as usize;
         (control, len)
     } else {
@@ -1087,9 +1087,9 @@ fn handle_sendmsg_enter(tracee: &mut Tracee, sysnum: Sysnum) -> i32 {
         (28usize, 12usize, 3usize)
     } else {
         (
-            std::mem::size_of::<libc::msghdr>(),
-            std::mem::size_of::<libc::cmsghdr>(),
-            std::mem::size_of::<u64>() - 1,
+            size_of::<libc::msghdr>(),
+            size_of::<libc::cmsghdr>(),
+            size_of::<u64>() - 1,
         )
     };
 
@@ -1185,7 +1185,7 @@ fn handle_sendmsg_enter(tracee: &mut Tracee, sysnum: Sysnum) -> i32 {
         }
 
         if cmsg_level == libc::SOL_SOCKET && cmsg_type == SCM_CREDENTIALS {
-            if cmsg_len != size_cmsghdr + std::mem::size_of::<libc::ucred>() {
+            if cmsg_len != size_cmsghdr + size_of::<libc::ucred>() {
                 return 0;
             }
             // struct ucred { pid(4), uid(4), gid(4) }: patch uid/gid only.
@@ -1341,7 +1341,7 @@ fn handle_chroot_exit(tracee: &mut Tracee, config: &Config, from_sigsys: bool) -
     if !from_sigsys {
         let input = peek_reg(tracee, RegVersion::Original, Reg::Sysarg1);
         if read_path(tracee, &mut path_guest, input) < 0 {
-            return -crate::path::errno();
+            return -crate::sys::errno();
         }
     }
 
@@ -1400,9 +1400,9 @@ fn handle_chroot_exit(tracee: &mut Tracee, config: &Config, from_sigsys: bool) -
     if from_sigsys { -libc::ENOSYS } else { 0 }
 }
 
-/* ================================================================== */
-/* Sysexit machinery                                                   */
-/* ================================================================== */
+// ==================================================================
+// Sysexit machinery
+// ==================================================================
 
 /// `offsetof_stat_uid()`/`offsetof_stat_gid()` — stat layout by ABI.
 fn offsetof_stat_uid(tracee: &Tracee) -> usize {
@@ -1425,8 +1425,8 @@ fn offsetof_stat_gid(tracee: &Tracee) -> usize {
 fn poke_mem_id(tracee: &mut Tracee, sysarg: Reg, field: u32) -> i32 {
     let addr = peek_reg(tracee, RegVersion::Original, sysarg);
     crate::tracee::mem::poke_uint32(tracee, addr, field);
-    if crate::path::errno() != 0 {
-        return -crate::path::errno();
+    if crate::sys::errno() != 0 {
+        return -crate::sys::errno();
     }
     0
 }
@@ -1560,9 +1560,9 @@ fn handle_perm_err_exit(tracee: &mut Tracee, config: &Config, even_if_not_root: 
     0
 }
 
-/* ================================================================== */
-/* set*id emulation (SETXID/SETREXID/SETRESXID/SETFSXID)               */
-/* ================================================================== */
+// ==================================================================
+// set*id emulation (SETXID/SETREXID/SETRESXID/SETFSXID)
+// ==================================================================
 
 const UNSET: u64 = u32::MAX as u64;
 
@@ -1725,9 +1725,9 @@ fn setfsxid(tracee: &mut Tracee, config: &mut Config, which: u8) -> i32 {
     0
 }
 
-/* ================================================================== */
-/* stat exit (USERLAND)                                                */
-/* ================================================================== */
+// ==================================================================
+// stat exit (USERLAND)
+// ==================================================================
 
 /// `handle_stat_exit_end()` (USERLAND variant).
 fn handle_stat_exit(tracee: &mut Tracee, config: &Config, sysnum: Sysnum) -> i32 {
@@ -1796,9 +1796,9 @@ fn handle_stat_exit(tracee: &mut Tracee, config: &Config, sysnum: Sysnum) -> i32
     0
 }
 
-/* ================================================================== */
-/* Non-USERLAND handlers                                               */
-/* ================================================================== */
+// ==================================================================
+// Non-USERLAND handlers
+// ==================================================================
 
 /// `handle_chown_enter_end()` (non-USERLAND) — swap the emulated ids in
 /// chown arguments back to the real ones so the kernel accepts the call.
@@ -1892,9 +1892,9 @@ fn handle_openat_dup_fd(tracee: &mut Tracee, config: &Config) -> i32 {
     0
 }
 
-/* ================================================================== */
-/* Enter/exit dispatch                                                 */
-/* ================================================================== */
+// ==================================================================
+// Enter/exit dispatch
+// ==================================================================
 
 fn handle_sysenter_end(tracee: &mut Tracee, config: &mut Config) -> i32 {
     let sysnum = get_sysnum(tracee, RegVersion::Original);
@@ -2426,9 +2426,9 @@ fn handle_sysexit_start(tracee: &mut Tracee, config: &mut Config) -> i32 {
     0
 }
 
-/* ================================================================== */
-/* Extension trait                                                     */
-/* ================================================================== */
+// ==================================================================
+// Extension trait
+// ==================================================================
 
 impl FakeId0 {
     pub fn callback(&mut self, tracee: &mut Tracee, event: &mut Event) -> i32 {
@@ -2488,7 +2488,7 @@ impl FakeId0 {
                 let o = CString::new(old_meta.as_bytes()).unwrap();
                 let n = CString::new(new_meta.as_bytes()).unwrap();
                 if crate::sys::rename(&o, &n) < 0 {
-                    return -crate::path::errno();
+                    return -crate::sys::errno();
                 }
                 0
             }
@@ -2503,7 +2503,7 @@ impl FakeId0 {
                 }
                 let c = CString::new(meta.as_bytes()).unwrap();
                 if crate::sys::unlink(&c) < 0 {
-                    return -crate::path::errno();
+                    return -crate::sys::errno();
                 }
                 0
             }

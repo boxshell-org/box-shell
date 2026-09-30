@@ -25,10 +25,6 @@
 //! [Termux PRoot 5.1.0](https://github.com/termux/proot) — validated
 //! by running its integration suite against this binary.
 
-// The crate exposes the full PRoot API surface ahead of its consumers; much
-// of it is exercised only once the event loop and CLI land.
-#![allow(dead_code)]
-
 pub mod arch;
 pub mod cli;
 pub mod execve;
@@ -54,8 +50,3 @@ pub const NAME_MAX: usize = 255;
 
 /// Guest-visible mount point of the host rootfs in QEMU/mixed mode.
 pub const HOST_ROOTFS: &str = "/host-rootfs";
-
-/// `strerror()` — human-readable errno text.
-pub fn strerror(errno: i32) -> String {
-    crate::sys::strerror(errno)
-}

@@ -9,7 +9,7 @@ use crate::tracee::mem::{alloc_mem, peek_int32, poke_int32, read_data, write_dat
 
 const OFFSETOF_PATH: usize = std::mem::offset_of!(libc::sockaddr_un, sun_path);
 const SIZEOF_PATH: usize = 108; // sizeof(sun_path)
-const SIZEOF_SOCKADDR_UN: usize = std::mem::size_of::<libc::sockaddr_un>();
+const SIZEOF_SOCKADDR_UN: usize = size_of::<libc::sockaddr_un>();
 
 /// `read_sockaddr_un()` — copy the sockaddr_un at @address out of the
 /// tracee; 1 if it's a named AF_UNIX socket, 0 if not applicable,
