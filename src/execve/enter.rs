@@ -141,7 +141,11 @@ fn add_interp(
 /// `extract_load_info()` — fill `load_info` (mappings, interp, stack flags)
 /// from its `host_path` ELF file.
 fn extract_load_info(tracee: &mut Tracee, load_info: &mut LoadInfo) -> i32 {
-    let (fd, header) = match open_elf(load_info.host_path.as_bytes()) {
+    let c = match std::ffi::CString::new(load_info.host_path.as_str()) {
+        Ok(c) => c,
+        Err(_) => return -libc::EINVAL,
+    };
+    let (fd, header) = match open_elf(&c) {
         Ok(x) => x,
         Err(e) => return e,
     };
@@ -224,7 +228,7 @@ fn expand_runner(tracee: &mut Tracee, host_path: &mut FixedPath, user_path: &mut
         Err(e) => return e,
     };
 
-    if !is_host_elf(tracee, host_path.as_bytes()) {
+    if !is_host_elf(tracee, host_path) {
         if std::env::var_os("PROOT_USE_LOADER_FOR_QEMU").is_none() {
             tracee.skip_proot_loader = true;
         }
@@ -272,7 +276,7 @@ fn expand_runner(tracee: &mut Tracee, host_path: &mut FixedPath, user_path: &mut
         }
     }
 
-    let status = rebuild_host_ldso_paths(tracee, host_path.as_bytes(), &mut envp);
+    let status = rebuild_host_ldso_paths(tracee, host_path, &mut envp);
     if status < 0 {
         return status;
     }

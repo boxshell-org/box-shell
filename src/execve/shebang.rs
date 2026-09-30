@@ -47,9 +47,8 @@ pub fn translate_and_check_exec(
 type Shebang = Result<Option<(Vec<u8>, Vec<u8>)>, i32>;
 
 /// `extract_shebang()` — read the `#!interpreter [arg]` line of `host_path`.
-fn extract_shebang(host_path: &[u8]) -> Shebang {
-    let c = std::ffi::CString::new(host_path).map_err(|_| -libc::EINVAL)?;
-    let fd = crate::sys::open(&c, libc::O_RDONLY, 0);
+fn extract_shebang(host_path: &FixedPath) -> Shebang {
+    let fd = crate::sys::open(host_path.as_c_str(), libc::O_RDONLY, 0);
     if fd < 0 {
         return Err(-crate::sys::errno());
     }
@@ -193,7 +192,7 @@ pub fn expand_shebang(
         }
         let old_user_path = user_path.as_bytes().to_vec();
 
-        match extract_shebang(host_path.as_bytes())? {
+        match extract_shebang(host_path)? {
             None => {
                 no_more = true;
                 break;

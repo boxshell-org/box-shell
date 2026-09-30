@@ -305,12 +305,12 @@ fn read_ldso_rpaths(
 /// `/host-rootfs` when QEMU is active, else directly).
 pub fn rebuild_host_ldso_paths(
     tracee: &mut Tracee,
-    host_path: &[u8],
+    host_path: &crate::fpath::FixedPath,
     envp: &mut XPointerArray,
 ) -> i32 {
     static INITIAL_LDSO_PATHS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-    let (fd, elf_header) = match open_elf(host_path) {
+    let (fd, elf_header) = match open_elf(host_path.as_c_str()) {
         Ok(x) => x,
         Err(e) => return e,
     };

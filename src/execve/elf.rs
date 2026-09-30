@@ -287,9 +287,8 @@ pub fn known_phentsize(header: &ElfHeader, size: u64) -> bool {
 
 /// `open_elf()` — open `t_path` and read+validate its ELF header.  On success
 /// returns Ok((fd, header)); the fd is left open at offset 0.
-pub fn open_elf(t_path: &[u8]) -> Result<(RawFd, ElfHeader), i32> {
-    let c = std::ffi::CString::new(t_path).map_err(|_| -libc::EINVAL)?;
-    let fd = crate::sys::open(&c, libc::O_RDONLY, 0);
+pub fn open_elf(t_path: &std::ffi::CStr) -> Result<(RawFd, ElfHeader), i32> {
+    let fd = crate::sys::open(t_path, libc::O_RDONLY, 0);
     if fd < 0 {
         return Err(-crate::sys::errno());
     }
@@ -316,14 +315,14 @@ pub fn open_elf(t_path: &[u8]) -> Result<(RawFd, ElfHeader), i32> {
 
 /// `is_host_elf()` — whether `t_path` is an ELF for the *host* machine
 /// (relevant under QEMU mixed mode).
-pub fn is_host_elf(tracee: &Tracee, t_path: &[u8]) -> bool {
+pub fn is_host_elf(tracee: &Tracee, t_path: &crate::fpath::FixedPath) -> bool {
     static FORCE_FOREIGN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let force_foreign =
         *FORCE_FOREIGN.get_or_init(|| std::env::var_os("PROOT_FORCE_FOREIGN_BINARY").is_some());
     if force_foreign || tracee.qemu.is_none() {
         return false;
     }
-    match open_elf(t_path) {
+    match open_elf(t_path.as_c_str()) {
         Ok((fd, ehdr)) => {
             crate::sys::close(fd);
             if crate::arch::HOST_ELF_MACHINE.contains(&ehdr.e_machine()) {
@@ -331,7 +330,7 @@ pub fn is_host_elf(tracee: &Tracee, t_path: &[u8]) -> bool {
                     Some(tracee),
                     1,
                     "'{}' is a host ELF",
-                    String::from_utf8_lossy(t_path)
+                    String::from_utf8_lossy(t_path.as_bytes())
                 );
                 true
             } else {

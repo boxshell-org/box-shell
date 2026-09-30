@@ -765,7 +765,7 @@ fn check_architecture(tracee: &mut Tracee) {
     {
         return;
     }
-    if let Ok((fd, ehdr)) = crate::execve::elf::open_elf(path.as_bytes()) {
+    if let Ok((fd, ehdr)) = crate::execve::elf::open_elf(path.as_c_str()) {
         crate::sys::close(fd);
         if !ehdr.is_class64() || size_of::<Word>() == 8 {
             return;
