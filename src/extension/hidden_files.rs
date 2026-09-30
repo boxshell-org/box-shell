@@ -112,3 +112,120 @@ static FILTERED_SYSNUMS: &[(Sysnum, Word)] = &[
     (Sysnum::getdents, FILTER_SYSEXIT),
     (Sysnum::getdents64, FILTER_SYSEXIT),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{Arena, TempDir, fork_child, test_tracee, use_arena_stack};
+    use crate::tracee::reg::{save_current_regs, set_sysnum};
+
+    /// linux_dirent64: ino(8) off(8) reclen(2) type(1) name\0 (8-aligned).
+    fn dirent64(name: &[u8]) -> Vec<u8> {
+        let reclen = (19 + name.len() + 1 + 7) & !7;
+        let mut d = vec![0u8; reclen];
+        d[16..18].copy_from_slice(&(reclen as u16).to_ne_bytes());
+        d[18] = libc::DT_REG;
+        d[19..19 + name.len()].copy_from_slice(name);
+        d
+    }
+
+    /// A tracee whose fd `fd` is a directory inside the guest rootfs.
+    fn dir_tracee(td: &TempDir, arena: &Arena) -> Option<(Tracee, i32, crate::testutil::Child)> {
+        // The child inherits this fd; its /proc/<pid>/fd/N resolves into
+        // the guest rootfs (the root is `td` itself).
+        let f = std::fs::File::open(td.path()).ok()?;
+        use std::os::unix::io::AsRawFd;
+        let fd = f.as_raw_fd();
+        let child = fork_child(arena)?;
+        std::mem::forget(f); // keep the fd open in the parent too
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.pid = child.pid;
+        use_arena_stack(&mut t, arena);
+        Some((t, fd, child))
+    }
+
+    fn arm_getdents(t: &mut Tracee, buf: Word, res: usize, fd: i32, count: usize) {
+        set_sysnum(t, Sysnum::getdents64);
+        poke_reg(t, Reg::Sysarg1, fd as Word);
+        poke_reg(t, Reg::Sysarg2, buf);
+        poke_reg(t, Reg::Sysarg3, count as Word);
+        poke_reg(t, Reg::SysargResult, res as Word);
+        save_current_regs(t, RegVersion::Original);
+    }
+
+    #[test]
+    fn getdents_filters_hidden_entries() {
+        let td = TempDir::new("hf");
+        let arena = Arena::new(1);
+        let Some((mut t, fd, _child)) = dir_tracee(&td, &arena) else {
+            return;
+        };
+        // Buffer: [".proot-meta" hidden]["visible"]["."][..].
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&dirent64(b".proot-meta-x"));
+        buf.extend_from_slice(&dirent64(b"visible"));
+        buf.extend_from_slice(&dirent64(b"."));
+        let res = buf.len();
+        arena.local()[0x800..0x800 + res].copy_from_slice(&buf);
+        arm_getdents(&mut t, arena.addr() + 0x800, res, fd, res);
+        assert_eq!(handle_getdents(&mut t), 0);
+        // Result shrunk to the two surviving entries.
+        let new_res = peek_reg(&t, RegVersion::Current, Reg::SysargResult) as usize;
+        assert_eq!(new_res, dirent64(b"visible").len() + dirent64(b".").len());
+        // Survivor names present, hidden name gone.
+        let out = &arena.local()[0x800..0x800 + res];
+        let names: Vec<&[u8]> = {
+            let mut v = Vec::new();
+            let mut p = 0usize;
+            while p + 19 <= new_res {
+                let rl = u16::from_ne_bytes([out[p + 16], out[p + 17]]) as usize;
+                if rl < 19 || p + rl > res {
+                    break;
+                }
+                let n = &out[p + 19..p + rl];
+                v.push(&n[..n.iter().position(|&b| b == 0).unwrap_or(n.len())]);
+                p += rl;
+            }
+            v
+        };
+        assert!(names.contains(&b"visible".as_ref()));
+        assert!(names.contains(&b".".as_ref()));
+        assert!(!names.iter().any(|n| n.starts_with(b".proot")));
+    }
+
+    #[test]
+    fn getdents_all_hidden_chains_again() {
+        let td = TempDir::new("hf");
+        let arena = Arena::new(1);
+        let Some((mut t, fd, _child)) = dir_tracee(&td, &arena) else {
+            return;
+        };
+        let buf = dirent64(b".proot-only");
+        let res = buf.len();
+        arena.local()[0x800..0x800 + res].copy_from_slice(&buf);
+        arm_getdents(&mut t, arena.addr() + 0x800, res, fd, res);
+        assert_eq!(handle_getdents(&mut t), 0);
+        // All hidden -> a follow-up getdents64 was chained.
+        let chained = t.chain.syscalls.as_ref().expect("chained syscall");
+        assert_eq!(chained.len(), 1);
+        assert_eq!(chained[0].sysnum, Sysnum::getdents64);
+    }
+
+    #[test]
+    fn getdents_unrelated_syscall_and_empty_result() {
+        let td = TempDir::new("hf");
+        let arena = Arena::new(1);
+        let Some((mut t, fd, _child)) = dir_tracee(&td, &arena) else {
+            return;
+        };
+        // Non-getdents syscall -> no-op.
+        arm_getdents(&mut t, arena.addr() + 0x800, 10, fd, 10);
+        set_sysnum(&mut t, Sysnum::open);
+        save_current_regs(&mut t, RegVersion::Original);
+        assert_eq!(handle_getdents(&mut t), 0);
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::SysargResult), 10);
+        // getdents64 with 0 result -> no-op.
+        arm_getdents(&mut t, arena.addr() + 0x800, 0, fd, 0);
+        assert_eq!(handle_getdents(&mut t), 0);
+    }
+}

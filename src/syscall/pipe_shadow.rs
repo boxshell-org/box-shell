@@ -174,3 +174,100 @@ pub fn set_timer(enabled: bool) {
     }
     TIMER_ARMED.with(|a| a.set(enabled));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::io::AsRawFd;
+
+    fn pipe_pair() -> (std::fs::File, std::fs::File) {
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        unsafe {
+            (
+                std::fs::File::from_raw_fd(fds[0]),
+                std::fs::File::from_raw_fd(fds[1]),
+            )
+        }
+    }
+
+    use std::os::unix::io::FromRawFd;
+
+    #[test]
+    fn shadow_holds_read_end_until_hup() {
+        let (r, w) = pipe_pair();
+        let pid = std::process::id() as i32;
+        shadow_pipe_read_end(pid, r.as_raw_fd());
+        assert!(held());
+        // Writer still open: reap must not drop the shadow.
+        // (LAST_REAP starts at 0 -> elapsed is huge, so first reap runs.)
+        reap();
+        assert!(held());
+        // Close the writer -> POLLHUP -> next reap releases.  Sleep past
+        // the 25ms reap interval so the second reap isn't throttled.
+        drop(w);
+        std::thread::sleep(std::time::Duration::from_millis(
+            SHADOW_REAP_INTERVAL_MS as u64 + 10,
+        ));
+        reap();
+        assert!(!held());
+        drop(r);
+    }
+
+    #[test]
+    fn non_pipe_fds_ignored() {
+        let pid = std::process::id() as i32;
+        // Regular file fd.
+        let f = std::fs::File::open("/dev/null").unwrap();
+        shadow_pipe_read_end(pid, f.as_raw_fd());
+        assert!(!held());
+        // Pipe WRITE end (not a read fd).
+        let (r, w) = pipe_pair();
+        shadow_pipe_read_end(pid, w.as_raw_fd());
+        assert!(!held());
+        drop((r, w, f));
+        // Bogus pid/fd.
+        shadow_pipe_read_end(-1, 999);
+        assert!(!held());
+    }
+
+    #[test]
+    fn writer_would_block_full_pipe() {
+        let (r, w) = pipe_pair();
+        // Fill the pipe: FIONREAD > capacity - PIPE_BUF when nearly full.
+        let cap = unsafe { libc::fcntl(w.as_raw_fd(), F_GETPIPE_SZ) } as usize;
+        assert!(cap > 0);
+        let chunk = vec![0u8; cap];
+        let n = unsafe {
+            libc::write(
+                w.as_raw_fd(),
+                chunk.as_ptr() as *const libc::c_void,
+                cap - libc::PIPE_BUF + 1,
+            )
+        };
+        assert!(n > 0);
+        assert!(writer_would_block(r.as_raw_fd()));
+        // Drain half -> not blocking.
+        let mut buf = vec![0u8; cap];
+        let _ = unsafe {
+            libc::read(
+                r.as_raw_fd(),
+                buf.as_mut_ptr() as *mut libc::c_void,
+                cap / 2,
+            )
+        };
+        assert!(!writer_would_block(r.as_raw_fd()));
+        // Bad fd -> false.
+        assert!(!writer_would_block(-1));
+        drop((r, w));
+    }
+
+    #[test]
+    fn set_timer_toggles() {
+        // Disarm when never armed is a no-op; arming installs SIGALRM
+        // (harmless: fires once 50ms later, default disposition would kill
+        // the process! So don't actually arm — just verify disarm works.)
+        set_timer(false);
+        assert!(!TIMER_ARMED.with(|a| a.get()));
+    }
+}

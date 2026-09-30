@@ -366,3 +366,54 @@ pub fn handle_ptracee_event(ptracee_rc: &TraceeRef, event: i32) -> bool {
 
     keep_stopped
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wait_clone_filter() {
+        let mut t = Tracee {
+            is_clone: false,
+            ..Default::default()
+        };
+        // No flags -> non-clone matches, clone doesn't.
+        assert!(expected_wait_clone(0, &t));
+        assert!(!expected_wait_clone(libc::__WCLONE as Word, &t));
+        // __WALL matches everything.
+        assert!(expected_wait_clone(libc::__WALL as Word, &t));
+        t.is_clone = true;
+        assert!(!expected_wait_clone(0, &t));
+        assert!(expected_wait_clone(libc::__WCLONE as Word, &t));
+        assert!(expected_wait_clone(libc::__WALL as Word, &t));
+        assert!(expected_wait_clone(
+            (libc::__WCLONE | libc::__WALL) as Word,
+            &t
+        ));
+    }
+
+    #[test]
+    fn remove_zombie_removes_by_pid() {
+        let mut p = Tracee::default();
+        let z1 = TraceeRef::new(std::cell::RefCell::new(Tracee::default()));
+        let z2 = TraceeRef::new(std::cell::RefCell::new(Tracee::default()));
+        z1.borrow_mut().pid = 111;
+        z2.borrow_mut().pid = 222;
+        p.as_ptracer.zombies.push(z1);
+        p.as_ptracer.zombies.push(z2.clone());
+        remove_zombie(&mut p, 111);
+        assert_eq!(p.as_ptracer.zombies.len(), 1);
+        assert_eq!(p.as_ptracer.zombies[0].borrow().pid, 222);
+        // Removing a non-member is a no-op.
+        remove_zombie(&mut p, 999);
+        assert_eq!(p.as_ptracer.zombies.len(), 1);
+    }
+
+    #[test]
+    fn wait_enter_no_ptracees_is_plain() {
+        let mut t = Tracee::default();
+        // No ptracees -> kernel wait proceeds unmodified.
+        assert_eq!(translate_wait_enter(&mut t), 0);
+        assert_eq!(t.as_ptracer.waits_in, WaitsIn::Kernel);
+    }
+}

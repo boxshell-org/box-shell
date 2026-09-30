@@ -134,3 +134,95 @@ pub fn convert_user_regs_struct(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regs_offsets_map_to_64bit_user_area() {
+        // user32.regs[0] (ebx) -> user64 index 5 -> byte offset 5*8.
+        assert_eq!(convert_user_offset(0), 5 * 8);
+        // user32.regs[6] (eax) -> user64 index 10.
+        assert_eq!(convert_user_offset(6 * 4), 10 * 8);
+        // user32.regs[16] (ss) -> user64 index 20.
+        assert_eq!(convert_user_offset(16 * 4), 20 * 8);
+    }
+
+    #[test]
+    fn regs_offsets_reject_unaligned() {
+        assert_eq!(convert_user_offset(1), Word::MAX);
+        assert_eq!(convert_user_offset(2), Word::MAX);
+        assert_eq!(convert_user_offset(3), Word::MAX);
+        assert_eq!(convert_user_offset(65), Word::MAX); // inside regs range, unaligned
+    }
+
+    #[test]
+    fn unsupported_regions_return_max() {
+        // fpvalid, tsize, comm, magic ... all report "not supported".
+        for off in [
+            USER32_FPVALID_OFFSET,
+            USER32_TSIZE_OFFSET,
+            USER32_DSIZE_OFFSET,
+            USER32_SSIZE_OFFSET,
+            USER32_START_CODE_OFFSET,
+            USER32_START_STACK_OFFSET,
+            USER32_SIGNAL_OFFSET,
+            USER32_COMM_OFFSET,
+            USER32_COMM_OFFSET + 16,
+            USER32_MAGIC_OFFSET,
+        ] {
+            assert_eq!(
+                convert_user_offset(off as Word),
+                Word::MAX,
+                "offset {off:#x}"
+            );
+        }
+        // Totally out of range.
+        assert_eq!(convert_user_offset(0xFFFF), Word::MAX);
+    }
+
+    #[test]
+    fn debugreg_offsets_widen_to_64bit_slots() {
+        for i in 0..8usize {
+            let off32 = USER32_DEBUGREG_OFFSET + i * 4;
+            let want = (DEBUGREG64_OFFSET + i * 8) as Word;
+            assert_eq!(convert_user_offset(off32 as Word), want, "dr{i}");
+        }
+    }
+
+    #[test]
+    fn regs_struct_roundtrip() {
+        let mut r64 = [0u64; 27];
+        for (i, v) in r64.iter_mut().enumerate() {
+            *v = 0x1000 + i as u64;
+        }
+        let mut r32 = [0u32; USER32_NB_REGS];
+        convert_user_regs_struct(false, &mut r64, &mut r32);
+        // ebx (index32=0) got user64[5].
+        assert_eq!(r32[0], (0x1000 + 5) as u32);
+        assert_eq!(r32[6], (0x1000 + 10) as u32); // eax
+        // Reverse restores the same slots.
+        let mut r64b = [0u64; 27];
+        convert_user_regs_struct(true, &mut r64b, &mut r32);
+        for i in 0..USER32_NB_REGS {
+            let j = convert_user_regs_index(i);
+            assert_eq!(r64b[j], r64[j], "slot32 {i} -> slot64 {j}");
+        }
+        // Untouched 64-bit slots stay zero.
+        assert_eq!(r64b[0], 0);
+        assert_eq!(r64b[6], 0);
+    }
+
+    #[test]
+    fn layout_constants_match_user32() {
+        // The 32-bit user-area layout: regs, fpvalid, i387, then scalars.
+        assert_eq!(USER32_REGS_SIZE, 17 * 4);
+        assert_eq!(USER32_FPVALID_OFFSET, 68);
+        assert_eq!(USER32_I387_OFFSET, 72);
+        assert_eq!(USER32_I387_SIZE, 108);
+        assert_eq!(USER32_TSIZE_OFFSET, 180);
+        assert_eq!(USER32_DEBUGREG_OFFSET, 252); // comm ends at 252
+        assert_eq!(USER32_DEBUGREG_SIZE, 32);
+    }
+}

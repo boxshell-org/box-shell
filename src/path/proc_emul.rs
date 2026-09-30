@@ -189,3 +189,197 @@ fn atoi(bytes: &[u8]) -> i32 {
     }
     v as i32
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{TempDir, test_tracee};
+
+    #[test]
+    fn atoi_parses_c_style() {
+        assert_eq!(atoi(b"123"), 123);
+        assert_eq!(atoi(b"  42"), 42);
+        assert_eq!(atoi(b"\t7x"), 7);
+        assert_eq!(atoi(b"-15"), -15);
+        assert_eq!(atoi(b"+9"), 9);
+        assert_eq!(atoi(b""), 0);
+        assert_eq!(atoi(b"abc"), 0);
+        assert_eq!(atoi(b"12abc"), 12);
+        assert_eq!(atoi(b"-"), 0);
+    }
+
+    fn tracee(pid: i32) -> Tracee {
+        let mut t = test_tracee("/", &[]);
+        t.pid = pid;
+        t
+    }
+
+    #[test]
+    fn proc_self_component_substitutes_pid() {
+        let t = tracee(4242);
+        let mut out = FixedPath::new();
+        let a = readlink_proc(
+            &t,
+            &mut out,
+            &FixedPath::from_bytes(b"/proc"),
+            b"self",
+            Comparison::PathsAreEqual,
+        )
+        .unwrap();
+        assert_eq!(a, Action::Canonicalize);
+        assert_eq!(out.as_bytes(), b"/proc/4242");
+        // Any other component of /proc is uninteresting.
+        let mut out = FixedPath::new();
+        let a = readlink_proc(
+            &t,
+            &mut out,
+            &FixedPath::from_bytes(b"/proc"),
+            b"1",
+            Comparison::PathsAreEqual,
+        )
+        .unwrap();
+        assert_eq!(a, Action::Default);
+        // Non-/proc bases are uninteresting.
+        let mut out = FixedPath::new();
+        let a = readlink_proc(
+            &t,
+            &mut out,
+            &FixedPath::from_bytes(b"/etc"),
+            b"self",
+            Comparison::PathsAreNotComparable,
+        )
+        .unwrap();
+        assert_eq!(a, Action::Default);
+        assert_eq!(out.as_bytes(), b"");
+    }
+
+    #[test]
+    fn proc_pid_links_substitute_tracee_fields() {
+        let td = TempDir::new("proc");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.pid = 7777;
+        t.exe = Some(std::rc::Rc::from("/guest/exe"));
+        t.fs.borrow_mut().cwd.set(b"/work/dir");
+        let base = FixedPath::from_bytes(b"/proc/7777");
+
+        let mut out = FixedPath::new();
+        let a = readlink_proc(&t, &mut out, &base, b"exe", Comparison::Path1IsPrefix).unwrap();
+        assert_eq!(a, Action::Canonicalize);
+        assert_eq!(out.as_bytes(), b"/guest/exe");
+
+        let mut out = FixedPath::new();
+        readlink_proc(&t, &mut out, &base, b"cwd", Comparison::Path1IsPrefix).unwrap();
+        assert_eq!(out.as_bytes(), b"/work/dir");
+
+        // root yields the host path of the guest root binding.
+        let mut out = FixedPath::new();
+        readlink_proc(&t, &mut out, &base, b"root", Comparison::Path1IsPrefix).unwrap();
+        assert_eq!(out.as_bytes(), td.abs(".").as_slice());
+
+        // Unknown link name under /proc/<pid> is Default.
+        let mut out = FixedPath::new();
+        let a = readlink_proc(&t, &mut out, &base, b"maps", Comparison::Path1IsPrefix).unwrap();
+        assert_eq!(a, Action::Default);
+    }
+
+    #[test]
+    fn proc_pid_of_other_tracee_via_registry() {
+        // get_tracee misses for unknown pids -> Default.
+        let t = tracee(1);
+        let base = FixedPath::from_bytes(b"/proc/999999");
+        let mut out = FixedPath::new();
+        let a = readlink_proc(&t, &mut out, &base, b"exe", Comparison::Path1IsPrefix).unwrap();
+        assert_eq!(a, Action::Default);
+    }
+
+    #[test]
+    fn proc_self_normalizes_then_resolves() {
+        // "/proc/self/cwd" must behave like "/proc/<pid>/cwd".
+        let mut t = test_tracee("/", &[]);
+        t.pid = std::process::id() as i32;
+        t.fs.borrow_mut().cwd.set(b"/selfy");
+        let base = FixedPath::from_bytes(b"/proc/self");
+        let mut out = FixedPath::new();
+        let a = readlink_proc(&t, &mut out, &base, b"cwd", Comparison::Path1IsPrefix).unwrap();
+        assert_eq!(a, Action::Canonicalize);
+        assert_eq!(out.as_bytes(), b"/selfy");
+    }
+
+    #[test]
+    fn proc_fd_entries_dont_canonicalize() {
+        let t = tracee(1234);
+        let base = FixedPath::from_bytes(b"/proc/1234/fd");
+        let mut out = FixedPath::new();
+        let a = readlink_proc(&t, &mut out, &base, b"3", Comparison::Path1IsPrefix).unwrap();
+        assert_eq!(a, Action::DontCanonicalize);
+        assert_eq!(out.as_bytes(), b"/proc/1234/fd/3");
+        // Non-numeric fd is rejected.
+        let mut out = FixedPath::new();
+        assert_eq!(
+            readlink_proc(&t, &mut out, &base, b"bogus", Comparison::Path1IsPrefix),
+            Err(-libc::EPERM)
+        );
+        let mut out = FixedPath::new();
+        assert_eq!(
+            readlink_proc(&t, &mut out, &base, b"", Comparison::Path1IsPrefix),
+            Err(-libc::EPERM)
+        );
+    }
+
+    #[test]
+    fn proc_bogus_pid_is_default() {
+        let t = tracee(1);
+        // "abc" doesn't parse to a pid.
+        let mut out = FixedPath::new();
+        let a = readlink_proc(
+            &t,
+            &mut out,
+            &FixedPath::from_bytes(b"/proc/abc"),
+            b"exe",
+            Comparison::Path1IsPrefix,
+        )
+        .unwrap();
+        assert_eq!(a, Action::Default);
+        // pid 0 parsed but kernel would never have it.
+        let mut out = FixedPath::new();
+        let a = readlink_proc(
+            &t,
+            &mut out,
+            &FixedPath::from_bytes(b"/proc/0"),
+            b"exe",
+            Comparison::Path1IsPrefix,
+        )
+        .unwrap();
+        assert_eq!(a, Action::Default);
+    }
+
+    #[test]
+    fn readlink_proc2_dispatches_on_referer() {
+        let mut t = test_tracee("/", &[]);
+        t.pid = 31337;
+        t.exe = Some(std::rc::Rc::from("/real/exe"));
+        let mut out = FixedPath::new();
+        let n = readlink_proc2(&t, &mut out, &FixedPath::from_bytes(b"/proc/31337/exe")).unwrap();
+        assert_eq!(n, "/real/exe".len());
+        assert_eq!(out.as_bytes(), b"/real/exe");
+        // cwd path: base "/proc/31337", component "cwd" (fs.cwd empty).
+        let t2 = t;
+        // (reuse t; fs.cwd is "/" from test_tracee)
+        let mut out = FixedPath::new();
+        readlink_proc2(&t2, &mut out, &FixedPath::from_bytes(b"/proc/31337/cwd")).unwrap();
+        assert_eq!(out.as_bytes(), b"/");
+        // Deep non-fd path -> 0.
+        let mut out = FixedPath::new();
+        assert_eq!(
+            readlink_proc2(&t2, &mut out, &FixedPath::from_bytes(b"/proc/31337/task/9")).unwrap(),
+            0
+        );
+        // Referer at the top level ("/proc/x") has no component below a
+        // pid dir -> still emulates through the pid-link table.
+        let mut out = FixedPath::new();
+        assert_eq!(
+            readlink_proc2(&t2, &mut out, &FixedPath::from_bytes(b"/proc/self")).unwrap(),
+            0
+        );
+    }
+}

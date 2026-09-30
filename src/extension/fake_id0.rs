@@ -2631,3 +2631,161 @@ static FILTERED_SYSNUMS: &[(Sysnum, Word)] = &[
     (Sysnum::statfs64, FSE),
     (Sysnum::sendmsg, 0),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::TempDir;
+
+    #[test]
+    fn dtoo_otod_roundtrip() {
+        assert_eq!(dtoo(0o755), 755);
+        assert_eq!(dtoo(0o644), 644);
+        assert_eq!(dtoo(0o777), 777);
+        assert_eq!(dtoo(0), 0);
+        assert_eq!(otod(755), 0o755);
+        assert_eq!(otod(644), 0o644);
+        assert_eq!(otod(0), 0);
+        for m in [0o1, 0o644, 0o755, 0o777, 0o4755, 0o1777] {
+            assert_eq!(otod(dtoo(m)), m, "roundtrip {m:o}");
+        }
+    }
+
+    #[test]
+    fn get_name_last_component() {
+        assert_eq!(get_name(b"/a/b/c"), b"c");
+        assert_eq!(get_name(b"/a"), b"a");
+        assert_eq!(get_name(b"file"), b"file");
+        assert_eq!(get_name(b"/a/b/"), b"");
+        assert_eq!(get_name(b"/"), b"");
+        assert_eq!(get_name(b""), b"");
+    }
+
+    #[test]
+    fn get_dir_path_strips_last() {
+        assert_eq!(get_dir_path(b"/a/b/c"), b"/a/b");
+        assert_eq!(get_dir_path(b"/a"), b"/");
+        // Trailing slashes skipped before stripping.
+        assert_eq!(get_dir_path(b"/a/b//"), b"/a");
+        // Single-component and tiny paths return themselves (C parity).
+        assert_eq!(get_dir_path(b"/"), b"/");
+        assert_eq!(get_dir_path(b""), b"");
+        assert_eq!(get_dir_path(b"x"), b"x");
+    }
+
+    #[test]
+    fn get_meta_path_inserts_tag() {
+        let mut m = FixedPath::new();
+        get_meta_path(b"/d/f", &mut m).unwrap();
+        assert_eq!(m.as_bytes(), b"/d/.proot-meta-file.f");
+        // Root-level file.
+        get_meta_path(b"/f", &mut m).unwrap();
+        assert_eq!(m.as_bytes(), b"/.proot-meta-file.f");
+    }
+
+    #[test]
+    fn meta_file_roundtrip() {
+        let td = TempDir::new("meta");
+        let meta = FixedPath::from_bytes(format!("{}/m", td.path().display()).as_bytes());
+        let cfg = Config::default();
+        // Round trip: write "750 1000 100" and read it back.
+        write_meta_file(&meta, 0o750, 1000, 100, false, &cfg).unwrap();
+        let (mode, owner, group) = read_meta_file(&meta, &cfg);
+        assert_eq!((mode, owner, group), (0o750, 1000, 100));
+    }
+
+    #[test]
+    fn meta_file_creat_applies_umask() {
+        let td = TempDir::new("meta");
+        let meta = FixedPath::from_bytes(format!("{}/m", td.path().display()).as_bytes());
+        let cfg = Config {
+            umask: 0o027,
+            ..Default::default()
+        };
+        // 0o777 & !0o027 = 0o750.
+        write_meta_file(&meta, 0o777, 1, 1, true, &cfg).unwrap();
+        assert_eq!(read_meta_file(&meta, &cfg).0, 0o750);
+    }
+
+    #[test]
+    fn meta_file_defaults_when_absent() {
+        let td = TempDir::new("meta");
+        let meta = FixedPath::from_bytes(format!("{}/absent", td.path().display()).as_bytes());
+        let cfg = Config {
+            euid: 1000,
+            egid: 2000,
+            ..Default::default()
+        };
+        let (mode, owner, group) = read_meta_file(&meta, &cfg);
+        assert_eq!((mode, owner, group), (0o755, 1000, 2000));
+    }
+
+    #[test]
+    fn meta_file_partial_parse() {
+        let td = TempDir::new("meta");
+        // Truncated meta file — missing fields stay at C defaults.
+        td.file("m", b"640\n");
+        let meta = FixedPath::from_bytes(format!("{}/m", td.path().display()).as_bytes());
+        let (mode, owner, group) = read_meta_file(&meta, &Config::default());
+        assert_eq!(mode, 0o640);
+        assert_eq!((owner, group), (0, 0));
+    }
+
+    #[test]
+    fn permissions_root_always_rw() {
+        let td = TempDir::new("meta");
+        td.file("m", b"000\n9999\n9999\n");
+        let meta = FixedPath::from_bytes(format!("{}/m", td.path().display()).as_bytes());
+        let cfg = Config {
+            euid: 0,
+            egid: 0,
+            ..Default::default()
+        };
+        // Owner=9999, but emulated uid 0 -> class 0 then |6.
+        let p = get_permissions(&meta, &cfg, false).unwrap();
+        assert_eq!(p, 6); // mode 000 shifted to class -> 0, then |6
+    }
+
+    #[test]
+    fn permissions_class_selection() {
+        let td = TempDir::new("meta");
+        // mode 764 (owner 7, group 6, other 4), owner 100, group 50.
+        td.file("m", b"764\n100\n50\n");
+        let meta = FixedPath::from_bytes(format!("{}/m", td.path().display()).as_bytes());
+        // Emulated uid==owner -> owner class digit 7.
+        let cfg = Config {
+            euid: 100,
+            egid: 1,
+            ..Default::default()
+        };
+        assert_eq!(get_permissions(&meta, &cfg, false).unwrap() & 7, 7);
+        // uid!=owner, gid==group -> group class digit 6.
+        let cfg = Config {
+            euid: 101,
+            egid: 50,
+            ..Default::default()
+        };
+        assert_eq!(get_permissions(&meta, &cfg, false).unwrap() & 7, 6);
+        // Neither -> other class digit 4.
+        let cfg = Config {
+            euid: 101,
+            egid: 51,
+            ..Default::default()
+        };
+        assert_eq!(get_permissions(&meta, &cfg, false).unwrap() & 7, 4);
+    }
+
+    #[test]
+    fn config_of_finds_fake_id0() {
+        let mut t = crate::tracee::Tracee::default();
+        assert!(config_of(&t).is_none());
+        let _ = crate::extension::initialize_extension(
+            &mut t,
+            crate::extension::AnyExtension::FakeId0(Default::default()),
+            "0:0",
+        );
+        let c = config_of(&t).unwrap();
+        assert_eq!(c.euid, 0);
+        assert_eq!(c.umask, 0o22);
+    }
+}

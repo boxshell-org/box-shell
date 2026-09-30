@@ -288,3 +288,224 @@ pub fn basename_component(path: &[u8]) -> &[u8] {
     }
     &path[start..end]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{TempDir, test_tracee};
+
+    fn components(path: &str) -> Vec<(Vec<u8>, Finality)> {
+        let mut cursor: &[u8] = path.as_bytes();
+        let mut out = Vec::new();
+        loop {
+            match next_component(&mut cursor) {
+                Ok((c, f)) => {
+                    let done = f.is_final();
+                    out.push((c.to_vec(), f));
+                    if done {
+                        break;
+                    }
+                }
+                Err(e) => panic!("next_component({path:?}) -> {e}"),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn next_component_splits_and_marks_finality() {
+        assert_eq!(
+            components("/a/b/c"),
+            vec![
+                (b"a".to_vec(), Finality::NotFinal),
+                (b"b".to_vec(), Finality::NotFinal),
+                (b"c".to_vec(), Finality::Normal),
+            ]
+        );
+        // Trailing slash => Slash finality on the last component.
+        assert_eq!(
+            components("/a/b/"),
+            vec![
+                (b"a".to_vec(), Finality::NotFinal),
+                (b"b".to_vec(), Finality::Slash),
+            ]
+        );
+        // Repeated separators collapse.
+        assert_eq!(
+            components("//a///b"),
+            vec![
+                (b"a".to_vec(), Finality::NotFinal),
+                (b"b".to_vec(), Finality::Normal),
+            ]
+        );
+        // Root alone yields an empty, Normal-final component.
+        assert_eq!(components("/"), vec![(b"".to_vec(), Finality::Normal)]);
+        assert_eq!(components(""), vec![(b"".to_vec(), Finality::Normal)]);
+    }
+
+    #[test]
+    fn next_component_rejects_overlong_names() {
+        let long = vec![b'x'; NAME_MAX];
+        let mut cursor: &[u8] = &long;
+        assert_eq!(next_component(&mut cursor), Err(-libc::ENAMETOOLONG));
+        let ok = vec![b'x'; NAME_MAX - 1];
+        let mut cursor: &[u8] = &ok;
+        assert!(next_component(&mut cursor).is_ok());
+    }
+
+    #[test]
+    fn basename_component_extracts_last() {
+        assert_eq!(basename_component(b"/a/b/c"), b"c");
+        assert_eq!(basename_component(b"/a/b/c/"), b"c");
+        assert_eq!(basename_component(b"/"), b"");
+        assert_eq!(basename_component(b"/a"), b"a");
+        assert_eq!(basename_component(b"rel/file"), b"file");
+        assert_eq!(basename_component(b""), b"");
+        assert_eq!(basename_component(b"//"), b"");
+    }
+
+    /// Canonicalize `user_path` in a tracee rooted at `td`.
+    fn canon(t: &mut Tracee, user: &str) -> Result<Vec<u8>, i32> {
+        let mut out = FixedPath::new();
+        canonicalize(t, user.as_bytes(), true, &mut out, 0).map(|()| out.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn canonicalize_basic_and_dotdot() {
+        let td = TempDir::new("canon");
+        td.dir("a/b");
+        td.file("a/f", b"");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        // Guest "/" maps to the fixture root; canonicalize emits guest paths.
+        assert_eq!(canon(&mut t, "/a/b"), Ok(b"/a/b".to_vec()));
+        assert_eq!(canon(&mut t, "/a/b/../../a/f"), Ok(b"/a/f".to_vec()));
+        // .. at root clamps to root.
+        assert_eq!(canon(&mut t, "/../.."), Ok(b"/".to_vec()));
+        assert_eq!(canon(&mut t, "/a/./b"), Ok(b"/a/b".to_vec()));
+        assert_eq!(canon(&mut t, "/"), Ok(b"/".to_vec()));
+    }
+
+    #[test]
+    fn canonicalize_allows_missing_final() {
+        let td = TempDir::new("canon");
+        td.dir("a");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        // A missing *final* component is fine (like realpath -m).
+        assert_eq!(canon(&mut t, "/a/nope"), Ok(b"/a/nope".to_vec()));
+        // A missing intermediate is ENOENT.
+        assert_eq!(canon(&mut t, "/nope/deeper"), Err(-libc::ENOENT));
+    }
+
+    #[test]
+    fn canonicalize_enotdir_for_file_prefix() {
+        let td = TempDir::new("canon");
+        td.file("f", b"x");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        assert_eq!(canon(&mut t, "/f/sub"), Err(-libc::ENOTDIR));
+    }
+
+    #[test]
+    fn canonicalize_symlink_absolute_within_root() {
+        let td = TempDir::new("canon");
+        td.dir("real");
+        td.file("real/f", b"x");
+        // Absolute symlink targets are interpreted inside the guest root.
+        td.symlink("/real", "link");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        assert_eq!(canon(&mut t, "/link/f"), Ok(b"/real/f".to_vec()));
+    }
+
+    #[test]
+    fn canonicalize_symlink_relative() {
+        let td = TempDir::new("canon");
+        td.dir("a");
+        td.dir("b");
+        td.file("b/f", b"x");
+        td.symlink("../b/f", "a/link");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        assert_eq!(canon(&mut t, "/a/link"), Ok(b"/b/f".to_vec()));
+    }
+
+    #[test]
+    fn canonicalize_symlink_cannot_escape_root() {
+        let td = TempDir::new("canon");
+        td.dir("in/deep");
+        // Exists only inside the guest rootfs — the host has no
+        // /etc/proot-test-marker, so resolution must be guest-contained.
+        td.file("etc/proot-test-marker", b"x");
+        // Relative escape attempt climbing above the guest root.
+        td.symlink("../../../etc/proot-test-marker", "in/deep/esc");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        assert_eq!(
+            canon(&mut t, "/in/deep/esc"),
+            Ok(b"/etc/proot-test-marker".to_vec())
+        );
+    }
+
+    #[test]
+    fn canonicalize_symlink_loop() {
+        let td = TempDir::new("canon");
+        td.symlink("/x", "x");
+        td.symlink("/x", "y"); // /x -> /x forever
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        assert_eq!(canon(&mut t, "/x"), Err(-libc::ELOOP));
+    }
+
+    #[test]
+    fn canonicalize_deref_final_flag() {
+        let td = TempDir::new("canon");
+        td.file("real", b"x");
+        td.symlink("real", "lnk");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        // deref_final = false keeps the final link literal.
+        let mut out = FixedPath::new();
+        canonicalize(&mut t, b"/lnk", false, &mut out, 0).unwrap();
+        assert_eq!(out.as_bytes(), b"/lnk");
+        // Intermediate links are always dereferenced.
+        td.symlink("real", "dir/../lnk2");
+        let mut out = FixedPath::new();
+        canonicalize(&mut t, b"/lnk2", false, &mut out, 0).unwrap();
+        assert_eq!(out.as_bytes(), b"/lnk2");
+    }
+
+    #[test]
+    fn canonicalize_trailing_slash_and_dot_finality() {
+        let td = TempDir::new("canon");
+        td.dir("d");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        assert_eq!(canon(&mut t, "/d/"), Ok(b"/d/".to_vec()));
+        assert_eq!(canon(&mut t, "/d/."), Ok(b"/d/.".to_vec()));
+    }
+
+    #[test]
+    fn canonicalize_relative_rejects_without_base() {
+        let td = TempDir::new("canon");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        // Relative user_path with an empty guest_path seed -> EINVAL.
+        let mut out = FixedPath::new();
+        assert_eq!(
+            canonicalize(&mut t, b"rel", true, &mut out, 0),
+            Err(-libc::EINVAL)
+        );
+    }
+
+    #[test]
+    fn canonicalize_relative_uses_seeded_base() {
+        let td = TempDir::new("canon");
+        td.dir("base/sub");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        let mut out = FixedPath::from_bytes(b"/base");
+        canonicalize(&mut t, b"sub", true, &mut out, 0).unwrap();
+        assert_eq!(out.as_bytes(), b"/base/sub");
+    }
+
+    #[test]
+    fn canonicalize_glue_for_missing_dir_component() {
+        // During binding init (glue_type set), a missing intermediate
+        // directory under a *bound* prefix doesn't fail — the glue layer
+        // fakes it.  Covered here at the boundary: glue_type=0 must fail.
+        let td = TempDir::new("canon");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        assert_eq!(canon(&mut t, "/gone/deeper"), Err(-libc::ENOENT));
+    }
+}

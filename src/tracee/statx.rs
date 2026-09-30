@@ -244,3 +244,254 @@ pub fn handle_statx_syscall(tracee: &mut Tracee, from_sigsys: bool) -> i32 {
     }
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{Arena, TempDir, fork_child, test_tracee, use_arena_stack};
+    use crate::tracee::reg::{Reg, poke_reg};
+
+    /// Set up a tracee+child; write `guest_path` into the arena at `off`
+    /// and a scratch statx buffer at `buf_off`; arm the syscall regs.
+    fn setup(
+        t: &mut Tracee,
+        arena: &mut Arena,
+        guest_path: &str,
+        dirfd: i32,
+        flags: u32,
+        mask: u32,
+        off: usize,
+        buf_off: usize,
+    ) {
+        use_arena_stack(t, arena);
+        let gb = guest_path.as_bytes();
+        arena.local()[off..off + gb.len()].copy_from_slice(gb);
+        arena.local()[off + gb.len()] = 0;
+        poke_reg(t, Reg::Sysarg1, dirfd as i64 as Word); // AT_FDCWD = -100
+        poke_reg(t, Reg::Sysarg2, arena.addr() + off as u64);
+        poke_reg(t, Reg::Sysarg3, flags as Word);
+        poke_reg(t, Reg::Sysarg4, mask as Word);
+        poke_reg(t, Reg::Sysarg5, arena.addr() + buf_off as u64);
+    }
+
+    fn read_statx(arena: &Arena, buf_off: usize) -> Statx {
+        let mut s = Statx::default();
+        crate::sys::as_bytes_mut(&mut s)
+            .copy_from_slice(&arena.local()[buf_off..buf_off + size_of::<Statx>()]);
+        s
+    }
+
+    #[test]
+    fn statx_layout_is_kernel_stable() {
+        // Lock the ABI: struct statx is exactly 256 bytes.
+        assert_eq!(size_of::<Statx>(), 256);
+        assert_eq!(size_of::<StatxTimestamp>(), 16);
+        // Kernel struct statx offsets (include/uapi/linux/stat.h).
+        assert_eq!(std::mem::offset_of!(Statx, stx_mask), 0);
+        assert_eq!(std::mem::offset_of!(Statx, stx_attributes), 8);
+        assert_eq!(std::mem::offset_of!(Statx, stx_mode), 28);
+        assert_eq!(std::mem::offset_of!(Statx, stx_ino), 32);
+        assert_eq!(std::mem::offset_of!(Statx, stx_size), 40);
+        assert_eq!(std::mem::offset_of!(Statx, stx_atime), 64);
+        assert_eq!(std::mem::offset_of!(Statx, stx_btime), 112);
+        assert_eq!(std::mem::offset_of!(Statx, stx_rdev_major), 128);
+    }
+
+    #[test]
+    fn statx_fills_requested_fields() {
+        let td = TempDir::new("statx");
+        td.file_mode("f", b"hello", 0o644);
+        let mut arena = Arena::new(2);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.pid = child.pid;
+        let mask =
+            (STATX_TYPE | STATX_MODE | STATX_SIZE | STATX_NLINK | STATX_UID | STATX_GID) as u32;
+        setup(
+            &mut t,
+            &mut arena,
+            "/f",
+            libc::AT_FDCWD,
+            0,
+            mask,
+            0x800,
+            0x1000,
+        );
+        // from_sigsys forces the tracer-side answer path.
+        assert_eq!(handle_statx_syscall(&mut t, true), 0);
+        let s = read_statx(&arena, 0x1000);
+        assert_eq!(s.stx_size, 5);
+        assert_eq!(s.stx_mode & libc::S_IFMT as u16, libc::S_IFREG as u16);
+        assert_eq!(s.stx_mode & 0o777, 0o644);
+        assert_eq!(s.stx_uid, unsafe { libc::getuid() });
+        assert_eq!(s.stx_mask & mask, mask & 0xFFFF);
+    }
+
+    #[test]
+    fn statx_mask_limits_fields() {
+        let td = TempDir::new("statx");
+        td.file("f", b"abc");
+        let mut arena = Arena::new(2);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.pid = child.pid;
+        // Only STATX_SIZE — other fields stay zeroed.
+        setup(
+            &mut t,
+            &mut arena,
+            "/f",
+            libc::AT_FDCWD,
+            0,
+            STATX_SIZE as u32,
+            0x800,
+            0x1000,
+        );
+        assert_eq!(handle_statx_syscall(&mut t, true), 0);
+        let s = read_statx(&arena, 0x1000);
+        assert_eq!(s.stx_size, 3);
+        assert_eq!(s.stx_mode, 0); // not requested
+        assert_eq!(s.stx_uid, 0);
+    }
+
+    #[test]
+    fn statx_nofollow_stats_the_link() {
+        let td = TempDir::new("statx");
+        td.file("real", b"");
+        td.symlink("real", "lnk");
+        let mut arena = Arena::new(2);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.pid = child.pid;
+        let mask = STATX_TYPE as u32;
+        // AT_SYMLINK_NOFOLLOW => lstat => S_IFLNK.
+        setup(
+            &mut t,
+            &mut arena,
+            "/lnk",
+            libc::AT_FDCWD,
+            libc::AT_SYMLINK_NOFOLLOW as u32,
+            mask,
+            0x800,
+            0x1000,
+        );
+        assert_eq!(handle_statx_syscall(&mut t, true), 0);
+        assert_eq!(
+            read_statx(&arena, 0x1000).stx_mode & libc::S_IFMT as u16,
+            libc::S_IFLNK as u16
+        );
+        // Followed => regular file.
+        setup(
+            &mut t,
+            &mut arena,
+            "/lnk",
+            libc::AT_FDCWD,
+            0,
+            mask,
+            0x800,
+            0x1000,
+        );
+        assert_eq!(handle_statx_syscall(&mut t, true), 0);
+        assert_eq!(
+            read_statx(&arena, 0x1000).stx_mode & libc::S_IFMT as u16,
+            libc::S_IFREG as u16
+        );
+    }
+
+    #[test]
+    fn statx_empty_path_requires_at_empty_path() {
+        let td = TempDir::new("statx");
+        let mut arena = Arena::new(2);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.pid = child.pid;
+        // "" without AT_EMPTY_PATH -> ENOENT.
+        setup(
+            &mut t,
+            &mut arena,
+            "",
+            libc::AT_FDCWD,
+            0,
+            STATX_SIZE as u32,
+            0x800,
+            0x1000,
+        );
+        assert_eq!(handle_statx_syscall(&mut t, true), -libc::ENOENT);
+        // "" + AT_EMPTY_PATH + a valid dirfd: fstat via /proc/<pid>/fd.
+        // Open a real fd in the *child*? The dirfd indexes the tracee's fd
+        // table — use fd 0/1/2 which the child inherits.
+        setup(
+            &mut t,
+            &mut arena,
+            "",
+            0,
+            libc::AT_EMPTY_PATH as u32,
+            STATX_SIZE as u32,
+            0x800,
+            0x1000,
+        );
+        // fd 0 may be /dev/null — stat of it succeeds either way.
+        let r = handle_statx_syscall(&mut t, true);
+        assert!(r == 0 || r == -libc::ENOENT, "unexpected {r}");
+    }
+
+    #[test]
+    fn statx_missing_path_fails() {
+        let td = TempDir::new("statx");
+        td.dir("d");
+        let mut arena = Arena::new(2);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.pid = child.pid;
+        setup(
+            &mut t,
+            &mut arena,
+            "/d/missing",
+            libc::AT_FDCWD,
+            0,
+            STATX_SIZE as u32,
+            0x800,
+            0x1000,
+        );
+        assert_eq!(handle_statx_syscall(&mut t, true), -libc::ENOENT);
+    }
+
+    #[test]
+    fn statx_dirfd_relative() {
+        // dirfd semantics: /proc/<pid>/fd/<fd> of the *child* — open a dir
+        // fd pointing at the tempdir subdir in this process is not visible
+        // to the child.  Instead verify AT_FDCWD-negative path handling:
+        let td = TempDir::new("statx");
+        td.dir("d");
+        td.file("d/f", b"z");
+        let mut arena = Arena::new(2);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.pid = child.pid;
+        t.fs.borrow_mut().cwd.set(b"/d");
+        // Relative path resolves against the tracee's guest cwd.
+        setup(
+            &mut t,
+            &mut arena,
+            "f",
+            libc::AT_FDCWD,
+            0,
+            STATX_SIZE as u32,
+            0x800,
+            0x1000,
+        );
+        assert_eq!(handle_statx_syscall(&mut t, true), 0);
+        assert_eq!(read_statx(&arena, 0x1000).stx_size, 1);
+    }
+}

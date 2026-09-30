@@ -1179,3 +1179,124 @@ impl Link2symlink {
         Self::default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::TempDir;
+
+    #[test]
+    fn base_name_splits() {
+        assert_eq!(base_name(b"/a/b/c"), b"c");
+        assert_eq!(base_name(b"naked"), b"naked");
+        assert_eq!(base_name(b"/"), b"");
+    }
+
+    #[test]
+    fn is_l2s_file_shape() {
+        // "<PREFIX><name>.<NNNN>" — four trailing digits after a dot.
+        assert!(is_l2s_file(b"/x/.l2s.foo.0002"));
+        assert!(is_l2s_file(b"/x/.l2s.a.1234"));
+        assert!(!is_l2s_file(b"/x/.l2s.foo")); // no .NNNN
+        assert!(!is_l2s_file(b"/x/.l2s.foo.12")); // too few digits
+        assert!(!is_l2s_file(b"/x/.l2s.foo.123a")); // not all digits
+        assert!(!is_l2s_file(b"/x/other.0002")); // no prefix
+    }
+
+    #[test]
+    fn l2s_entry_outside_dir_returns_plain_path() {
+        // Without PROOT_L2S_DIR the dir is unset -> (-1, path).
+        let (fd, name) = l2s_entry(b"/some/path").unwrap();
+        assert_eq!(fd, -1);
+        assert_eq!(name, b"/some/path");
+    }
+
+    #[test]
+    fn l2s_ops_on_plain_paths() {
+        // With no l2s dir configured, ops run on the path itself.
+        let td = TempDir::new("l2s");
+        td.file("a", b"x");
+        let a = td.abs("a");
+        assert_eq!(l2s_access(&a), 0);
+        // symlink + my_readlink round trip.
+        let l = td
+            .path()
+            .join("l")
+            .to_string_lossy()
+            .into_owned()
+            .into_bytes();
+        assert_eq!(l2s_symlink(&a, &l), 0);
+        let mut buf = [0u8; PATH_MAX];
+        assert_eq!(my_readlink(&l, &mut buf), 0);
+        assert_eq!(&buf[..a.len()], a.as_slice());
+        // unlink removes it.
+        assert_eq!(l2s_unlink(&l), 0);
+        assert_eq!(l2s_access(&l), -libc::ENOENT);
+        // rename works on plain paths.
+        let b = td
+            .path()
+            .join("b")
+            .to_string_lossy()
+            .into_owned()
+            .into_bytes();
+        assert_eq!(l2s_rename(&a, &b), 0);
+        assert_eq!(l2s_access(&a), -libc::ENOENT);
+        assert_eq!(l2s_access(&b), 0);
+    }
+
+    #[test]
+    fn resolve_faked_hard_link_chain() {
+        // link -> intermediate (".l2s.name.NNNN") -> final.
+        let td = TempDir::new("l2s");
+        td.file("final", b"data");
+        let dir = td.path().display().to_string();
+        let inter = format!("{}/.l2s.final.0001", dir);
+        std::os::unix::fs::symlink(format!("{}/final", dir), &inter).unwrap();
+        let link = format!("{}/user_link", dir);
+        std::os::unix::fs::symlink(&inter, &link).unwrap();
+        let r = resolve_faked_hard_link(link.as_bytes()).unwrap();
+        // readlink(intermediate) yields the final path bytes.
+        assert_eq!(r, format!("{}/final", dir).as_bytes());
+        // A link NOT pointing at a ".l2s.*" intermediate -> EINVAL.
+        td.file("plain", b"");
+        std::os::unix::fs::symlink(format!("{}/plain", dir), format!("{}/lnk2", dir)).unwrap();
+        let lnk2 = format!("{}/lnk2", dir);
+        assert_eq!(resolve_faked_hard_link(lnk2.as_bytes()), Err(-libc::EINVAL));
+    }
+
+    #[test]
+    fn fd_cache_remember_recall() {
+        // Same (pid, fd) replaces; other pid's same-fd is fallback only.
+        remember_fd(100, 3, b"/link/a");
+        remember_fd(100, 4, b"/link/b");
+        remember_fd(200, 3, b"/link/c");
+        assert_eq!(recall_fd(100, 3).unwrap(), b"/link/a");
+        assert_eq!(recall_fd(100, 4).unwrap(), b"/link/b");
+        // pid 300 fd 3 -> falls back to a sibling entry.
+        assert_eq!(recall_fd(300, 3).unwrap(), b"/link/c");
+        assert!(recall_fd(100, 99).is_none());
+    }
+
+    #[test]
+    fn remember_dereferenced_link_shape() {
+        let mut c = L2sConfig::default();
+        // referee not an l2s name -> not remembered.
+        remember_dereferenced_link(&mut c, b"/x/link", b"/x/ordinary");
+        assert!(c.dereferenced_link.is_empty());
+        // referee ".l2s.name.0001" where name == link name + ".NNNN"
+        // (the intermediate) -> NOT the link itself; remembered.
+        remember_dereferenced_link(&mut c, b"/x/mylink", b"/x/.l2s.mylink.0001");
+        assert_eq!(c.dereferenced_link.as_bytes(), b"/x/mylink");
+        // Referee ".l2s.name" (no count) still an l2s member -> remembered.
+        let mut c = L2sConfig::default();
+        remember_dereferenced_link(&mut c, b"/x/l", b"/x/.l2s.other.0001");
+        assert_eq!(c.dereferenced_link.as_bytes(), b"/x/l");
+    }
+
+    #[test]
+    fn sprintf_counted_names() {
+        // Appends %04d directly to the path (C sprintf "%s%04d").
+        assert_eq!(sprintf_counted(b"/dir/file", 7), b"/dir/file0007");
+        assert_eq!(sprintf_counted(b"/dir/file", 12345), b"/dir/file12345");
+    }
+}

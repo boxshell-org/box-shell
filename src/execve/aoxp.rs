@@ -230,3 +230,240 @@ pub fn push_array_of_xpointers(tracee: &mut Tracee, array: &mut XPointerArray, r
     poke_reg(tracee, reg, base);
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_env_name_matches_prefix_with_eq() {
+        assert!(is_env_name(b"PATH=/bin\0", "PATH"));
+        assert!(is_env_name(b"HOME=/u\0", "HOME"));
+        assert!(!is_env_name(b"PATHS=/x\0", "PATH")); // longer name
+        assert!(!is_env_name(b"PAT=/x\0", "PATH"));
+        assert!(!is_env_name(b"PATH\0", "PATH")); // no '='
+        assert!(!is_env_name(b"\0", "PATH"));
+        assert!(!is_env_name(b"", "PATH"));
+        assert!(is_env_name(b"A=\0", "A")); // minimal
+        assert!(!is_env_name(b"A\0", "A")); // '=' required
+    }
+
+    #[test]
+    fn write_xpointee_ensures_nul() {
+        let mut a = XPointerArray::default();
+        a.entries.push(XPointer {
+            remote: 9,
+            local: None,
+        });
+        write_xpointee_string(&mut a, 0, b"hi");
+        assert_eq!(a.entries[0].local.as_deref(), Some(b"hi\0".as_slice()));
+        // Already-terminated input isn't double-terminated.
+        write_xpointee_string(&mut a, 0, b"bye\0");
+        assert_eq!(a.entries[0].local.as_deref(), Some(b"bye\0".as_slice()));
+    }
+
+    #[test]
+    fn write_xpointees_writes_consecutive() {
+        let mut a = XPointerArray::default();
+        for _ in 0..3 {
+            a.entries.push(XPointer {
+                remote: 0,
+                local: None,
+            });
+        }
+        write_xpointees(&mut a, 1, &[b"x", b"y\0"]);
+        assert!(a.entries[0].local.is_none());
+        assert_eq!(a.entries[1].local.as_deref(), Some(b"x\0".as_slice()));
+        assert_eq!(a.entries[2].local.as_deref(), Some(b"y\0".as_slice()));
+    }
+
+    #[test]
+    fn resize_inserts_and_removes() {
+        let mut a = XPointerArray::default();
+        for i in 0..3u64 {
+            a.entries.push(XPointer {
+                remote: i + 1,
+                local: None,
+            });
+        }
+        // Insert two slots at index 1.
+        assert_eq!(resize_array_of_xpointers(&mut a, 1, 2), 0);
+        assert_eq!(a.entries.len(), 5);
+        assert_eq!(a.entries[1].remote, 0);
+        assert_eq!(a.entries[2].remote, 0);
+        assert_eq!(a.entries[3].remote, 2);
+        // Remove them back.
+        assert_eq!(resize_array_of_xpointers(&mut a, 1, -2), 0);
+        assert_eq!(a.entries.len(), 3);
+        assert_eq!(a.entries[1].remote, 2);
+        // Removing zero is fine.
+        assert_eq!(resize_array_of_xpointers(&mut a, 0, 0), 0);
+    }
+
+    // ---- remote-memory paths (forked child) ----
+
+    use crate::testutil::{Arena, fork_child};
+
+    /// Build a remote argv-like table: `words` pointer values written at
+    /// `addr` in the child's arena.
+    fn write_remote_table(arena: &mut Arena, addr: u64, words: &[u64]) {
+        let base = (addr - arena.addr()) as usize;
+        for (i, w) in words.iter().enumerate() {
+            arena.local()[base + i * 8..base + i * 8 + 8].copy_from_slice(&w.to_ne_bytes());
+        }
+    }
+
+    fn put_str(arena: &mut Arena, off: usize, s: &[u8]) -> u64 {
+        arena.local()[off..off + s.len()].copy_from_slice(s);
+        arena.local()[off + s.len()] = 0;
+        arena.addr() + off as u64
+    }
+
+    #[test]
+    fn fetch_array_reads_until_null() {
+        let mut arena = Arena::new(2);
+        let s1 = put_str(&mut arena, 0x800, b"one");
+        let s2 = put_str(&mut arena, 0x900, b"two");
+        let table = arena.addr();
+        write_remote_table(&mut arena, table, &[s1, s2, 0]);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = child.tracee();
+        poke_reg(&mut t, Reg::Sysarg1, table);
+        let a = fetch_array_of_xpointers(&t, Reg::Sysarg1, 0).unwrap();
+        assert_eq!(a.entries.len(), 3); // includes the NULL terminator
+        assert_eq!(a.entries[0].remote, s1);
+        assert_eq!(a.entries[1].remote, s2);
+        assert_eq!(a.entries[2].remote, 0);
+    }
+
+    #[test]
+    fn fetch_array_bounded_count() {
+        let mut arena = Arena::new(2);
+        let table = arena.addr();
+        write_remote_table(&mut arena, table, &[0x11, 0x22, 0x33, 0]);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = child.tracee();
+        poke_reg(&mut t, Reg::Sysarg1, table);
+        let a = fetch_array_of_xpointers(&t, Reg::Sysarg1, 2).unwrap();
+        assert_eq!(a.entries.len(), 2);
+        assert_eq!(a.entries[1].remote, 0x22);
+    }
+
+    #[test]
+    fn fetch_array_fails_on_unreadable() {
+        let mut arena = Arena::new(2);
+        let table = arena.addr() + 4096; // page 1
+        write_remote_table(&mut arena, table, &[0x11, 0]);
+        let Some(mut child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = child.tracee();
+        poke_reg(&mut t, Reg::Sysarg1, table);
+        child.protect_page(1);
+        assert!(fetch_array_of_xpointers(&t, Reg::Sysarg1, 0).is_err());
+        child.unprotect_page(1);
+    }
+
+    #[test]
+    fn read_xpointee_caches_local_copy() {
+        let mut arena = Arena::new(2);
+        let s = put_str(&mut arena, 0x800, b"payload");
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let t = child.tracee();
+        let mut a = XPointerArray::default();
+        a.entries.push(XPointer {
+            remote: s,
+            local: None,
+        });
+        a.entries.push(XPointer {
+            remote: 0,
+            local: None,
+        });
+        let v = read_xpointee_as_string(&t, &mut a, 0).unwrap().unwrap();
+        assert_eq!(v, b"payload\0");
+        // Second read hits the cache (make remote unreadable — cached).
+        assert_eq!(
+            read_xpointee_as_string(&t, &mut a, 0).unwrap().as_deref(),
+            Some(b"payload\0".as_slice())
+        );
+        // NULL remote -> Ok(None).
+        assert_eq!(read_xpointee_as_string(&t, &mut a, 1).unwrap(), None);
+        // sizeof counts the NUL.
+        assert_eq!(sizeof_xpointee_as_string(&t, &mut a, 0).unwrap(), 8);
+        assert_eq!(sizeof_xpointee_as_string(&t, &mut a, 1).unwrap(), 0);
+    }
+
+    #[test]
+    fn find_xpointee_env_searches() {
+        let mut arena = Arena::new(2);
+        let s1 = put_str(&mut arena, 0x700, b"PATH=/bin");
+        let s2 = put_str(&mut arena, 0x800, b"HOME=/u");
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let t = child.tracee();
+        let mut a = XPointerArray::default();
+        a.entries.push(XPointer {
+            remote: s1,
+            local: None,
+        });
+        a.entries.push(XPointer {
+            remote: s2,
+            local: None,
+        });
+        assert_eq!(find_xpointee_env(&t, &mut a, "HOME").unwrap(), 1);
+        assert_eq!(find_xpointee_env(&t, &mut a, "PATH").unwrap(), 0);
+        // Miss returns entries.len().
+        assert_eq!(find_xpointee_env(&t, &mut a, "MISSING").unwrap(), 2);
+        // compare directly.
+        assert_eq!(compare_xpointee_env(&t, &mut a, 0, "HOME").unwrap(), 0);
+        assert_eq!(compare_xpointee_env(&t, &mut a, 0, "PATH").unwrap(), 1);
+    }
+
+    #[test]
+    fn push_writes_table_and_blobs() {
+        let mut arena = Arena::new(2);
+        let s = put_str(&mut arena, 0x800, b"orig");
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = child.tracee_with_sp(&arena);
+        let mut a = XPointerArray::default();
+        a.entries.push(XPointer {
+            remote: s,
+            local: None,
+        });
+        a.entries.push(XPointer {
+            remote: 0,
+            local: None,
+        });
+        // Nothing modified -> no-op, reg untouched.
+        poke_reg(&mut t, Reg::Sysarg2, 0xABCD);
+        assert_eq!(push_array_of_xpointers(&mut t, &mut a, Reg::Sysarg2), 0);
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::Sysarg2), 0xABCD);
+
+        // Modify entry 0; push must allocate remote memory and write back.
+        write_xpointee_string(&mut a, 0, b"replaced");
+        let sp0 = peek_reg(&t, RegVersion::Current, Reg::StackPointer);
+        assert_eq!(push_array_of_xpointers(&mut t, &mut a, Reg::Sysarg2), 0);
+        let base = peek_reg(&t, RegVersion::Current, Reg::Sysarg2);
+        assert!(base != 0);
+        // SP moved down by table+blob size plus the first-alloc red zone
+        // (alloc_mem adds RED_ZONE_SIZE when sp == original sp).
+        let sp1 = peek_reg(&t, RegVersion::Current, Reg::StackPointer);
+        assert_eq!(sp0 - sp1, (2 * 8 + 9) as u64 + crate::arch::RED_ZONE_SIZE);
+        // Table entry 0 points at the blob, terminator stays 0.
+        let off = (base - arena.addr()) as usize;
+        let p0 = u64::from_ne_bytes(arena.local()[off..off + 8].try_into().unwrap());
+        let p1 = u64::from_ne_bytes(arena.local()[off + 8..off + 16].try_into().unwrap());
+        assert_eq!(p1, 0);
+        let boff = (p0 - arena.addr()) as usize;
+        assert_eq!(&arena.local()[boff..boff + 9], b"replaced\0");
+    }
+}

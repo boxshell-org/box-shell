@@ -68,3 +68,106 @@ pub fn detranslate_sysnum(abi: Abi, sysnum: Sysnum) -> Word {
         .map(|i| i as Word + sysnums.offset)
         .unwrap_or(SYSCALL_AVOIDER)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn x86_64_known_numbers() {
+        // Stable x86_64 syscall numbers.
+        assert_eq!(translate_sysnum(Abi::Default, 0), Sysnum::read);
+        assert_eq!(translate_sysnum(Abi::Default, 1), Sysnum::write);
+        assert_eq!(translate_sysnum(Abi::Default, 2), Sysnum::open);
+        assert_eq!(translate_sysnum(Abi::Default, 60), Sysnum::exit);
+        assert_eq!(translate_sysnum(Abi::Default, 62), Sysnum::kill);
+        assert_eq!(translate_sysnum(Abi::Default, 257), Sysnum::openat);
+    }
+
+    #[test]
+    fn i386_known_numbers() {
+        // i386 numbering differs — the whole point of the table split.
+        assert_eq!(translate_sysnum(Abi::Abi2, 3), Sysnum::read);
+        assert_eq!(translate_sysnum(Abi::Abi2, 4), Sysnum::write);
+        assert_eq!(translate_sysnum(Abi::Abi2, 5), Sysnum::open);
+        assert_eq!(translate_sysnum(Abi::Abi2, 1), Sysnum::exit);
+        assert_eq!(translate_sysnum(Abi::Abi2, 37), Sysnum::kill);
+    }
+
+    #[test]
+    fn x32_uses_offset() {
+        // x32 syscalls carry the 0x40000000 marker bit.
+        assert_eq!(translate_sysnum(Abi::Abi3, 0x4000_0000), Sysnum::read);
+        // A raw 64-bit number without the marker bit is Void in x32 space.
+        assert_eq!(translate_sysnum(Abi::Abi3, 0), Sysnum::Void);
+        // Marker-bit number below the offset.
+        assert_eq!(translate_sysnum(Abi::Abi3, 0x3FFF_FFFF), Sysnum::Void);
+    }
+
+    #[test]
+    fn out_of_range_is_void() {
+        assert_eq!(translate_sysnum(Abi::Default, u64::MAX), Sysnum::Void);
+        assert_eq!(translate_sysnum(Abi::Default, 0xFFFF_FFFF), Sysnum::Void);
+        assert_eq!(translate_sysnum(Abi::Abi2, u64::MAX), Sysnum::Void);
+    }
+
+    #[test]
+    fn roundtrip_x86_64() {
+        // Every mapped x86_64 number must detranslate back to itself.
+        for n in 0..440u64 {
+            let s = translate_sysnum(Abi::Default, n);
+            if s == Sysnum::Void {
+                continue;
+            }
+            assert_eq!(detranslate_sysnum(Abi::Default, s), n, "sysnum {n}");
+        }
+    }
+
+    #[test]
+    fn roundtrip_i386() {
+        for n in 0..440u64 {
+            let s = translate_sysnum(Abi::Abi2, n);
+            if s == Sysnum::Void {
+                continue;
+            }
+            assert_eq!(detranslate_sysnum(Abi::Abi2, s), n, "sysnum {n}");
+        }
+    }
+
+    #[test]
+    fn detranslate_void_is_avoider() {
+        assert_eq!(
+            detranslate_sysnum(Abi::Default, Sysnum::Void),
+            SYSCALL_AVOIDER
+        );
+        assert_eq!(detranslate_sysnum(Abi::Abi2, Sysnum::Void), SYSCALL_AVOIDER);
+        assert_eq!(detranslate_sysnum(Abi::Abi3, Sysnum::Void), SYSCALL_AVOIDER);
+    }
+
+    #[test]
+    fn sysnum_name_is_kernel_name() {
+        assert_eq!(Sysnum::openat.name(), "openat");
+        assert_eq!(Sysnum::read.name(), "read");
+        assert_eq!(Sysnum::Void.name(), "void");
+    }
+
+    #[test]
+    fn detranslate_returns_avoider_for_foreign_only() {
+        // Some syscalls exist on x86_64 but not i386 (e.g. openat2 exists
+        // on both; use one that doesn't: accept4? exists on both. epoll?
+        // Check a property instead: any Sysnum that doesn't detranslate
+        // on Abi2 must yield AVOIDER).
+        for n in 0..440u64 {
+            let s = translate_sysnum(Abi::Default, n);
+            if s == Sysnum::Void {
+                continue;
+            }
+            let back = detranslate_sysnum(Abi::Abi2, s);
+            if back == SYSCALL_AVOIDER {
+                continue; // legitimately missing on i386
+            }
+            // Otherwise must translate back to *some* i386 number.
+            assert_eq!(translate_sysnum(Abi::Abi2, back), s);
+        }
+    }
+}

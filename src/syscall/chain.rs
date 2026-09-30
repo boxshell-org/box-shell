@@ -142,3 +142,123 @@ pub fn restart_current_syscall_as_chained(tracee: &mut Tracee) -> i32 {
     ];
     register_at_front(tracee, get_sysnum(tracee, RegVersion::Current), sysargs)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn t() -> Tracee {
+        let mut t = Tracee::default();
+        // Give it a sane instruction pointer.
+        t.regs[RegVersion::Current.idx()].rip = 0x1000;
+        t
+    }
+
+    #[test]
+    fn chain_starts_inactive() {
+        let t = t();
+        assert!(t.chain.inactive());
+        assert_eq!(t.chain.sysnum_workaround_state, SysnumWorkaround::Inactive);
+    }
+
+    #[test]
+    fn register_creates_queue_and_preserves_fifo() {
+        let mut t = t();
+        assert_eq!(
+            register_chained_syscall(&mut t, Sysnum::read, [1, 0, 0, 0, 0, 0]),
+            0
+        );
+        assert_eq!(
+            register_chained_syscall(&mut t, Sysnum::write, [2, 0, 0, 0, 0, 0]),
+            0
+        );
+        assert!(!t.chain.inactive());
+        assert_eq!(t.chain.syscalls.as_ref().unwrap().len(), 2);
+        assert_eq!(t.chain.syscalls.as_ref().unwrap()[0].sysnum, Sysnum::read);
+        assert_eq!(t.chain.syscalls.as_ref().unwrap()[1].sysnum, Sysnum::write);
+    }
+
+    #[test]
+    fn chain_next_arms_registers_and_rewinds_ip() {
+        let mut t = t();
+        t.regs[RegVersion::Original.idx()].cs = 0x33;
+        t.regs[RegVersion::Current.idx()].cs = 0x33;
+        register_chained_syscall(&mut t, Sysnum::write, [10, 20, 30, 40, 50, 60]);
+        chain_next_syscall(&mut t);
+        let c = RegVersion::Current;
+        assert_eq!(peek_reg(&t, c, Reg::Sysarg1), 10);
+        assert_eq!(peek_reg(&t, c, Reg::Sysarg6), 60);
+        // x86_64 write == 1, delivered via the result register.
+        assert_eq!(peek_reg(&t, c, Reg::SysargResult), 1);
+        // IP stepped back over the syscall instruction.
+        assert_eq!(peek_reg(&t, c, Reg::InstrPointer), 0x1000 - 2);
+        assert!(!t.restore_original_regs);
+        assert_eq!(t.restart_how, crate::ptrace::ptc::PTRACE_SYSCALL);
+    }
+
+    #[test]
+    fn chain_drains_then_forces_result() {
+        let mut t = t();
+        register_chained_syscall(&mut t, Sysnum::read, [0; 6]);
+        force_chain_final_result(&mut t, 0xABCD);
+        chain_next_syscall(&mut t); // pops the only entry
+        assert!(t.chain.syscalls.is_some());
+        chain_next_syscall(&mut t); // drains: queue freed
+        assert!(t.chain.inactive());
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::SysargResult), 0xABCD);
+        assert!(!t.chain.force_final_result);
+        assert_eq!(t.chain.final_result, 0);
+    }
+
+    #[test]
+    fn drain_without_forced_result() {
+        let mut t = t();
+        register_chained_syscall(&mut t, Sysnum::read, [0; 6]);
+        chain_next_syscall(&mut t);
+        // Poke a result the drain must *not* overwrite.
+        poke_reg(&mut t, Reg::SysargResult, 0x7777);
+        chain_next_syscall(&mut t);
+        assert!(t.chain.inactive());
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::SysargResult), 0x7777);
+    }
+
+    #[test]
+    fn restart_original_uses_original_bank() {
+        let mut t = t();
+        let o = RegVersion::Original;
+        t.regs[o.idx()] = t.regs[RegVersion::Current.idx()];
+        poke_reg(&mut t, Reg::Sysarg1, 99); // current differs
+        t.regs[o.idx()].rdi = 7;
+        t.regs[o.idx()].orig_rax = 0; // read
+        assert_eq!(restart_original_syscall(&mut t), 0);
+        let q = t.chain.syscalls.as_ref().unwrap();
+        assert_eq!(q[0].sysnum, Sysnum::read);
+        assert_eq!(q[0].sysargs[0], 7);
+    }
+
+    #[test]
+    fn restart_current_as_chained_goes_to_front() {
+        let mut t = t();
+        register_chained_syscall(&mut t, Sysnum::read, [1, 0, 0, 0, 0, 0]);
+        assert_eq!(restart_current_syscall_as_chained(&mut t), 0);
+        assert_eq!(
+            t.chain.sysnum_workaround_state,
+            SysnumWorkaround::ProcessFaultyCall
+        );
+        let q = t.chain.syscalls.as_ref().unwrap();
+        // Current-sysnum is what the (bogus) regs say; pushed to the front.
+        assert_eq!(q.len(), 2);
+        assert_eq!(q[1].sysnum, Sysnum::read);
+    }
+
+    #[test]
+    fn chain_under_i386_abi_detranslates_number() {
+        let mut t = t();
+        t.regs[RegVersion::Original.idx()].cs = 0x23;
+        t.regs[RegVersion::Current.idx()].cs = 0x23;
+        register_chained_syscall(&mut t, Sysnum::write, [0; 6]);
+        chain_next_syscall(&mut t);
+        // i386 write == 4.
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::SysargResult), 4);
+    }
+}

@@ -361,11 +361,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn new_is_empty_and_terminated() {
+        let p = FixedPath::new();
+        assert_eq!(p.len(), 0);
+        assert!(p.is_empty());
+        assert_eq!(p.as_bytes(), b"");
+        assert_eq!(p.as_c_bytes(), b"\0");
+        assert_eq!(p.as_c_str().to_bytes(), b"");
+    }
+
+    #[test]
+    fn default_matches_new() {
+        assert_eq!(FixedPath::default().as_bytes(), FixedPath::new().as_bytes());
+    }
+
+    #[test]
+    fn from_bytes_sets_content() {
+        let p = FixedPath::from_bytes(b"/a/b");
+        assert_eq!(p.len(), 4);
+        assert_eq!(p.as_bytes(), b"/a/b");
+        assert!(!p.is_empty());
+    }
+
+    #[test]
+    fn from_bytes_truncates_at_nul_and_overlong() {
+        let p = FixedPath::from_bytes(b"/ab\0cd");
+        assert_eq!(p.as_bytes(), b"/ab");
+        // Overlong input silently truncates like strcpy into a bounded buf.
+        let big = vec![b'x'; PATH_MAX + 64];
+        let p = FixedPath::from_bytes(&big);
+        assert_eq!(p.len(), PATH_MAX - 1);
+        assert_eq!(p.as_c_bytes()[PATH_MAX - 1], 0);
+    }
+
+    #[test]
     fn set_truncates_at_nul() {
         let mut p = FixedPath::new();
         p.set(b"/abc\0def");
         assert_eq!(p.as_bytes(), b"/abc");
         assert_eq!(p.as_c_bytes(), b"/abc\0");
+        // set() clears previous content.
+        p.set(b"/");
+        assert_eq!(p.as_bytes(), b"/");
+    }
+
+    #[test]
+    fn set_from_empty_slice_terminates() {
+        let mut p = FixedPath::from_bytes(b"/x");
+        p.set(b"");
+        assert!(p.is_empty());
+        assert_eq!(p.as_c_bytes(), b"\0");
     }
 
     #[test]
@@ -373,6 +418,109 @@ mod tests {
         let mut p = FixedPath::new();
         assert_eq!(p.try_set(&vec![b'x'; PATH_MAX]), Err(-libc::ENAMETOOLONG));
         assert!(p.try_set(&vec![b'x'; PATH_MAX - 1]).is_ok());
+        assert_eq!(p.len(), PATH_MAX - 1);
+        // NUL inside the input is honored before the length check.
+        let mut q = FixedPath::new();
+        let mut src = vec![b'y'; PATH_MAX + 10];
+        src[3] = 0;
+        assert!(q.try_set(&src).is_ok());
+        assert_eq!(q.as_bytes(), b"yyy");
+    }
+
+    #[test]
+    fn as_mut_bytes_exposes_capacity() {
+        let mut p = FixedPath::from_bytes(b"/x");
+        assert_eq!(p.as_mut_bytes().len(), PATH_MAX);
+    }
+
+    #[test]
+    fn set_len_terminated_marks_read_result() {
+        let mut p = FixedPath::from_bytes(b"/tmp");
+        let buf = p.as_mut_bytes();
+        buf[..5].copy_from_slice(b"abcde");
+        p.set_len_terminated(5);
+        assert_eq!(p.as_bytes(), b"abcde");
+        assert_eq!(p.as_c_bytes(), b"abcde\0");
+        // Clamps beyond PATH_MAX-1 so the terminator always fits.
+        p.set_len_terminated(usize::MAX);
+        assert_eq!(p.len(), PATH_MAX - 1);
+        assert_eq!(p.as_bytes().len(), PATH_MAX - 1);
+        assert_eq!(p.as_c_bytes()[PATH_MAX - 1], 0);
+    }
+
+    #[test]
+    fn set_len_terminated_zero() {
+        let mut p = FixedPath::from_bytes(b"/x");
+        p.set_len_terminated(0);
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn sync_len_from_nul_clamps_when_unterminated() {
+        // Buffer full of non-NUL bytes (cannot happen via the public API —
+        // written through as_mut_bytes like a kernel caller would).
+        let mut p = FixedPath::new();
+        p.as_mut_bytes().fill(b'x');
+        p.sync_len_from_nul();
+        assert_eq!(p.len(), PATH_MAX - 1);
+        assert_eq!(p.as_c_bytes()[PATH_MAX - 1], 0);
+        // Normal case: recovers strlen.
+        let mut p = FixedPath::from_bytes(b"/abc");
+        p.sync_len_from_nul();
+        assert_eq!(p.len(), 4);
+        // A stale tail doesn't confuse it.
+        let mut p = FixedPath::from_bytes(b"/abcdef");
+        p.as_mut_bytes()[2] = 0;
+        p.sync_len_from_nul();
+        assert_eq!(p.len(), 2);
+    }
+
+    #[test]
+    fn as_c_str_is_zero_copy() {
+        let p = FixedPath::from_bytes(b"/usr/bin");
+        let c = p.as_c_str();
+        assert_eq!(c.to_bytes(), b"/usr/bin");
+        // Borrowed, not a copy: the pointer addresses the same storage.
+        assert_eq!(c.as_ptr(), p.as_bytes().as_ptr() as *const _);
+    }
+
+    #[test]
+    fn would_overflow_counts_terminator() {
+        let p = FixedPath::from_bytes(b"/abc");
+        assert!(p.would_overflow(PATH_MAX));
+        assert!(p.would_overflow(PATH_MAX - 4)); // 4 + extra + NUL > 4096
+        assert!(!p.would_overflow(PATH_MAX - 5));
+        assert!(!p.would_overflow(0));
+    }
+
+    #[test]
+    fn truncate_shrinks_only() {
+        let mut p = FixedPath::from_bytes(b"/abcdef");
+        p.truncate(3);
+        assert_eq!(p.as_bytes(), b"/ab");
+        assert_eq!(p.as_c_bytes(), b"/ab\0");
+        // No-op for >= len.
+        p.truncate(3);
+        p.truncate(99);
+        assert_eq!(p.as_bytes(), b"/ab");
+    }
+
+    #[test]
+    fn extend_appends_raw() {
+        let mut p = FixedPath::from_bytes(b"/a");
+        p.extend(b"b/c").unwrap();
+        assert_eq!(p.as_bytes(), b"/ab/c");
+        assert_eq!(p.as_c_bytes(), b"/ab/c\0");
+        // Overflow is rejected and leaves the buffer unchanged.
+        let mut p = FixedPath::from_bytes(b"/a");
+        assert_eq!(p.extend(&vec![b'x'; PATH_MAX]), Err(-libc::ENAMETOOLONG));
+        assert_eq!(p.as_bytes(), b"/a");
+        // Boundary: exactly PATH_MAX-1 total fits.
+        let mut p = FixedPath::from_bytes(b"/a");
+        p.extend(&vec![b'x'; PATH_MAX - 3]).unwrap();
+        assert_eq!(p.len(), PATH_MAX - 1);
+        // One more would overflow.
+        assert_eq!(p.extend(b"x"), Err(-libc::ENAMETOOLONG));
     }
 
     #[test]
@@ -390,6 +538,29 @@ mod tests {
     }
 
     #[test]
+    fn push_component_edge_cases() {
+        // Empty path + plain component.
+        let mut p = FixedPath::new();
+        p.push_component(b"a").unwrap();
+        assert_eq!(p.as_bytes(), b"a");
+        // Empty component is a no-op length-wise.
+        let mut p = FixedPath::from_bytes(b"/a");
+        p.push_component(b"").unwrap();
+        assert_eq!(p.as_bytes(), b"/a/");
+        // Component on empty path.
+        let mut p = FixedPath::new();
+        p.push_component(b"/abs").unwrap();
+        assert_eq!(p.as_bytes(), b"/abs");
+        // Root path + component.
+        let mut p = FixedPath::from_bytes(b"/");
+        p.push_component(b"x").unwrap();
+        assert_eq!(p.as_bytes(), b"/x");
+        // Overflow rejected.
+        let mut p = FixedPath::from_bytes(&vec![b'x'; PATH_MAX - 3]);
+        assert_eq!(p.push_component(b"yy"), Err(-libc::ENAMETOOLONG));
+    }
+
+    #[test]
     fn pop_component_drops_last() {
         let mut p = FixedPath::from_bytes(b"/a/b/c");
         p.pop_component();
@@ -399,6 +570,20 @@ mod tests {
         p.pop_component();
         assert_eq!(p.as_bytes(), b"/");
         // Root has no component to pop.
+        p.pop_component();
+        assert_eq!(p.as_bytes(), b"/");
+        // Empty stays empty.
+        let mut p = FixedPath::new();
+        p.pop_component();
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn pop_component_trailing_slashes() {
+        let mut p = FixedPath::from_bytes(b"/a/b//");
+        p.pop_component();
+        assert_eq!(p.as_bytes(), b"/a");
+        let mut p = FixedPath::from_bytes(b"/a/");
         p.pop_component();
         assert_eq!(p.as_bytes(), b"/");
     }
@@ -414,6 +599,21 @@ mod tests {
         let mut p = FixedPath::from_bytes(b"/a/b");
         p.chop_finality();
         assert_eq!(p.as_bytes(), b"/a/b");
+        // Root and empty are stable.
+        let mut p = FixedPath::from_bytes(b"/");
+        p.chop_finality();
+        assert_eq!(p.as_bytes(), b"/");
+        let mut p = FixedPath::new();
+        p.chop_finality();
+        assert!(p.is_empty());
+        // "/." alone collapses to "/".
+        let mut p = FixedPath::from_bytes(b"/.");
+        p.chop_finality();
+        assert_eq!(p.as_bytes(), b"/");
+        // A lone trailing '.' on a 2-byte path.
+        let mut p = FixedPath::from_bytes(b"a.");
+        p.chop_finality();
+        assert_eq!(p.as_bytes(), b"a");
     }
 
     #[test]
@@ -437,26 +637,22 @@ mod tests {
     }
 
     #[test]
-    fn as_c_str_is_zero_copy() {
-        let p = FixedPath::from_bytes(b"/usr/bin");
-        let c = p.as_c_str();
-        assert_eq!(c.to_bytes(), b"/usr/bin");
-        // Borrowed, not a copy: the pointer addresses the same storage.
-        assert_eq!(c.as_ptr(), p.as_bytes().as_ptr() as *const _);
-    }
-
-    #[test]
-    fn set_len_terminated_marks_read_result() {
-        let mut p = FixedPath::from_bytes(b"/tmp");
-        let buf = p.as_mut_bytes();
-        buf[..5].copy_from_slice(b"abcde");
-        p.set_len_terminated(5);
-        assert_eq!(p.as_bytes(), b"abcde");
-        assert_eq!(p.as_c_bytes(), b"abcde\0");
-        // Clamps beyond PATH_MAX-1 so the terminator always fits.
-        p.set_len_terminated(usize::MAX);
-        assert_eq!(p.len(), PATH_MAX - 1);
-        assert_eq!(p.as_bytes().len(), PATH_MAX - 1);
+    fn substitute_prefix_boundaries() {
+        // Equal-length substitution is pure overwrite.
+        let mut p = FixedPath::from_bytes(b"/aaa/x");
+        p.substitute_prefix(4, b"/bbb").unwrap();
+        assert_eq!(p.as_bytes(), b"/bbb/x");
+        // Substitution past the end is reported, buffer untouched.
+        let mut p = FixedPath::from_bytes(b"/old");
+        let newlen = p.substitute_prefix(4, b"/longer/prefix");
+        assert_eq!(newlen.unwrap(), "/longer/prefix".len());
+        assert_eq!(p.as_bytes(), b"/longer/prefix");
+        // Overflow -> ENAMETOOLONG.
+        let mut p = FixedPath::from_bytes(&vec![b'x'; PATH_MAX - 2]);
+        assert_eq!(
+            p.substitute_prefix(1, b"/aaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            Err(-libc::ENAMETOOLONG)
+        );
     }
 
     #[test]
@@ -470,21 +666,44 @@ mod tests {
         assert_eq!(p.as_bytes(), b"");
         p.strip_prefix(0);
         assert_eq!(p.as_bytes(), b"");
+        // n > len empties.
+        let mut p = FixedPath::from_bytes(b"ab");
+        p.strip_prefix(99);
+        assert!(p.is_empty());
+        assert_eq!(p.as_c_bytes(), b"\0");
     }
 
     #[test]
-    fn sync_len_from_nul_clamps_when_unterminated() {
-        // Buffer full of non-NUL bytes (cannot happen via the public API —
-        // written through as_mut_bytes like a kernel caller would).
-        let mut p = FixedPath::new();
-        p.as_mut_bytes().fill(b'x');
-        p.sync_len_from_nul();
-        assert_eq!(p.len(), PATH_MAX - 1);
-        assert_eq!(p.as_c_bytes()[PATH_MAX - 1], 0);
-        // Normal case: recovers strlen.
+    fn display_and_debug_show_lossy() {
+        let p = FixedPath::from_bytes(b"/a/b");
+        assert_eq!(format!("{}", p), "/a/b");
+        assert_eq!(format!("{:?}", p), "/a/b");
+        // Non-UTF8 renders lossy, not a panic.
+        let p = FixedPath::from_bytes(b"/a\xffb");
+        assert!(format!("{}", p).contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn deref_traits() {
+        let p = FixedPath::from_bytes(b"/abc");
+        let s: &[u8] = &p;
+        assert_eq!(s, b"/abc");
+        let s2: &[u8] = p.as_ref();
+        assert_eq!(s2, b"/abc");
         let mut p = FixedPath::from_bytes(b"/abc");
-        p.sync_len_from_nul();
-        assert_eq!(p.len(), 4);
+        p[1] = b'X'; // DerefMut to [u8]
+        assert_eq!(p.as_bytes(), b"/Xbc");
+        p[..2].fill(b'z');
+        assert_eq!(p.as_bytes(), b"zzbc");
+    }
+
+    #[test]
+    fn clone_is_independent() {
+        let p = FixedPath::from_bytes(b"/a");
+        let mut q = p.clone();
+        q.set(b"/b");
+        assert_eq!(p.as_bytes(), b"/a");
+        assert_eq!(q.as_bytes(), b"/b");
     }
 
     #[test]
@@ -500,5 +719,30 @@ mod tests {
         g.set(b"/again");
         assert_eq!(g.as_bytes(), b"/again");
         assert_eq!(g.as_c_bytes(), b"/again\0");
+        // Many guards can coexist (pool is bounded, extras just alloc).
+        let mut gs = Vec::new();
+        for i in 0..32usize {
+            let mut g = PathGuard::new();
+            g.set(format!("/p{i}").as_bytes());
+            gs.push(g);
+        }
+        for (i, g) in gs.iter().enumerate() {
+            assert_eq!(g.as_bytes(), format!("/p{i}").as_bytes());
+        }
+        drop(gs);
+        let mut g = PathGuard::new();
+        g.set(b"/ok");
+        assert_eq!(g.as_bytes(), b"/ok");
+    }
+
+    #[test]
+    fn path_guard_derefs_both_ways() {
+        let mut g = PathGuard::new();
+        g.push_component(b"x").unwrap();
+        let fp: &FixedPath = &g;
+        assert_eq!(fp.as_bytes(), b"x");
+        let fm: &mut FixedPath = &mut g;
+        fm.set(b"/y");
+        assert_eq!(g.as_bytes(), b"/y");
     }
 }

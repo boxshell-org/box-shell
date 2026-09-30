@@ -237,3 +237,139 @@ pub fn expand_shebang(
     }
     Ok(if has_shebang { 1 } else { 0 })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{TempDir, test_tracee};
+
+    fn extract(content: &[u8]) -> Shebang {
+        let td = TempDir::new("shebang");
+        let p = td.file("s", content);
+        let fd = crate::sys::open(
+            std::ffi::CString::new(p.to_str().unwrap())
+                .unwrap()
+                .as_c_str(),
+            libc::O_RDONLY,
+            0,
+        );
+        assert!(fd >= 0);
+        let r = extract_shebang_fd(fd);
+        crate::sys::close(fd);
+        r
+    }
+
+    fn shebang_of(content: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+        extract(content).unwrap()
+    }
+
+    #[test]
+    fn not_a_script() {
+        assert_eq!(shebang_of(b""), None);
+        assert_eq!(shebang_of(b"#"), None);
+        assert_eq!(shebang_of(b"#x/bin/sh\n"), None);
+        assert_eq!(shebang_of(b"\x7fELF...."), None);
+        assert_eq!(
+            shebang_of(b"#!/bin/sh"),
+            Some((b"/bin/sh".to_vec(), Vec::new()))
+        );
+    }
+
+    #[test]
+    fn simple_interpreter() {
+        assert_eq!(
+            shebang_of(b"#!/bin/sh\n"),
+            Some((b"/bin/sh".to_vec(), Vec::new()))
+        );
+        assert_eq!(
+            shebang_of(b"#!/usr/bin/python3\nprint(1)\n"),
+            Some((b"/usr/bin/python3".to_vec(), Vec::new()))
+        );
+    }
+
+    #[test]
+    fn interpreter_with_arg() {
+        assert_eq!(
+            shebang_of(b"#!/bin/sh -x\n"),
+            Some((b"/bin/sh".to_vec(), b"-x".to_vec()))
+        );
+        // Multiple spaces collapse into the argument verbatim.
+        assert_eq!(
+            shebang_of(b"#!/usr/bin/env -S foo -b\n"),
+            Some((b"/usr/bin/env".to_vec(), b"-S foo -b".to_vec()))
+        );
+    }
+
+    #[test]
+    fn leading_blanks_skipped() {
+        assert_eq!(
+            shebang_of(b"#!   /bin/sh\n"),
+            Some((b"/bin/sh".to_vec(), Vec::new()))
+        );
+        assert_eq!(
+            shebang_of(b"#!\t/bin/sh\n"),
+            Some((b"/bin/sh".to_vec(), Vec::new()))
+        );
+    }
+
+    #[test]
+    fn trailing_arg_blanks_stripped() {
+        assert_eq!(
+            shebang_of(b"#!/bin/sh -x   \n"),
+            Some((b"/bin/sh".to_vec(), b"-x".to_vec()))
+        );
+    }
+
+    #[test]
+    fn eof_without_newline() {
+        // No trailing newline at all — still parses at EOF.
+        assert_eq!(
+            shebang_of(b"#!/bin/sh"),
+            Some((b"/bin/sh".to_vec(), Vec::new()))
+        );
+        // C parity quirk: EOF mid-argument drops the partial argument
+        // (shebang.c: `argument[0] = '\0'` on EOF inside the arg slurp).
+        assert_eq!(
+            shebang_of(b"#!/bin/sh -x"),
+            Some((b"/bin/sh".to_vec(), Vec::new()))
+        );
+    }
+
+    #[test]
+    fn degenerate_shebangs() {
+        // "#!" then EOF while skipping blanks -> ENOEXEC.
+        assert_eq!(extract(b"#!"), Err(-libc::ENOEXEC));
+        assert_eq!(extract(b"#!   "), Err(-libc::ENOEXEC));
+        // "#! \n" — the newline ends the interpreter slurp: empty name.
+        assert_eq!(extract(b"#!  \n"), Ok(Some((Vec::new(), Vec::new()))));
+    }
+
+    #[test]
+    fn translate_and_check_exec_paths() {
+        let td = TempDir::new("exec");
+        td.file_mode("x", b"#!/bin/sh\n", 0o755);
+        td.file_mode("nx", b"#!/bin/sh\n", 0o644);
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        let mut h = FixedPath::new();
+        // Executable -> 0.
+        assert_eq!(translate_and_check_exec(&mut t, &mut h, b"/x"), 0);
+        // Missing -> ENOENT.
+        assert_eq!(
+            translate_and_check_exec(&mut t, &mut h, b"/no"),
+            -libc::ENOENT
+        );
+        // Present but not executable -> EACCES.
+        assert_eq!(
+            translate_and_check_exec(&mut t, &mut h, b"/nx"),
+            -libc::EACCES
+        );
+        // Empty -> ENOEXEC.
+        assert_eq!(
+            translate_and_check_exec(&mut t, &mut h, b""),
+            -libc::ENOEXEC
+        );
+        // Directory -> access(X_OK) succeeds on dirs (traversable), so
+        // it passes the exec-check stage just like C (execve fails later).
+        assert_eq!(translate_and_check_exec(&mut t, &mut h, b"/"), 0);
+    }
+}

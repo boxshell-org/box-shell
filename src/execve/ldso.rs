@@ -399,3 +399,144 @@ pub fn rebuild_host_ldso_paths(
     }
     rpath_found as i32
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::execve::elf::*;
+    use crate::testutil::TempDir;
+
+    #[test]
+    fn add_host_ldso_paths_joins_and_prefixes() {
+        let mut v = Vec::new();
+        assert_eq!(add_host_ldso_paths(&mut v, "/lib:/usr/lib"), 0);
+        // Absolute entries get the host-rootfs prefix.
+        let s = String::from_utf8(v.clone()).unwrap();
+        assert_eq!(s, format!("{0}/lib:{0}/usr/lib", HOST_ROOTFS));
+        // Appending keeps ':'-joining.
+        assert_eq!(add_host_ldso_paths(&mut v, "/x"), 0);
+        let s = String::from_utf8(v).unwrap();
+        assert_eq!(s, format!("{0}/lib:{0}/usr/lib:{0}/x", HOST_ROOTFS));
+        // Relative entries get no prefix.
+        let mut v = Vec::new();
+        assert_eq!(add_host_ldso_paths(&mut v, "rel/lib"), 0);
+        assert_eq!(v, b"rel/lib");
+    }
+
+    #[test]
+    fn add_host_ldso_paths_trailing_colon_keeps_empty() {
+        // "a:" produces a trailing empty component, like the C loop.
+        let mut v = Vec::new();
+        assert_eq!(add_host_ldso_paths(&mut v, "/a:"), 0);
+        let s = String::from_utf8(v).unwrap();
+        assert_eq!(s, format!("{0}/a:", HOST_ROOTFS));
+    }
+
+    #[test]
+    fn add_host_ldso_paths_overflow() {
+        let mut v = vec![b'x'; ARG_MAX - 2];
+        assert_eq!(add_host_ldso_paths(&mut v, "/a"), -libc::ENOEXEC);
+    }
+
+    /// Build an ELF64 with a PT_LOAD segment carrying a string table and a
+    /// PT_DYNAMIC segment listing DT_STRTAB + given rpath/runpath offsets.
+    fn make_dyn_elf(rpath: Option<&str>, runpath: Option<&str>) -> Vec<u8> {
+        // Layout: [ehdr][phdrs][dyn][strtab]
+        let ehsize = size_of::<ElfHeader64>();
+        let phsize = size_of::<ProgramHeader64>();
+        let phoff = ehsize;
+        let nph = 2;
+        let dyn_off = (phoff + nph * phsize) as u64;
+        // String table at vaddr 0x600000, mapped by PT_LOAD p_offset=strtab_off.
+        let strtab_vaddr = 0x600000u64;
+        let mut strtab = vec![0u8]; // index 0 = ""
+        let mut dyn_ents: Vec<(i64, u64)> = vec![(DT_STRTAB, strtab_vaddr)];
+        for (tag, s) in [(DT_RPATH, rpath), (DT_RUNPATH, runpath)] {
+            if let Some(s) = s {
+                // d_val is a byte offset *into* the string table.
+                let off = strtab.len() as u64;
+                strtab.extend_from_slice(s.as_bytes());
+                strtab.push(0);
+                dyn_ents.push((tag, off));
+            }
+        }
+        dyn_ents.push((0, 0)); // DT_NULL
+        let strtab_off = dyn_off + dyn_ents.len() as u64 * size_of::<DynamicEntry64>() as u64;
+        let mut buf = Vec::new();
+        let mut h: ElfHeader64 = crate::sys::zeroed();
+        h.e_ident = [0x7f, b'E', b'L', b'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        h.e_type = ET_DYN;
+        h.e_machine = 62;
+        h.e_phoff = phoff as u64;
+        h.e_phentsize = phsize as u16;
+        h.e_phnum = nph as u16;
+        buf.extend_from_slice(crate::sys::as_bytes(&h));
+        // PT_LOAD covering the strtab.
+        let mut p: ProgramHeader64 = crate::sys::zeroed();
+        p.p_type = PT_LOAD;
+        p.p_offset = strtab_off;
+        p.p_vaddr = strtab_vaddr;
+        p.p_filesz = strtab.len() as u64;
+        p.p_memsz = strtab.len() as u64;
+        buf.extend_from_slice(crate::sys::as_bytes(&p));
+        // PT_DYNAMIC.
+        let mut d: ProgramHeader64 = crate::sys::zeroed();
+        d.p_type = PT_DYNAMIC;
+        d.p_offset = dyn_off;
+        d.p_filesz = (dyn_ents.len() * size_of::<DynamicEntry64>()) as u64;
+        d.p_memsz = d.p_filesz;
+        buf.extend_from_slice(crate::sys::as_bytes(&d));
+        while buf.len() < dyn_off as usize {
+            buf.push(0);
+        }
+        for (tag, val) in &dyn_ents {
+            let de = DynamicEntry64 {
+                d_tag: *tag,
+                d_val: *val,
+            };
+            buf.extend_from_slice(crate::sys::as_bytes(&de));
+        }
+        while buf.len() < strtab_off as usize {
+            buf.push(0);
+        }
+        buf.extend_from_slice(&strtab);
+        buf
+    }
+
+    fn rpaths_of(bytes: &[u8]) -> Result<Rpaths, i32> {
+        let td = TempDir::new("ldso");
+        let p = td.file("e", bytes);
+        let c = std::ffi::CString::new(p.to_str().unwrap()).unwrap();
+        let (fd, eh) = open_elf(&c).unwrap();
+        let mut f = crate::sys::file_from_fd(fd);
+        let r = read_ldso_rpaths(&mut f, fd, &eh);
+        drop(f);
+        r
+    }
+
+    #[test]
+    fn rpaths_extracted() {
+        let elf = make_dyn_elf(Some("/opt/lib"), Some("/run/lib"));
+        let (rp, run) = rpaths_of(&elf).unwrap();
+        assert_eq!(rp.unwrap(), b"/opt/lib");
+        assert_eq!(run.unwrap(), b"/run/lib");
+    }
+
+    #[test]
+    fn no_dynamic_no_rpaths() {
+        // Plain ELF with only PT_LOADs -> no rpaths.
+        let mut buf = Vec::new();
+        let mut h: ElfHeader64 = crate::sys::zeroed();
+        h.e_ident = [0x7f, b'E', b'L', b'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        h.e_type = ET_EXEC;
+        h.e_machine = 62;
+        h.e_phoff = size_of::<ElfHeader64>() as u64;
+        h.e_phentsize = size_of::<ProgramHeader64>() as u16;
+        h.e_phnum = 1;
+        buf.extend_from_slice(crate::sys::as_bytes(&h));
+        let p: ProgramHeader64 = crate::sys::zeroed();
+        buf.extend_from_slice(crate::sys::as_bytes(&p));
+        let (rp, run) = rpaths_of(&buf).unwrap();
+        assert!(rp.is_none() && run.is_none());
+    }
+}

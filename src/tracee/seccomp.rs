@@ -710,3 +710,84 @@ fn write_word(buf: &mut [u8], off: usize, w: usize, v: u64) {
         buf[off..off + 4].copy_from_slice(&(v as u32).to_ne_bytes());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tracee::reg::{Reg, RegVersion, peek_reg, poke_reg};
+
+    #[test]
+    fn orig_effective_copy() {
+        let mut t = Tracee::default();
+        t.regs[RegVersion::Current.idx()].orig_rax = 0x1234;
+        copy_orig_to_effective(&mut t);
+        assert_eq!(t.regs[RegVersion::Current.idx()].rax, 0x1234);
+        t.regs[RegVersion::Current.idx()].rax = 0xbeef;
+        copy_effective_to_orig(&mut t);
+        assert_eq!(t.regs[RegVersion::Current.idx()].orig_rax, 0xbeef);
+    }
+
+    #[test]
+    fn restart_rewinds_ip_and_marks_restore() {
+        let mut t = Tracee {
+            // Keep push_specific_regs from consuming the restore flag.
+            restore_original_regs: false,
+            ..Default::default()
+        };
+        poke_reg(&mut t, Reg::InstrPointer, 0x1000);
+        t.regs[RegVersion::Current.idx()].orig_rax = 42;
+        restart_syscall_after_seccomp(&mut t);
+        // IP rewound by SYSTRAP_SIZE (syscall insn = 2 on x86_64).
+        assert_eq!(
+            peek_reg(&t, RegVersion::Current, Reg::InstrPointer),
+            0x1000 - crate::arch::SYSTRAP_SIZE
+        );
+        assert!(t.restore_original_regs_after_seccomp_event);
+        assert_eq!(t.restart_how, crate::ptrace::ptc::PTRACE_SYSCALL);
+        // rax copied from orig_rax.
+        assert_eq!(t.regs[RegVersion::Current.idx()].rax, 42);
+    }
+
+    #[test]
+    fn set_result_writes_result_reg() {
+        let mut t = Tracee::default();
+        set_result_after_seccomp(&mut t, 0x77);
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::SysargResult), 0x77);
+    }
+
+    #[test]
+    fn read_write_word_helpers() {
+        let mut buf = [0u8; 32];
+        write_word(&mut buf, 8, 8, 0xdeadbeef);
+        assert_eq!(
+            u64::from_ne_bytes(buf[8..16].try_into().unwrap()),
+            0xdeadbeef
+        );
+        write_word(&mut buf, 8, 4, 0x1badb002);
+        assert_eq!(
+            u32::from_ne_bytes(buf[8..12].try_into().unwrap()),
+            0x1badb002
+        );
+        write_2words(&mut buf, 16, 8, 0x11, 0x22);
+        let (a, b) = read_2words(&buf, 16, 8);
+        assert_eq!((a, b), (0x11, 0x22));
+        write_2words(&mut buf, 0, 4, 0xaa, 0xbb);
+        let (a, b) = read_2words(&buf, 0, 4);
+        assert_eq!((a, b), (0xaa, 0xbb));
+    }
+
+    #[test]
+    fn fix_enosys_restores_and_marks() {
+        let mut t = Tracee::default();
+        // Original regs hold a trapped syscall; Current diverged.
+        poke_reg(&mut t, Reg::Sysarg1, 0x555);
+        crate::tracee::reg::save_current_regs(&mut t, RegVersion::Original);
+        poke_reg(&mut t, Reg::Sysarg1, 0x999);
+        t.status = 1;
+        fix_and_restart_enosys_syscall(&mut t);
+        // Current restored from Original, status cleared, flags set.
+        assert_eq!(t.status, 0);
+        assert!(!t.restore_original_regs);
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::Sysarg1), 0x555);
+    }
+}

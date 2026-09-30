@@ -290,3 +290,158 @@ pub fn print_current_regs(tracee: &Tracee, verbose_level: i32, message: &str) {
 pub fn get_systrap_size(_tracee: &Tracee) -> Word {
     crate::arch::SYSTRAP_SIZE
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk() -> Tracee {
+        Tracee::default()
+    }
+
+    #[test]
+    fn regversion_idx_distinct() {
+        let idxs = [
+            RegVersion::Current.idx(),
+            RegVersion::Original.idx(),
+            RegVersion::Modified.idx(),
+            RegVersion::OriginalSeccompRewrite.idx(),
+        ];
+        let mut sorted = idxs.to_vec();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), RegVersion::COUNT);
+    }
+
+    #[test]
+    fn sysarg_index_maps_one_based() {
+        assert_eq!(sysarg(1), Reg::Sysarg1);
+        assert_eq!(sysarg(6), Reg::Sysarg6);
+        assert_eq!(sysarg(4), Reg::Sysarg4);
+    }
+
+    #[test]
+    #[should_panic]
+    fn sysarg_rejects_zero() {
+        let _ = sysarg(0);
+    }
+
+    #[test]
+    fn poke_peek_roundtrip_x86_64() {
+        let mut t = mk();
+        poke_reg(&mut t, Reg::Sysarg1, 0xDEAD_BEEF);
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::Sysarg1), 0xDEAD_BEEF);
+        assert!(t.regs_were_changed);
+        // Sysarg1 lives in rdi on x86_64.
+        assert_eq!(t.regs[RegVersion::Current.idx()].rdi, 0xDEAD_BEEF);
+        // Other banks unaffected.
+        assert_eq!(peek_reg(&t, RegVersion::Original, Reg::Sysarg1), 0);
+    }
+
+    #[test]
+    fn poke_same_value_is_noop() {
+        let mut t = mk();
+        poke_reg(&mut t, Reg::StackPointer, 7);
+        t.regs_were_changed = false;
+        poke_reg(&mut t, Reg::StackPointer, 7);
+        assert!(!t.regs_were_changed);
+    }
+
+    #[test]
+    fn abi_detection_from_cs() {
+        let mut t = mk();
+        // cs=0x33,ds=0 -> Default (64-bit).
+        t.regs[RegVersion::Original.idx()].cs = 0x33;
+        assert_eq!(get_abi(&t), Abi::Default);
+        // cs=0x23 -> i386 ABI.
+        t.regs[RegVersion::Original.idx()].cs = 0x23;
+        assert_eq!(get_abi(&t), Abi::Abi2);
+        // cs=0x33 + ds=0x2B -> x32 ABI.
+        t.regs[RegVersion::Original.idx()].cs = 0x33;
+        t.regs[RegVersion::Original.idx()].ds = 0x2B;
+        assert_eq!(get_abi(&t), Abi::Abi3);
+    }
+
+    #[test]
+    fn is_32on64_and_word_size() {
+        let mut t = mk();
+        t.regs[RegVersion::Current.idx()].cs = 0x33;
+        assert!(!is_32on64_mode(&t));
+        assert_eq!(sizeof_word(&t), 8);
+        t.regs[RegVersion::Current.idx()].cs = 0x23;
+        assert!(is_32on64_mode(&t));
+        assert_eq!(sizeof_word(&t), 4);
+        t.regs[RegVersion::Current.idx()].cs = 0x33;
+        t.regs[RegVersion::Current.idx()].ds = 0x2B;
+        assert!(is_32on64_mode(&t)); // x32
+    }
+
+    #[test]
+    fn peek_masks_high32_in_32bit_mode() {
+        let mut t = mk();
+        t.regs[RegVersion::Current.idx()].cs = 0x23;
+        // i386 Sysarg2 is rcx — set a >32-bit value there directly.
+        t.regs[RegVersion::Current.idx()].rcx = 0x1_0000_00AB;
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::Sysarg2), 0xAB);
+    }
+
+    #[test]
+    fn i386_abi_uses_i386_offsets() {
+        let mut t = mk();
+        t.regs[RegVersion::Current.idx()].cs = 0x23;
+        poke_reg(&mut t, Reg::Sysarg1, 0x1234);
+        // Sysarg1 is ebx under i386 conventions.
+        assert_eq!(t.regs[RegVersion::Current.idx()].rbx, 0x1234);
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::Sysarg1), 0x1234);
+    }
+
+    #[test]
+    fn save_current_regs_copies_bank() {
+        let mut t = mk();
+        poke_reg(&mut t, Reg::Sysarg3, 42);
+        save_current_regs(&mut t, RegVersion::Modified);
+        assert_eq!(peek_reg(&t, RegVersion::Modified, Reg::Sysarg3), 42);
+        // Saving to Original clears the dirty flag.
+        assert!(t.regs_were_changed);
+        save_current_regs(&mut t, RegVersion::Original);
+        assert!(!t.regs_were_changed);
+        assert_eq!(peek_reg(&t, RegVersion::Original, Reg::Sysarg3), 42);
+    }
+
+    #[test]
+    fn get_set_sysnum_translates() {
+        let mut t = mk();
+        t.regs[RegVersion::Original.idx()].cs = 0x33;
+        t.regs[RegVersion::Current.idx()].cs = 0x33;
+        set_sysnum(&mut t, Sysnum::openat);
+        assert_eq!(t.regs[RegVersion::Current.idx()].orig_rax, 257);
+        // get_sysnum reads the requested bank; Current holds the write.
+        assert_eq!(get_sysnum(&t, RegVersion::Current), Sysnum::openat);
+        // Original bank is untouched until save_current_regs.
+        assert_eq!(get_sysnum(&t, RegVersion::Original), Sysnum::read);
+        // i386 ABI: openat is 295.
+        let mut t = mk();
+        t.regs[RegVersion::Original.idx()].cs = 0x23;
+        t.regs[RegVersion::Current.idx()].cs = 0x23;
+        set_sysnum(&mut t, Sysnum::openat);
+        assert_eq!(t.regs[RegVersion::Current.idx()].orig_rax, 295);
+    }
+
+    #[test]
+    fn fetch_push_regs_fail_without_ptrace_target() {
+        // pid 0 is invalid for ptrace GETREGS -> error, not panic.
+        let mut t = mk();
+        assert!(fetch_regs(&mut t) < 0);
+        // push_regs with no changes is a no-op success.
+        t.regs_were_changed = false;
+        assert_eq!(push_regs(&mut t), 0);
+        // Dirty regs on a dead pid -> ptrace error.
+        poke_reg(&mut t, Reg::Sysarg1, 1);
+        assert!(push_regs(&mut t) < 0);
+    }
+
+    #[test]
+    fn systrap_size_is_positive() {
+        assert_eq!(get_systrap_size(&mk()), crate::arch::SYSTRAP_SIZE);
+    }
+}

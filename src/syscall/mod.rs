@@ -217,3 +217,96 @@ pub fn translate_syscall(tracee: &mut Tracee) {
         crate::tracee::reg::print_current_regs(tracee, 4, "sysexit end");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{Arena, fork_child, use_arena_stack};
+    use crate::tracee::reg::{Reg, RegVersion, poke_reg};
+
+    #[test]
+    fn get_sysarg_path_reads_remote() {
+        let arena = Arena::new(1);
+        arena.local()[0x800..0x800 + 10].copy_from_slice(b"/some/dir\0");
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = child.tracee();
+        poke_reg(&mut t, Reg::Sysarg1, arena.addr() + 0x800);
+        let mut p = FixedPath::new();
+        let n = get_sysarg_path(&t, &mut p, Reg::Sysarg1);
+        assert_eq!(n, 10); // includes NUL
+        assert_eq!(p.as_bytes(), b"/some/dir");
+        // NULL pointer -> empty path, Ok.
+        poke_reg(&mut t, Reg::Sysarg2, 0);
+        let mut p = FixedPath::new();
+        assert_eq!(get_sysarg_path(&t, &mut p, Reg::Sysarg2), 0);
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn set_sysarg_data_writes_remote() {
+        let arena = Arena::new(2);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = child.tracee();
+        use_arena_stack(&mut t, &arena);
+        let data = b"payload-bytes";
+        assert_eq!(set_sysarg_data(&mut t, data, Reg::Sysarg3), 0);
+        let ptr = crate::tracee::reg::peek_reg(&t, RegVersion::Current, Reg::Sysarg3);
+        assert!(ptr != 0);
+        let off = (ptr - arena.addr()) as usize;
+        assert_eq!(&arena.local()[off..off + data.len()], data);
+    }
+
+    #[test]
+    fn set_sysarg_path_writes_nul() {
+        let arena = Arena::new(2);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = child.tracee();
+        use_arena_stack(&mut t, &arena);
+        assert_eq!(set_sysarg_path(&mut t, b"/guest/x", Reg::Sysarg1), 0);
+        let ptr = crate::tracee::reg::peek_reg(&t, RegVersion::Current, Reg::Sysarg1);
+        let off = (ptr - arena.addr()) as usize;
+        assert_eq!(&arena.local()[off..off + 9], b"/guest/x\0");
+    }
+
+    #[test]
+    fn is_voided_syscall_detection() {
+        let mut t = Tracee::default();
+        // Current = avoider, Original = a real sysnum -> voided.
+        t.regs[RegVersion::Current.idx()].orig_rax = crate::arch::SYSCALL_AVOIDER;
+        t.regs[RegVersion::Original.idx()].orig_rax = 0;
+        assert!(is_voided_syscall(&t, RegVersion::Current));
+        // Both avoider -> not a voided original.
+        t.regs[RegVersion::Original.idx()].orig_rax = crate::arch::SYSCALL_AVOIDER;
+        assert!(!is_voided_syscall(&t, RegVersion::Current));
+        // Real syscall -> not voided.
+        let mut t = Tracee::default();
+        t.regs[RegVersion::Current.idx()].orig_rax = 0;
+        t.regs[RegVersion::Original.idx()].orig_rax = 0;
+        assert!(!is_voided_syscall(&t, RegVersion::Current));
+        // 32-bit ABI: avoider masked to 32 bits.
+        let mut t = Tracee::default();
+        t.regs[RegVersion::Current.idx()].cs = 0x23;
+        t.regs[RegVersion::Current.idx()].orig_rax = crate::arch::SYSCALL_AVOIDER;
+        t.regs[RegVersion::Original.idx()].orig_rax = 0;
+        assert!(is_voided_syscall(&t, RegVersion::Current));
+    }
+
+    #[test]
+    fn readlink_proc_fd_state_constructs() {
+        let s = ReadlinkProcFdState {
+            pid: 1,
+            fd: 2,
+            host_path: FixedPath::from_bytes(b"/h"),
+            referer: FixedPath::from_bytes(b"/proc/1/fd/2"),
+            substituted: false,
+        };
+        assert_eq!(s.fd, 2);
+        assert!(!s.substituted);
+    }
+}

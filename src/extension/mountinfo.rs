@@ -211,3 +211,61 @@ impl Mountinfo {
         Self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{TempDir, test_tracee};
+
+    #[test]
+    fn non_mountinfo_paths_ignored() {
+        let td = TempDir::new("mi");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        let mut p = FixedPath::from_bytes(b"/proc/self/maps");
+        check_open_path(&mut t, &mut p);
+        assert_eq!(p.as_bytes(), b"/proc/self/maps");
+        let mut p = FixedPath::from_bytes(b"/proc/abc/mountinfo");
+        check_open_path(&mut t, &mut p);
+        assert_eq!(p.as_bytes(), b"/proc/abc/mountinfo"); // non-numeric pid
+        let mut p = FixedPath::from_bytes(b"/etc/fstab");
+        check_open_path(&mut t, &mut p);
+        assert_eq!(p.as_bytes(), b"/etc/fstab");
+    }
+
+    #[test]
+    fn mountinfo_appends_extra_bindings() {
+        let td = TempDir::new("mi");
+        td.dir("src");
+        td.dir("dst");
+        let src = td.path().join("src").to_string_lossy().into_owned();
+        // root + an extra /dst binding.
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[(&src, "/dst")]);
+        t.pid = std::process::id() as i32;
+        // The pid field must be numeric — "/proc/self/..." is ignored.
+        let mi = format!("/proc/{}/mountinfo", t.pid);
+        let mut p = FixedPath::from_bytes(mi.as_bytes());
+        // self-mountinfo exists on Linux; extra bindings present -> redirect.
+        check_open_path(&mut t, &mut p);
+        // Path redirected to a synthesized file.
+        let newp = p.as_bytes().to_vec();
+        assert_ne!(newp, mi.as_bytes());
+        use std::os::unix::ffi::OsStrExt;
+        let content = std::fs::read_to_string(std::ffi::OsStr::from_bytes(&newp))
+            .expect("synthesized mountinfo");
+        assert!(content.contains("/dst"));
+        // Root binding skipped; extra binding line appended.
+        assert!(content.lines().any(|l| l.contains(" bind ")));
+    }
+
+    #[test]
+    fn mountinfo_without_extra_bindings_untouched() {
+        // Root "/" only, non-/data -> no rewrite.
+        let td = TempDir::new("mi");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.pid = std::process::id() as i32;
+        let mi = format!("/proc/{}/mountinfo", t.pid);
+        let mut p = FixedPath::from_bytes(mi.as_bytes());
+        check_open_path(&mut t, &mut p);
+        assert_eq!(p.as_bytes(), mi.as_bytes());
+    }
+}

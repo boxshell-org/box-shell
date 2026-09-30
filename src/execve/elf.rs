@@ -372,3 +372,224 @@ pub fn iterate_program_headers(
     }
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::TempDir;
+
+    /// Build a minimal ELF file: header (class given) + `n` program
+    /// headers of `ptype`, laid out per the kernel format.
+    fn make_elf(class64: bool, e_type: u16, machine: u16, ptypes: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        if class64 {
+            let phoff = size_of::<ElfHeader64>() as u64;
+            let mut h: ElfHeader64 = crate::sys::zeroed();
+            h.e_ident = [0x7f, b'E', b'L', b'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            h.e_type = e_type;
+            h.e_machine = machine;
+            h.e_version = 1;
+            h.e_entry = 0x401000;
+            h.e_phoff = phoff;
+            h.e_ehsize = size_of::<ElfHeader64>() as u16;
+            h.e_phentsize = size_of::<ProgramHeader64>() as u16;
+            h.e_phnum = ptypes.len() as u16;
+            buf.extend_from_slice(crate::sys::as_bytes(&h));
+            for &pt in ptypes {
+                let mut p: ProgramHeader64 = crate::sys::zeroed();
+                p.p_type = pt;
+                p.p_offset = 0x1000;
+                p.p_vaddr = 0x400000;
+                p.p_filesz = 0x100;
+                p.p_memsz = 0x200;
+                p.p_flags = PF_R | PF_X;
+                buf.extend_from_slice(crate::sys::as_bytes(&p));
+            }
+        } else {
+            let phoff = size_of::<ElfHeader32>() as u64;
+            let mut h: ElfHeader32 = crate::sys::zeroed();
+            h.e_ident = [0x7f, b'E', b'L', b'F', 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            h.e_type = e_type;
+            h.e_machine = machine;
+            h.e_version = 1;
+            h.e_entry = 0x8048000;
+            h.e_phoff = phoff as u32;
+            h.e_ehsize = size_of::<ElfHeader32>() as u16;
+            h.e_phentsize = size_of::<ProgramHeader32>() as u16;
+            h.e_phnum = ptypes.len() as u16;
+            buf.extend_from_slice(crate::sys::as_bytes(&h));
+            for &pt in ptypes {
+                let mut p: ProgramHeader32 = crate::sys::zeroed();
+                p.p_type = pt;
+                p.p_offset = 0x800;
+                p.p_vaddr = 0x8000000;
+                p.p_filesz = 0x80;
+                p.p_memsz = 0x90;
+                p.p_flags = PF_R;
+                buf.extend_from_slice(crate::sys::as_bytes(&p));
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn header_class_detection() {
+        let td = TempDir::new("elf");
+        td.file("e64", &make_elf(true, ET_EXEC, 62, &[]));
+        td.file("e32", &make_elf(false, ET_EXEC, 40, &[]));
+        let c64 = std::ffi::CString::new(td.abs("e64")).unwrap();
+        let c32 = std::ffi::CString::new(td.abs("e32")).unwrap();
+        let (fd, h) = open_elf(&c64).unwrap();
+        assert!(h.is_class64() && !h.is_class32());
+        crate::sys::close(fd);
+        let (fd, h) = open_elf(&c32).unwrap();
+        assert!(h.is_class32() && !h.is_class64());
+        crate::sys::close(fd);
+    }
+
+    #[test]
+    fn header_field_accessors() {
+        let td = TempDir::new("elf");
+        td.file("e64", &make_elf(true, ET_DYN, 62, &[]));
+        let c = std::ffi::CString::new(td.abs("e64")).unwrap();
+        let (fd, h) = open_elf(&c).unwrap();
+        crate::sys::close(fd);
+        assert_eq!(h.e_type(), ET_DYN);
+        assert_eq!(h.e_machine(), 62);
+        assert_eq!(h.e_entry(), 0x401000);
+        assert_eq!(h.e_phoff(), size_of::<ElfHeader64>() as u64);
+        assert!(h.is_position_independent());
+    }
+
+    #[test]
+    fn open_elf_rejects_garbage() {
+        let td = TempDir::new("elf");
+        td.file("junk", b"not an elf at all, way too short");
+        let c = std::ffi::CString::new(td.abs("junk")).unwrap();
+        assert_eq!(open_elf(&c).err(), Some(-libc::ENOEXEC));
+        // Right size, wrong magic.
+        td.file("fake", &[b'X'; 64]);
+        let c = std::ffi::CString::new(td.abs("fake")).unwrap();
+        assert_eq!(open_elf(&c).err(), Some(-libc::ENOEXEC));
+        // Bad class byte.
+        let mut bad = make_elf(true, ET_EXEC, 62, &[]);
+        bad[4] = 9;
+        td.file("badcls", &bad);
+        let c = std::ffi::CString::new(td.abs("badcls")).unwrap();
+        assert_eq!(open_elf(&c).err(), Some(-libc::ENOEXEC));
+        // Missing file — construct a literal (non-canonicalized) path.
+        let missing = format!("{}/nope", td.path().display());
+        let c = std::ffi::CString::new(missing).unwrap();
+        assert!(matches!(open_elf(&c), Err(e) if e == -libc::ENOENT));
+    }
+
+    #[test]
+    fn iterate_program_headers_visits_each() {
+        let td = TempDir::new("elf");
+        td.file(
+            "e64",
+            &make_elf(true, ET_EXEC, 62, &[PT_LOAD, PT_INTERP, PT_LOAD]),
+        );
+        let c = std::ffi::CString::new(td.abs("e64")).unwrap();
+        let (fd, h) = open_elf(&c).unwrap();
+        let mut seen = Vec::new();
+        let r = iterate_program_headers(fd, &h, |eh, ph| {
+            seen.push(ph.p_type(eh));
+            0
+        });
+        crate::sys::close(fd);
+        assert_eq!(r, 0);
+        assert_eq!(seen, vec![PT_LOAD as u64, PT_INTERP as u64, PT_LOAD as u64]);
+    }
+
+    #[test]
+    fn iterate_program_headers_aborts_on_cb_status() {
+        let td = TempDir::new("elf");
+        td.file(
+            "e64",
+            &make_elf(true, ET_EXEC, 62, &[PT_LOAD, PT_LOAD, PT_LOAD]),
+        );
+        let c = std::ffi::CString::new(td.abs("e64")).unwrap();
+        let (fd, h) = open_elf(&c).unwrap();
+        let mut n = 0;
+        let r = iterate_program_headers(fd, &h, |_, _| {
+            n += 1;
+            if n == 2 { -libc::ELOOP } else { 0 }
+        });
+        crate::sys::close(fd);
+        assert_eq!(r, -libc::ELOOP);
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn iterate_program_headers_reads_fields() {
+        let td = TempDir::new("elf");
+        td.file("e64", &make_elf(true, ET_EXEC, 62, &[PT_LOAD]));
+        let c = std::ffi::CString::new(td.abs("e64")).unwrap();
+        let (fd, h) = open_elf(&c).unwrap();
+        let mut got = None;
+        let r = iterate_program_headers(fd, &h, |eh, ph| {
+            got = Some((
+                ph.p_type(eh),
+                ph.p_offset(eh),
+                ph.p_vaddr(eh),
+                ph.p_filesz(eh),
+                ph.p_memsz(eh),
+                ph.p_flags(eh),
+            ));
+            0
+        });
+        crate::sys::close(fd);
+        assert_eq!(r, 0);
+        assert_eq!(
+            got,
+            Some((1, 0x1000, 0x400000, 0x100, 0x200, (PF_R | PF_X) as u64))
+        );
+    }
+
+    #[test]
+    fn known_phentsize_matches_class() {
+        let td = TempDir::new("elf");
+        td.file("e64", &make_elf(true, ET_EXEC, 62, &[]));
+        td.file("e32", &make_elf(false, ET_EXEC, 40, &[]));
+        let c = std::ffi::CString::new(td.abs("e64")).unwrap();
+        let (fd, h64) = open_elf(&c).unwrap();
+        crate::sys::close(fd);
+        let c = std::ffi::CString::new(td.abs("e32")).unwrap();
+        let (fd, h32) = open_elf(&c).unwrap();
+        crate::sys::close(fd);
+        assert!(known_phentsize(&h64, size_of::<ProgramHeader64>() as u64));
+        assert!(!known_phentsize(&h64, size_of::<ProgramHeader32>() as u64));
+        assert!(known_phentsize(&h32, size_of::<ProgramHeader32>() as u64));
+        assert!(!known_phentsize(&h32, 999));
+    }
+
+    #[test]
+    fn entry_bias_wraps_in_class() {
+        let td = TempDir::new("elf");
+        td.file("e64", &make_elf(true, ET_EXEC, 62, &[]));
+        td.file("e32", &make_elf(false, ET_EXEC, 40, &[]));
+        let c = std::ffi::CString::new(td.abs("e64")).unwrap();
+        let (fd, mut h64) = open_elf(&c).unwrap();
+        crate::sys::close(fd);
+        h64.set_entry_bias(0x1000);
+        assert_eq!(h64.e_entry(), 0x401000 + 0x1000);
+        let c = std::ffi::CString::new(td.abs("e32")).unwrap();
+        let (fd, mut h32) = open_elf(&c).unwrap();
+        crate::sys::close(fd);
+        // 32-bit entry wraps at u32.
+        h32.set_entry_bias(u64::MAX);
+        assert_eq!(
+            h32.e_entry(),
+            (0x8048000u64 + u64::from(u32::MAX)) & u64::from(u32::MAX)
+        );
+    }
+
+    #[test]
+    fn is_host_elf_false_without_qemu() {
+        let t = crate::testutil::test_tracee("/", &[]);
+        let p = crate::fpath::FixedPath::from_bytes(b"/bin/true");
+        // No QEMU configured -> never a "host" ELF.
+        assert!(!is_host_elf(&t, &p));
+    }
+}

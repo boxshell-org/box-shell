@@ -416,6 +416,7 @@ pub fn detranslate_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{TempDir, detranslate, test_tracee, translate};
 
     #[test]
     fn compare_paths_basic() {
@@ -431,15 +432,288 @@ mod tests {
         assert_eq!(compare_paths(b"/a", b"/a/b/"), Path1IsPrefix);
         // Empty strings are never comparable.
         assert_eq!(compare_paths(b"", b"/"), PathsAreNotComparable);
+        assert_eq!(compare_paths(b"/", b""), PathsAreNotComparable);
+        assert_eq!(compare_paths(b"", b""), PathsAreNotComparable);
     }
 
     #[test]
-    fn join_paths_joins() {
+    fn compare_paths_root_and_edges() {
+        use Comparison::*;
+        // "/" is a prefix of every absolute path.
+        assert_eq!(compare_paths(b"/", b"/a"), Path1IsPrefix);
+        assert_eq!(compare_paths(b"/a", b"/"), Path2IsPrefix);
+        assert_eq!(compare_paths(b"/", b"/"), PathsAreEqual);
+        // Byte-sharp boundary: "/a" vs "/a\0junk" — the slice ends.
+        assert_eq!(compare_paths(b"/a", b"/a/"), PathsAreEqual);
+        // Similar prefixes differ mid-component.
+        assert_eq!(compare_paths(b"/ab", b"/ac"), PathsAreNotComparable);
+        assert_eq!(compare_paths(b"/a1", b"/a1b"), PathsAreNotComparable);
+    }
+
+    #[test]
+    fn join_paths2_variants() {
         let mut p = FixedPath::new();
         join_paths2(&mut p, b"/a", b"b").unwrap();
         assert_eq!(p.as_bytes(), b"/a/b");
         let mut p = FixedPath::new();
         join_paths2(&mut p, b"", b"/abs").unwrap();
         assert_eq!(p.as_bytes(), b"/abs");
+        // Second path is appended relative to the first.
+        let mut p = FixedPath::new();
+        join_paths2(&mut p, b"/a/b", b"c/d").unwrap();
+        assert_eq!(p.as_bytes(), b"/a/b/c/d");
+        // Slash handling between parts.
+        let mut p = FixedPath::new();
+        join_paths2(&mut p, b"/a/", b"/b").unwrap();
+        assert_eq!(p.as_bytes(), b"/a/b");
+        // Empty second part leaves a trailing slash.
+        let mut p = FixedPath::new();
+        join_paths2(&mut p, b"/a", b"").unwrap();
+        assert_eq!(p.as_bytes(), b"/a/");
+        // Overflow -> ENAMETOOLONG.
+        let big = vec![b'x'; PATH_MAX - 10];
+        let mut p = FixedPath::new();
+        assert_eq!(
+            join_paths2(&mut p, &big, b"01234567890123"),
+            Err(-libc::ENAMETOOLONG)
+        );
+    }
+
+    #[test]
+    fn getcwd2_none_uses_process_cwd() {
+        let mut p = FixedPath::new();
+        getcwd2(None, &mut p).unwrap();
+        let want = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(p.as_bytes(), want.as_bytes());
+    }
+
+    #[test]
+    fn getcwd2_tracee_uses_fs_cwd() {
+        let t = crate::tracee::Tracee::default();
+        t.fs.borrow_mut().cwd.set(b"/some/where");
+        let mut p = FixedPath::new();
+        getcwd2(Some(&t), &mut p).unwrap();
+        assert_eq!(p.as_bytes(), b"/some/where");
+    }
+
+    #[test]
+    fn readlink_proc_pid_fd_reads_own_fds() {
+        // fd 1 (stdout of the test process) resolves to something.
+        let mut p = FixedPath::new();
+        let status = readlink_proc_pid_fd(std::process::id() as i32, 1, &mut p);
+        // Under `cargo test` stdout is a pipe; still readlink-able.
+        assert!(
+            status.is_ok() && !p.is_empty(),
+            "fd1 readlink: {status:?} {p}"
+        );
+        // A bogus fd fails.
+        let mut p = FixedPath::new();
+        assert!(readlink_proc_pid_fd(std::process::id() as i32, -1, &mut p).is_err());
+        assert!(readlink_proc_pid_fd(std::process::id() as i32, 9999, &mut p).is_err());
+    }
+
+    #[test]
+    fn realpath2_none_matches_host() {
+        let td = TempDir::new("rp");
+        td.dir("sub");
+        let mut out = FixedPath::new();
+        realpath2(
+            None,
+            &mut out,
+            td.path().join("sub").to_str().unwrap().as_bytes(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(out.as_bytes(), td.abs("sub").as_slice());
+        // Missing path -> Err.
+        let mut out = FixedPath::new();
+        assert!(realpath2(None, &mut out, b"/no/such/dir/here", true).is_err());
+    }
+
+    // ---------------------------------------------------------
+    // translate_path / detranslate_path (full engine)
+    // ---------------------------------------------------------
+
+    #[test]
+    fn translate_absolute_through_root() {
+        let td = TempDir::new("xlat");
+        td.dir("sub");
+        td.file("sub/f", b"");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        assert_eq!(translate(&mut t, "/sub/f"), td.abs("sub/f"));
+        assert_eq!(translate(&mut t, "/"), td.abs("."));
+        // Missing leaf still translates (canonicalize allows it).
+        assert_eq!(
+            translate(&mut t, "/sub/missing"),
+            [td.abs("sub").as_slice(), b"/missing"].concat()
+        );
+    }
+
+    #[test]
+    fn translate_relative_uses_tracee_cwd() {
+        let td = TempDir::new("xlat");
+        td.dir("wd/sub");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.fs.borrow_mut().cwd.set(b"/wd");
+        assert_eq!(
+            translate(&mut t, "sub/f"),
+            [td.abs("wd").as_slice(), b"/sub/f"].concat()
+        );
+        assert_eq!(
+            translate(&mut t, "./sub"),
+            [td.abs("wd").as_slice(), b"/sub"].concat()
+        );
+        assert_eq!(translate(&mut t, "../"), td.abs("."));
+    }
+
+    #[test]
+    fn translate_through_guest_binding() {
+        let td = TempDir::new("xlat");
+        let host = TempDir::new("xlath");
+        host.dir("deep");
+        let mut t = test_tracee(
+            td.path().to_str().unwrap(),
+            &[(host.path().to_str().unwrap(), "/mnt")],
+        );
+        assert_eq!(
+            translate(&mut t, "/mnt/deep"),
+            [host.abs(".").as_slice(), b"/deep"].concat()
+        );
+    }
+
+    #[test]
+    fn translate_deref_final_controls_symlink() {
+        let td = TempDir::new("xlat");
+        td.file("real", b"x");
+        td.symlink("real", "lnk");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        // deref=true: resolves to the target's host path.
+        assert_eq!(translate(&mut t, "/lnk"), td.abs("real"));
+        // deref=false: the link path translates literally (abs() would
+        // resolve the symlink, so build the literal host path).
+        let mut out = FixedPath::new();
+        translate_path(&mut t, &mut out, libc::AT_FDCWD, b"/lnk", false).unwrap();
+        let want = [td.abs(".").as_slice(), b"/lnk"].concat();
+        assert_eq!(out.as_bytes(), want.as_slice());
+    }
+
+    #[test]
+    fn detranslate_strips_root_prefix() {
+        let td = TempDir::new("dxlat");
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        let host = [td.abs(".").as_slice(), b"/a/b"].concat();
+        assert_eq!(detranslate(&mut t, &host), Ok(b"/a/b".to_vec()));
+        // The root itself detranslates to "/".
+        assert_eq!(detranslate(&mut t, &td.abs(".")), Ok(b"/".to_vec()));
+        // Host paths outside the root fail the sanity check.
+        assert_eq!(detranslate(&mut t, b"/etc"), Err(-libc::EPERM));
+        // Relative input is untouched.
+        assert_eq!(detranslate(&mut t, b"rel/path"), Ok(b"rel/path".to_vec()));
+    }
+
+    #[test]
+    fn detranslate_through_binding() {
+        let td = TempDir::new("dxlat");
+        let host = TempDir::new("dxlath");
+        let mut t = test_tracee(
+            td.path().to_str().unwrap(),
+            &[(host.path().to_str().unwrap(), "/vb")],
+        );
+        let host_path = [host.abs(".").as_slice(), b"/x"].concat();
+        assert_eq!(detranslate(&mut t, &host_path), Ok(b"/vb/x".to_vec()));
+    }
+
+    #[test]
+    fn detranslate_readlink_regression_same_binding() {
+        // Regression: readlink() output is detranslated through the *same
+        // binding as the referrer* (the bug that broke test-0228f5cf).
+        let td = TempDir::new("dxlat");
+        let host = TempDir::new("dxlath");
+        host.file("t", b"x");
+        host.symlink("t", "l");
+        let mut t = test_tracee(
+            td.path().to_str().unwrap(),
+            &[(host.path().to_str().unwrap(), "/vb")],
+        );
+        // Referrer = translated path of /vb/l; referree = readlink result.
+        let mut referrer =
+            FixedPath::from_bytes([host.abs(".").as_slice(), b"/l"].concat().as_slice());
+        let mut target =
+            FixedPath::from_bytes([host.abs(".").as_slice(), b"/t"].concat().as_slice());
+        let n = detranslate_path(&mut t, &mut target, Some(&referrer)).unwrap();
+        assert!(n > 0);
+        assert_eq!(target.as_bytes(), b"/vb/t");
+        // Sanity: the same path with no referrer also maps through the binding.
+        let mut target2 =
+            FixedPath::from_bytes([host.abs(".").as_slice(), b"/t"].concat().as_slice());
+        detranslate_path(&mut t, &mut target2, None).unwrap();
+        assert_eq!(target2.as_bytes(), b"/vb/t");
+        let _ = &mut referrer;
+    }
+
+    #[test]
+    fn detranslate_proc_referrer() {
+        // A readlink under /proc returns emulated results — exercise the
+        // /proc branch with a fabricated tracee.
+        let mut t = test_tracee("/", &[]);
+        t.pid = std::process::id() as i32;
+        t.exe = Some(std::rc::Rc::from("/guest/exe"));
+        let referrer = FixedPath::from_bytes(b"/proc/self/exe");
+        let mut target = FixedPath::from_bytes(b"/proc/self/exe");
+        let n = detranslate_path(&mut t, &mut target, Some(&referrer)).unwrap();
+        assert!(n > 0);
+        assert_eq!(target.as_bytes(), b"/guest/exe");
+    }
+
+    #[test]
+    fn belongs_to_guestfs_checks_root() {
+        let td = TempDir::new("bel");
+        let t = test_tracee(td.path().to_str().unwrap(), &[]);
+        let inside = [td.abs(".").as_slice(), b"/x"].concat();
+        assert!(belongs_to_guestfs(&t, &inside));
+        assert!(!belongs_to_guestfs(&t, b"/etc"));
+    }
+
+    #[test]
+    fn which_finds_on_host() {
+        let td = TempDir::new("which");
+        td.file_mode("tool", b"#!/bin/sh\n", 0o755);
+        td.file_mode("notexec", b"x", 0o644);
+        let mut out = FixedPath::new();
+        let path_str = td.path().to_str().unwrap();
+        assert!(which(None, Some(path_str), &mut out, b"tool").is_ok());
+        assert_eq!(out.as_bytes(), td.abs("tool").as_slice());
+        // Not executable -> not found.
+        let mut out = FixedPath::new();
+        assert!(which(None, Some(path_str), &mut out, b"notexec").is_err());
+        // Missing -> not found.
+        assert!(which(None, Some(path_str), &mut out, b"absent").is_err());
+        // Explicit path (contains '/') resolves directly.
+        let mut out = FixedPath::new();
+        let tool = td.path().join("tool").to_string_lossy().into_owned();
+        assert!(which(None, None, &mut out, tool.as_bytes()).is_ok());
+        // Explicit non-regular file -> EACCES.
+        let mut out = FixedPath::new();
+        let dir = td.path().to_string_lossy().into_owned();
+        assert!(which(None, None, &mut out, dir.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn which_searches_path_entries() {
+        let td = TempDir::new("which");
+        let d1 = td.dir("d1");
+        let d2 = td.dir("d2");
+        td.file_mode("d2/t", b"#!/bin/sh\n", 0o755);
+        let paths = format!("{}:{}", d1.display(), d2.display());
+        let mut out = FixedPath::new();
+        assert!(which(None, Some(&paths), &mut out, b"t").is_ok());
+        assert_eq!(out.as_bytes(), td.abs("d2/t").as_slice());
+        // Empty PATH segments mean cwd; nothing named "." works — just
+        // ensure it doesn't panic and fails cleanly.
+        let mut out = FixedPath::new();
+        assert!(which(None, Some(""), &mut out, b"t").is_err());
     }
 }

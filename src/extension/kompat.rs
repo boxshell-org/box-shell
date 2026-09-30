@@ -1063,3 +1063,133 @@ impl Kompat {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::env_lock;
+    use crate::tracee::reg::{get_sysnum, peek_reg, poke_reg, sysarg};
+
+    fn mkconfig(actual: (u64, u64, u64), virtual_: (u64, u64, u64)) -> Config {
+        Config {
+            actual_release: kernel_version(actual.0, actual.1, actual.2),
+            virtual_release: kernel_version(virtual_.0, virtual_.1, virtual_.2),
+            utsname: Utsname::default(),
+            hwcap: 0,
+            warned_futex: false,
+        }
+    }
+
+    #[test]
+    fn kernel_version_packs_major_minor_rev() {
+        assert_eq!(kernel_version(3, 10, 0), 0x30a00);
+        assert_eq!(kernel_version(4, 19, 124), (4 << 16) + (19 << 8) + 124);
+        // Revision clamps at 255.
+        assert_eq!(kernel_version(5, 0, 300), (5 << 16) + 255);
+    }
+
+    #[test]
+    fn strtoul_digit_prefix() {
+        let mut pos = 0;
+        assert_eq!(strtoul(b"123abc", &mut pos), 123);
+        assert_eq!(pos, 3);
+        let mut pos = 0;
+        assert_eq!(strtoul(b"x", &mut pos), 0);
+        assert_eq!(pos, 0);
+        let mut pos = 0;
+        assert_eq!(strtoul(b"", &mut pos), 0);
+    }
+
+    #[test]
+    fn parse_kernel_release_versions() {
+        assert_eq!(parse_kernel_release(b"3.10.0"), 0x30a00);
+        assert_eq!(parse_kernel_release(b"4.19"), (4 << 16) + (19 << 8));
+        assert_eq!(parse_kernel_release(b"5"), 5 << 16);
+        // Garbage suffix after revision is ignored.
+        assert_eq!(
+            parse_kernel_release(b"4.4.302-generic"),
+            (4 << 16) + (4 << 8) + 255
+        );
+        assert_eq!(parse_kernel_release(b""), 0);
+    }
+
+    #[test]
+    fn needs_kompat_window() {
+        let c = mkconfig((3, 0, 0), (5, 0, 0));
+        assert!(needs_kompat(&c, kernel_version(4, 0, 0)));
+        assert!(!needs_kompat(&c, kernel_version(3, 0, 0))); // actual covers it
+        assert!(!needs_kompat(&c, kernel_version(6, 0, 0))); // beyond virtual
+    }
+
+    #[test]
+    fn utsname_get_set_nul_terminated() {
+        let mut u = Utsname::default();
+        u.set(0, b"Linux");
+        assert_eq!(u.get(0), b"Linux");
+        // Truncates to 64 chars.
+        u.set(1, &[b'x'; 100]);
+        assert_eq!(u.get(1).len(), 64);
+        // Empty field reads as empty.
+        assert_eq!(u.get(5), b"");
+    }
+
+    #[test]
+    fn parse_utsname_simple_release() {
+        let _g = env_lock();
+        crate::testutil::with_env("PROOT_FORCE_KOMPAT", Option::<&str>::None, || {
+            let mut c = mkconfig((0, 0, 0), (0, 0, 0));
+            assert_eq!(parse_utsname(&mut c, "5.4.0-fake"), 0);
+            assert_eq!(c.virtual_release, kernel_version(5, 4, 0));
+            assert_eq!(c.utsname.get(Utsname::RELEASE), b"5.4.0-fake");
+            assert_eq!(c.hwcap, Word::MAX);
+            // sysname etc. come from the real uname.
+            assert_eq!(c.utsname.get(0), b"Linux");
+        });
+    }
+
+    #[test]
+    fn parse_utsname_complex_format() {
+        let _g = env_lock();
+        crate::testutil::with_env("PROOT_FORCE_KOMPAT", Option::<&str>::None, || {
+            let mut c = mkconfig((0, 0, 0), (0, 0, 0));
+            let s = "\\FreeBSD\\node\\9.0-RELEASE\\v1\\amd64\\dom\\1a2b\\";
+            assert_eq!(parse_utsname(&mut c, s), 0);
+            assert_eq!(c.utsname.get(0), b"FreeBSD");
+            assert_eq!(c.utsname.get(1), b"node");
+            assert_eq!(c.utsname.get(2), b"9.0-RELEASE");
+            assert_eq!(c.utsname.get(3), b"v1");
+            assert_eq!(c.utsname.get(4), b"amd64");
+            assert_eq!(c.utsname.get(5), b"dom");
+            assert_eq!(c.hwcap, 0x1a2b);
+            // Missing trailing fields -> error.
+            let mut c = mkconfig((0, 0, 0), (0, 0, 0));
+            assert_eq!(parse_utsname(&mut c, "\\sys\\node"), -1);
+        });
+    }
+
+    #[test]
+    fn modify_syscall_shifts_args() {
+        let mut t = Tracee::default();
+        t.regs[RegVersion::Current.idx()].cs = 0x33; // native ABI
+        poke_reg(&mut t, sysarg(1), 0x111);
+        poke_reg(&mut t, sysarg(2), 0x222);
+        let c = mkconfig((3, 0, 0), (5, 0, 0));
+        let mut m = Modif {
+            expected_release: kernel_version(4, 0, 0),
+            new_sysnum: Some(Sysnum::getpid),
+            ..Default::default()
+        };
+        m.shifts[0] = Shift {
+            sysarg: 1,
+            nb_args: 1,
+            offset: 1,
+        }; // arg1 -> arg2
+        assert!(modify_syscall(&mut t, &c, &m));
+        assert_eq!(get_sysnum(&t, RegVersion::Current), Sysnum::getpid);
+        assert_eq!(peek_reg(&t, RegVersion::Current, sysarg(2)), 0x111);
+        // Not needed when virtual <= expected.
+        let c2 = mkconfig((9, 0, 0), (9, 0, 0));
+        let mut t2 = Tracee::default();
+        assert!(!modify_syscall(&mut t2, &c2, &m));
+    }
+}

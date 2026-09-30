@@ -198,3 +198,81 @@ static FILTERED_SYSNUMS: &[(Sysnum, Word)] = &[
     (Sysnum::sendto, FILTER_SYSEXIT),
     (Sysnum::recvfrom, FILTER_SYSEXIT),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{Arena, fork_child, use_arena_stack};
+    use crate::tracee::reg::{Reg, poke_reg};
+
+    fn sockaddr_in(port: u16, ip: [u8; 4]) -> [u8; 128] {
+        let mut sa = [0u8; 128];
+        sa[0..2].copy_from_slice(&(AF_INET).to_ne_bytes());
+        sa[2..4].copy_from_slice(&port.to_be_bytes());
+        sa[4..8].copy_from_slice(&ip);
+        sa
+    }
+
+    #[test]
+    fn localhost_detection() {
+        assert!(is_localhost(&sockaddr_in(80, [127, 0, 0, 1])));
+        assert!(!is_localhost(&sockaddr_in(80, [127, 0, 0, 2])));
+        assert!(!is_localhost(&sockaddr_in(80, [192, 168, 1, 1])));
+        // ::1
+        let mut sa6 = [0u8; 128];
+        sa6[0..2].copy_from_slice(&(AF_INET6).to_ne_bytes());
+        sa6[23] = 1;
+        assert!(is_localhost(&sa6));
+        // ::2 is not.
+        sa6[23] = 2;
+        assert!(!is_localhost(&sa6));
+        // Non-IP families never match.
+        let mut sau = [0u8; 128];
+        sau[0..2].copy_from_slice(&(libc::AF_UNIX as u16).to_ne_bytes());
+        assert!(!is_localhost(&sau));
+    }
+
+    #[test]
+    fn mod_port_rewrites_low_ports() {
+        let arena = Arena::new(1);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = child.tracee();
+        use_arena_stack(&mut t, &arena);
+        // sockaddr for 127.0.0.1:80 at arena offset 0x800.
+        let mut sa = sockaddr_in(80, [127, 0, 0, 1]);
+        arena.local()[0x800..0x880].copy_from_slice(&sa);
+        // connect(): sockaddr at SYSARG_2.
+        poke_reg(&mut t, Reg::Sysarg2, arena.addr() + 0x800);
+        mod_port(&mut t, false, false, false, &mut sa, None);
+        // Port 80 -> 2080 in the tracee's buffer.
+        assert_eq!(&arena.local()[0x802..0x804], &2080u16.to_be_bytes());
+    }
+
+    #[test]
+    fn mod_port_skips_high_and_zero_ports() {
+        let arena = Arena::new(1);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = child.tracee();
+        use_arena_stack(&mut t, &arena);
+        let mut sa = sockaddr_in(8080, [127, 0, 0, 1]);
+        arena.local()[0x800..0x880].copy_from_slice(&sa);
+        poke_reg(&mut t, Reg::Sysarg2, arena.addr() + 0x800);
+        mod_port(&mut t, false, false, false, &mut sa, None);
+        assert_eq!(&arena.local()[0x802..0x804], &8080u16.to_be_bytes());
+        // Port 0 untouched: early return leaves the remote bytes alone.
+        let mut sa = sockaddr_in(0, [127, 0, 0, 1]);
+        mod_port(&mut t, false, false, false, &mut sa, None);
+        assert_eq!(&arena.local()[0x802..0x804], &8080u16.to_be_bytes());
+        // Non-IP family untouched entirely.
+        let mut sau = [0u8; 128];
+        sau[0..2].copy_from_slice(&(libc::AF_UNIX as u16).to_ne_bytes());
+        sau[2..4].copy_from_slice(&1u16.to_be_bytes());
+        arena.local()[0x900..0x980].copy_from_slice(&sau);
+        mod_port(&mut t, false, false, false, &mut sau, None);
+        assert_eq!(&arena.local()[0x902..0x904], &1u16.to_be_bytes());
+    }
+}

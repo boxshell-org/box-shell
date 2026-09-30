@@ -389,3 +389,357 @@ pub fn initialize_bindings(tracee: &mut Tracee) {
     }
     tracee.fs.borrow_mut().pending.clear();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fpath::FixedPath;
+    use crate::path::{Side, join_paths2};
+    use crate::testutil::{TempDir, test_tracee};
+    use std::rc::Rc;
+
+    /// Construct a tracee rooted at `root` with pending bindings promoted.
+    fn t(root: &str, binds: &[(&str, &str)]) -> Tracee {
+        test_tracee(root, binds)
+    }
+
+    #[test]
+    fn new_binding_defaults_guest_to_host() {
+        let td = TempDir::new("bind");
+        let mut tracee = Tracee::default();
+        let b = new_binding(
+            &mut tracee,
+            td.path().to_str().unwrap().as_bytes(),
+            None,
+            true,
+        )
+        .expect("binding");
+        assert_eq!(b.guest.as_bytes(), b.host.as_bytes());
+        assert_eq!(b.host.as_bytes(), td.abs(".").as_slice());
+        // Only pending — not yet in guest/host lists.
+        assert_eq!(tracee.fs.borrow().pending.len(), 1);
+        assert!(tracee.fs.borrow().guest.is_empty());
+    }
+
+    #[test]
+    fn new_binding_missing_host() {
+        let mut tracee = Tracee::default();
+        // must_exist: missing host path fails.
+        assert!(new_binding(&mut tracee, b"/definitely/missing/path", None, true).is_none());
+        // !must_exist still requires the path to exist (it is canonicalized).
+        assert!(new_binding(&mut tracee, b"/definitely/missing/path", None, false).is_none());
+    }
+
+    #[test]
+    fn new_binding_relative_guest_resolved_against_cwd() {
+        let td = TempDir::new("bind");
+        let mut tracee = Tracee::default();
+        let b = new_binding(
+            &mut tracee,
+            td.path().to_str().unwrap().as_bytes(),
+            Some(b"rel"),
+            true,
+        )
+        .expect("binding");
+        // Guest side = cwd + "rel", canonicalized.
+        let mut cwd = FixedPath::new();
+        getcwd2(None, &mut cwd).unwrap();
+        let mut expect = FixedPath::new();
+        join_paths2(&mut expect, cwd.as_bytes(), b"rel").unwrap();
+        assert_eq!(b.guest.as_bytes(), expect.as_bytes());
+    }
+
+    #[test]
+    fn new_binding_proc_self_stays_symbolic() {
+        let mut tracee = Tracee::default();
+        let b = new_binding(&mut tracee, b"/proc/self/fd", Some(b"/dev/fd"), true)
+            .expect("/proc/self binding must not be canonicalized");
+        // Host side kept verbatim — "/proc/self" would otherwise resolve
+        // to proot's own pid at init time.
+        assert_eq!(b.host.as_bytes(), b"/proc/self/fd");
+        assert_eq!(b.guest.as_bytes(), b"/dev/fd");
+        // Prefix without '/' boundary still canonicalizes: "/proc/selfish"
+        // is a normal path.
+        let td = TempDir::new("bind");
+        let p = td.dir("procself");
+        let b2 = new_binding(
+            &mut tracee,
+            p.to_str().unwrap().as_bytes(),
+            Some(b"/g"),
+            true,
+        )
+        .expect("normal binding");
+        assert_eq!(b2.host.as_bytes(), td.abs("procself").as_slice());
+    }
+
+    #[test]
+    fn insort_orders_nested_bindings() {
+        let td = TempDir::new("bind");
+        td.dir("a/b");
+        td.dir("other");
+        let tracee = Tracee::default();
+        let outer = insort_binding3(&tracee, td.abs("a").as_slice(), b"/ga").unwrap();
+        let inner = insort_binding3(&tracee, td.abs("a/b").as_slice(), b"/ga/b").unwrap();
+        let plain = insort_binding3(&tracee, td.abs("other").as_slice(), b"/gz").unwrap();
+        {
+            let fs = tracee.fs.borrow();
+            let guests: Vec<&[u8]> = fs.guest.iter().map(|b| b.guest.as_bytes()).collect();
+            // Deepest path first: get_binding returns the first covering
+            // binding, so the most specific one must come earlier.
+            let ia = guests.iter().position(|g| *g == b"/ga").unwrap();
+            let ib = guests.iter().position(|g| *g == b"/ga/b").unwrap();
+            assert!(ib < ia, "nested child must sort before parent: {guests:?}");
+            assert!(guests.contains(&b"/gz".as_slice()));
+        }
+        // get_binding finds the *deepest* covering binding.
+        let hit = get_binding(&tracee, Side::Guest, b"/ga/b/x").unwrap();
+        assert!(Rc::ptr_eq(&hit, &inner));
+        let hit = get_binding(&tracee, Side::Guest, b"/ga/x").unwrap();
+        assert!(Rc::ptr_eq(&hit, &outer));
+        let hit = get_binding(&tracee, Side::Guest, b"/gz/x").unwrap();
+        assert!(Rc::ptr_eq(&hit, &plain));
+        assert!(get_binding(&tracee, Side::Guest, b"/nope").is_none());
+    }
+
+    #[test]
+    fn same_guest_path_replaces_earlier_binding() {
+        let td = TempDir::new("bind");
+        td.dir("h1");
+        td.dir("h2");
+        let tracee = Tracee::default();
+        let b1 = insort_binding3(&tracee, td.abs("h1").as_slice(), b"/g").unwrap();
+        let b2 = insort_binding3(&tracee, td.abs("h2").as_slice(), b"/g").unwrap();
+        let fs = tracee.fs.borrow();
+        // The replaced binding is unlinked from every list.
+        assert_eq!(fs.guest.len(), 1);
+        assert!(Rc::ptr_eq(&fs.guest[0], &b2));
+        assert!(!fs.host.iter().any(|b| Rc::ptr_eq(b, &b1)));
+        assert!(!fs.pending.iter().any(|b| Rc::ptr_eq(b, &b1)));
+        assert_eq!(fs.guest[0].host.as_bytes(), td.abs("h2").as_slice());
+    }
+
+    #[test]
+    fn substitute_binding_guest_to_host() {
+        let td = TempDir::new("bind");
+        let host = TempDir::new("bindh");
+        let tracee = t(td.path().to_str().unwrap(), &[]);
+        insort_binding3(&tracee, host.abs(".").as_slice(), b"/gdir").unwrap();
+
+        let mut p = FixedPath::from_bytes(b"/gdir/sub/f");
+        assert_eq!(substitute_binding(&tracee, Side::Guest, &mut p), Ok(1));
+        let want = [host.abs(".").as_slice(), b"/sub/f"].concat();
+        assert_eq!(p.as_bytes(), want.as_slice());
+
+        // Reverse direction: a host path *outside* the rootfs substitutes
+        // back to the guest side.
+        let mut p = FixedPath::from_bytes(&want);
+        assert_eq!(substitute_binding(&tracee, Side::Host, &mut p), Ok(1));
+        assert_eq!(p.as_bytes(), b"/gdir/sub/f");
+    }
+
+    #[test]
+    fn substitute_binding_symmetric_and_missing() {
+        let td = TempDir::new("bind");
+        td.dir("same");
+        let tracee = t("/", &[]);
+        // host == guest -> Ok(0), path untouched.
+        insort_binding3(
+            &tracee,
+            td.abs("same").as_slice(),
+            td.abs("same").as_slice(),
+        )
+        .unwrap();
+        let mut p = FixedPath::from_bytes(td.abs("same").as_slice());
+        assert_eq!(substitute_binding(&tracee, Side::Guest, &mut p), Ok(0));
+        assert_eq!(p.as_bytes(), td.abs("same").as_slice());
+        // Every guest path is covered by the symmetric root binding.
+        let mut p = FixedPath::from_bytes(b"/etc/x");
+        assert_eq!(substitute_binding(&tracee, Side::Guest, &mut p), Ok(0));
+
+        // No bindings at all: ENOENT.
+        let tracee = Tracee::default();
+        let mut p = FixedPath::from_bytes(b"/x");
+        assert_eq!(
+            substitute_binding(&tracee, Side::Guest, &mut p),
+            Err(-libc::ENOENT)
+        );
+
+        // Pending bindings are invisible to Guest lookups pre-init and are
+        // never substituted (need_substitution stays false for them).
+        let mut tracee = Tracee::default();
+        new_binding(&mut tracee, td.abs("same").as_slice(), Some(b"/pend"), true).unwrap();
+        let mut p = FixedPath::from_bytes(b"/pend/x");
+        assert_eq!(
+            substitute_binding(&tracee, Side::Guest, &mut p),
+            Err(-libc::ENOENT)
+        );
+        assert_eq!(substitute_binding(&tracee, Side::Pending, &mut p), Ok(0));
+        assert_eq!(p.as_bytes(), b"/pend/x");
+    }
+
+    #[test]
+    fn host_side_lookup_skips_paths_under_root() {
+        let td = TempDir::new("bind");
+        td.dir("hdir");
+        let tracee = t(td.path().to_str().unwrap(), &[]);
+        insort_binding3(&tracee, td.abs("hdir").as_slice(), b"/g").unwrap();
+        // A host path *under the rootfs* must not match a binding: it is
+        // already guest-visible via the root.
+        let under_root = [td.abs("hdir").as_slice(), b"/x"].concat();
+        assert!(get_binding(&tracee, Side::Host, &under_root).is_none());
+        // A host path outside the rootfs matches normally.
+        let host2 = TempDir::new("bind2");
+        insort_binding3(&tracee, host2.path().to_str().unwrap().as_bytes(), b"/g2").unwrap();
+        let outside = [host2.abs(".").as_slice(), b"/x"].concat();
+        let b = get_binding(&tracee, Side::Host, &outside).unwrap();
+        assert_eq!(b.guest.as_bytes(), b"/g2");
+    }
+
+    #[test]
+    fn substitute_host_to_guest_roundtrip() {
+        let td = TempDir::new("bind");
+        let host = TempDir::new("bindh");
+        host.dir("sub");
+        let tracee = t(td.path().to_str().unwrap(), &[]);
+        insort_binding3(&tracee, host.abs(".").as_slice(), b"/vb").unwrap();
+        let mut p = FixedPath::from_bytes([host.abs(".").as_slice(), b"/sub"].concat().as_slice());
+        assert_eq!(substitute_binding(&tracee, Side::Host, &mut p), Ok(1));
+        assert_eq!(p.as_bytes(), b"/vb/sub");
+    }
+
+    #[test]
+    fn with_root_and_get_root() {
+        let td = TempDir::new("bind");
+        // Root binding only.
+        let tracee = t(td.path().to_str().unwrap(), &[]);
+        let r = with_root(&tracee, |r| r.as_bytes().to_vec());
+        assert_eq!(r, td.abs("."));
+        assert_eq!(get_root(&tracee).as_bytes(), td.abs(".").as_slice());
+        // No bindings at all: empty root.
+        let tracee = Tracee::default();
+        assert_eq!(with_root(&tracee, |r| r.len()), 0);
+    }
+
+    #[test]
+    fn insort_binding3_rejects_overlong() {
+        let tracee = Tracee::default();
+        let long = vec![b'x'; crate::PATH_MAX];
+        assert!(insort_binding3(&tracee, &long, b"/g").is_none());
+        assert!(insort_binding3(&tracee, b"/h", &long).is_none());
+    }
+
+    #[test]
+    fn initialize_bindings_promotes_pending() {
+        let td = TempDir::new("bind");
+        td.dir("h");
+        let mut tracee = Tracee::default();
+        new_binding(
+            &mut tracee,
+            td.path().to_str().unwrap().as_bytes(),
+            Some(b"/"),
+            true,
+        )
+        .unwrap();
+        new_binding(&mut tracee, td.abs("h").as_slice(), Some(b"/gh"), true).unwrap();
+        assert_eq!(tracee.fs.borrow().pending.len(), 2);
+        initialize_bindings(&mut tracee);
+        let fs = tracee.fs.borrow();
+        assert!(fs.pending.is_empty());
+        assert_eq!(fs.guest.len(), 2);
+        assert_eq!(fs.host.len(), 2);
+        // Root is the guest "/" binding.
+        assert_eq!(fs.guest.last().unwrap().guest.as_bytes(), b"/");
+    }
+
+    #[test]
+    fn initialize_binding_canonicalizes_guest_symlink() {
+        let td = TempDir::new("bind");
+        td.dir("real");
+        // Guest path via a *host* symlink inside the rootfs.
+        td.symlink("real", "lnk");
+        let mut tracee = Tracee::default();
+        new_binding(
+            &mut tracee,
+            td.path().to_str().unwrap().as_bytes(),
+            Some(b"/"),
+            true,
+        )
+        .unwrap();
+        // File source => the guest symlink is dereferenced ("/real").
+        let h = TempDir::new("bindh");
+        h.file("f", b"x");
+        new_binding(&mut tracee, h.abs("f").as_slice(), Some(b"/lnk"), true).unwrap();
+        // Dir source => the binding must present a dir at "/lnk" literally.
+        let d = TempDir::new("bindd");
+        new_binding(
+            &mut tracee,
+            d.path().to_str().unwrap().as_bytes(),
+            Some(b"/lnk2"),
+            true,
+        )
+        .unwrap();
+        td.symlink("real", "lnk2");
+        initialize_bindings(&mut tracee);
+        let fs = tracee.fs.borrow();
+        assert!(fs.guest.iter().any(|b| b.guest.as_bytes() == b"/real"));
+        assert!(fs.guest.iter().any(|b| b.guest.as_bytes() == b"/lnk2"));
+    }
+
+    #[test]
+    fn initialize_binding_bang_skips_deref() {
+        let td = TempDir::new("bind");
+        // guest "/lnk!" — trailing '!' asks not to dereference.
+        td.symlink("real", "lnk");
+        td.dir("real");
+        let mut tracee = Tracee::default();
+        new_binding(
+            &mut tracee,
+            td.path().to_str().unwrap().as_bytes(),
+            Some(b"/"),
+            true,
+        )
+        .unwrap();
+        let h = TempDir::new("bindh");
+        h.dir("d"); // host is a dir => dereference=false anyway; use file to exercise '!'
+        new_binding(
+            &mut tracee,
+            h.path().to_str().unwrap().as_bytes(),
+            Some(b"/lnk!"),
+            true,
+        )
+        .unwrap();
+        initialize_bindings(&mut tracee);
+        let fs = tracee.fs.borrow();
+        // The '!' marker is stripped; with a dir source the link is kept.
+        assert!(fs.guest.iter().any(|b| b.guest.as_bytes() == b"/lnk"));
+    }
+
+    #[test]
+    fn remove_binding_unlinks_everywhere() {
+        let td = TempDir::new("bind");
+        td.dir("h");
+        let mut tracee = Tracee::default();
+        let b = new_binding(&mut tracee, td.abs("h").as_slice(), Some(b"/g"), true).unwrap();
+        assert_eq!(tracee.fs.borrow().pending.len(), 1);
+        remove_binding_from_all_lists(&tracee, &b);
+        assert!(tracee.fs.borrow().pending.is_empty());
+    }
+
+    #[test]
+    fn binding_path_selects_side() {
+        let b = Binding {
+            host: FixedPath::from_bytes(b"/host"),
+            guest: FixedPath::from_bytes(b"/guest"),
+            need_substitution: true,
+        };
+        assert_eq!(b.path(Side::Host).as_bytes(), b"/host");
+        assert_eq!(b.path(Side::Guest).as_bytes(), b"/guest");
+        assert_eq!(b.path(Side::Pending).as_bytes(), b"/guest");
+    }
+
+    #[test]
+    fn io_error_string_formats_errno() {
+        assert!(io_error_string(libc::ENOENT).contains("No such file"));
+        assert!(io_error_string(libc::EACCES).contains("Permission denied"));
+    }
+}

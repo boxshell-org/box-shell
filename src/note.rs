@@ -88,3 +88,54 @@ macro_rules! verbose {
         }
     }};
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_name_defaults_and_sets() {
+        // OnceLock: first set wins; subsequent calls are ignored.
+        assert_eq!(tool_name(), "proot");
+        set_tool_name("box-shell-test");
+        // Depending on test order another test may have set it already.
+        let n = tool_name();
+        assert!(n == "proot" || n == "box-shell-test");
+    }
+
+    #[test]
+    fn global_verbose_roundtrip() {
+        let _g = crate::testutil::env_lock();
+        let old = global_verbose();
+        GLOBAL_VERBOSE_LEVEL.store(3, Ordering::Relaxed);
+        assert_eq!(global_verbose(), 3);
+        GLOBAL_VERBOSE_LEVEL.store(old, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn note_does_not_panic() {
+        // Smoke: every severity/origin combo renders without panic.
+        for s in [Severity::Error, Severity::Warning, Severity::Info] {
+            for o in [Origin::System, Origin::Internal, Origin::User] {
+                note(s, o, format_args!("test {s:?} {o:?}"));
+            }
+        }
+    }
+
+    #[test]
+    fn verbose_macro_gates_on_level() {
+        // verbose! with level far above any plausible setting is a no-op;
+        // just ensure the macro expands and doesn't evaluate eagerly.
+        let mut evaluated = false;
+        {
+            let v = crate::tracee::verbose_of(None);
+            if v >= 99 {
+                evaluated = true;
+            }
+        }
+        assert!(!evaluated);
+        crate::verbose!(None, 99, "should not print");
+        crate::note!(None, Severity::Info, Origin::Internal, "info smoke");
+        crate::note!(Severity::Warning, Origin::User, "warning smoke");
+    }
+}

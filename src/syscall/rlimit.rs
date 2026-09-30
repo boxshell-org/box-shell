@@ -70,3 +70,78 @@ pub fn translate_setrlimit_exit(tracee: &Tracee, is_prlimit: bool) -> i32 {
     );
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{Arena, fork_child};
+    use crate::tracee::reg::save_current_regs;
+
+    #[test]
+    fn non_stack_resource_is_noop() {
+        let arena = Arena::new(1);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = crate::testutil::test_tracee("/", &[]);
+        t.pid = child.pid;
+        // setrlimit(RLIMIT_NOFILE, addr) -> early return.
+        let r = peek_reg(&t, RegVersion::Original, Reg::Sysarg1);
+        let _ = r;
+        crate::tracee::reg::poke_reg(&mut t, Reg::Sysarg1, libc::RLIMIT_NOFILE as Word);
+        poke_reg_addr(&mut t, Reg::Sysarg2, arena.addr() + 0x800);
+        save_current_regs(&mut t, RegVersion::Original);
+        assert_eq!(translate_setrlimit_exit(&t, false), 0);
+    }
+
+    #[test]
+    fn stack_resource_smaller_is_noop() {
+        let arena = Arena::new(1);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = crate::testutil::test_tracee("/", &[]);
+        t.pid = child.pid;
+        // setrlimit(RLIMIT_STACK, &rlim) with rlim_cur=4096 (< ours) -> no raise.
+        // struct rlimit { rlim_cur=8, rlim_max=8 }.
+        arena.local()[0x800..0x808].copy_from_slice(&4096u64.to_ne_bytes());
+        arena.local()[0x808..0x810].copy_from_slice(&u64::MAX.to_ne_bytes());
+        poke_reg_addr(&mut t, Reg::Sysarg1, libc::RLIMIT_STACK as Word);
+        poke_reg_addr(&mut t, Reg::Sysarg2, arena.addr() + 0x800);
+        save_current_regs(&mut t, RegVersion::Original);
+        let before = current_stack_cur();
+        assert_eq!(translate_setrlimit_exit(&t, false), 0);
+        assert_eq!(current_stack_cur(), before); // unchanged
+    }
+
+    #[test]
+    fn prlimit_null_new_is_noop() {
+        let arena = Arena::new(1);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = crate::testutil::test_tracee("/", &[]);
+        t.pid = child.pid;
+        // prlimit64(., RLIMIT_STACK, NULL, .) -> early return.
+        poke_reg_addr(&mut t, Reg::Sysarg2, libc::RLIMIT_STACK as Word);
+        poke_reg_addr(&mut t, Reg::Sysarg3, 0);
+        save_current_regs(&mut t, RegVersion::Original);
+        assert_eq!(translate_setrlimit_exit(&t, true), 0);
+    }
+
+    fn poke_reg_addr(t: &mut Tracee, reg: Reg, v: Word) {
+        crate::tracee::reg::poke_reg(t, reg, v);
+    }
+
+    fn current_stack_cur() -> u64 {
+        let mut rl = libc::rlimit64 {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        assert_eq!(
+            crate::sys::prlimit64(0, libc::RLIMIT_STACK, None, Some(&mut rl)),
+            0
+        );
+        rl.rlim_cur
+    }
+}

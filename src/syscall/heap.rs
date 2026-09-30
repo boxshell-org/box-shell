@@ -158,3 +158,194 @@ pub fn translate_brk_exit(tracee: &mut Tracee) {
         _ => unreachable!(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn t() -> Tracee {
+        let mut t = Tracee::default();
+        t.regs[RegVersion::Original.idx()].cs = 0x33;
+        t.regs[RegVersion::Current.idx()].cs = 0x33;
+        t
+    }
+
+    fn set_arg1(t: &mut Tracee, v: Word) {
+        poke_reg(t, Reg::Sysarg1, v);
+    }
+
+    #[test]
+    fn disabled_heap_is_noop() {
+        let mut t = t();
+        t.heap.borrow_mut().disabled = true;
+        translate_brk_enter(&mut t);
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::SysargNum), 0);
+    }
+
+    #[test]
+    fn first_brk_with_suspicious_arg_is_left_alone() {
+        let mut t = t();
+        set_arg1(&mut t, 0x1000); // nonzero brk before execve
+        translate_brk_enter(&mut t);
+        // Not rewritten (no load_info): stays whatever was there.
+        assert_ne!(get_sysnum(&t, RegVersion::Current), Sysnum::mmap);
+    }
+
+    #[test]
+    fn first_brk_zero_becomes_mmap() {
+        let mut t = t();
+        set_arg1(&mut t, 0);
+        translate_brk_enter(&mut t);
+        let sysnum = get_sysnum(&t, RegVersion::Current);
+        assert!(sysnum == Sysnum::mmap || sysnum == Sysnum::mmap2);
+        assert_eq!(
+            peek_reg(&t, RegVersion::Current, Reg::Sysarg2),
+            heap_offset()
+        );
+        assert_eq!(
+            peek_reg(&t, RegVersion::Current, Reg::Sysarg3),
+            (libc::PROT_READ | libc::PROT_WRITE) as Word
+        );
+        assert_eq!(
+            peek_reg(&t, RegVersion::Current, Reg::Sysarg4),
+            (libc::MAP_PRIVATE | libc::MAP_ANONYMOUS) as Word
+        );
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::Sysarg5), Word::MAX);
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::Sysarg6), 0);
+    }
+
+    #[test]
+    fn brk_below_base_is_voided() {
+        let mut t = t();
+        t.heap.borrow_mut().base = 0x9000;
+        t.heap.borrow_mut().size = 0x100;
+        set_arg1(&mut t, 0x8000); // below base
+        translate_brk_enter(&mut t);
+        assert_eq!(get_sysnum(&t, RegVersion::Current), Sysnum::Void);
+    }
+
+    #[test]
+    fn brk_resize_becomes_mremap() {
+        let mut t = t();
+        let base = 0x7000_0000u64;
+        t.heap.borrow_mut().base = base;
+        t.heap.borrow_mut().size = 0x2000;
+        set_arg1(&mut t, base + 0x5000); // grow by 0x3000
+        translate_brk_enter(&mut t);
+        assert_eq!(get_sysnum(&t, RegVersion::Current), Sysnum::mremap);
+        let c = RegVersion::Current;
+        assert_eq!(peek_reg(&t, c, Reg::Sysarg1), base - heap_offset());
+        assert_eq!(peek_reg(&t, c, Reg::Sysarg2), 0x2000 + heap_offset());
+        assert_eq!(peek_reg(&t, c, Reg::Sysarg3), 0x5000 + heap_offset());
+        assert_eq!(peek_reg(&t, c, Reg::Sysarg4), 0);
+    }
+
+    #[test]
+    fn brk_exit_mmap_success_sets_base() {
+        let mut t = t();
+        // Simulate: Modified bank holds the rewritten sysnum (mmap).
+        let n = detranslate_sysnum(get_abi(&t), Sysnum::mmap);
+        poke_reg(&mut t, Reg::SysargNum, n);
+        crate::tracee::reg::save_current_regs(&mut t, RegVersion::Modified);
+        poke_reg(&mut t, Reg::SysargResult, 0x4000_0000);
+        translate_brk_exit(&mut t);
+        assert_eq!(t.heap.borrow().base, 0x4000_0000 + heap_offset());
+        assert_eq!(t.heap.borrow().size, 0);
+        assert_eq!(
+            peek_reg(&t, RegVersion::Current, Reg::SysargResult),
+            0x4000_0000 + heap_offset()
+        );
+    }
+
+    #[test]
+    fn brk_exit_mmap_failure_reports_zero() {
+        let mut t = t();
+        let n = detranslate_sysnum(get_abi(&t), Sysnum::mmap);
+        poke_reg(&mut t, Reg::SysargNum, n);
+        crate::tracee::reg::save_current_regs(&mut t, RegVersion::Modified);
+        poke_reg(&mut t, Reg::SysargResult, (-(libc::ENOMEM as i64)) as Word);
+        translate_brk_exit(&mut t);
+        assert_eq!(peek_reg(&t, RegVersion::Current, Reg::SysargResult), 0);
+        assert_eq!(t.heap.borrow().base, 0);
+    }
+
+    #[test]
+    fn brk_exit_mremap_updates_size() {
+        let mut t = t();
+        let base = 0x5000_0000u64;
+        t.heap.borrow_mut().base = base;
+        t.heap.borrow_mut().size = 0x1000;
+        let n = detranslate_sysnum(get_abi(&t), Sysnum::mremap);
+        poke_reg(&mut t, Reg::SysargNum, n);
+        poke_reg(&mut t, Reg::Sysarg3, 0x8000 + heap_offset());
+        crate::tracee::reg::save_current_regs(&mut t, RegVersion::Modified);
+        // mremap returned the same base (base - offset was requested).
+        poke_reg(&mut t, Reg::SysargResult, base - heap_offset());
+        translate_brk_exit(&mut t);
+        assert_eq!(t.heap.borrow().size, 0x8000);
+        assert_eq!(
+            peek_reg(&t, RegVersion::Current, Reg::SysargResult),
+            base + 0x8000
+        );
+    }
+
+    #[test]
+    fn brk_exit_mremap_relocation_keeps_old_size() {
+        let mut t = t();
+        let base = 0x5000_0000u64;
+        t.heap.borrow_mut().base = base;
+        t.heap.borrow_mut().size = 0x1000;
+        let n = detranslate_sysnum(get_abi(&t), Sysnum::mremap);
+        poke_reg(&mut t, Reg::SysargNum, n);
+        crate::tracee::reg::save_current_regs(&mut t, RegVersion::Modified);
+        // mremap moved the mapping (result != base-offset) — treated as failure.
+        poke_reg(&mut t, Reg::SysargResult, 0x9999_0000);
+        translate_brk_exit(&mut t);
+        assert_eq!(
+            peek_reg(&t, RegVersion::Current, Reg::SysargResult),
+            base + 0x1000
+        );
+        assert_eq!(t.heap.borrow().size, 0x1000);
+    }
+
+    #[test]
+    fn brk_exit_void_returns_current_brk() {
+        let mut t = t();
+        t.heap.borrow_mut().base = 0x8000;
+        t.heap.borrow_mut().size = 0x600;
+        let n = detranslate_sysnum(get_abi(&t), Sysnum::Void);
+        poke_reg(&mut t, Reg::SysargNum, n);
+        crate::tracee::reg::save_current_regs(&mut t, RegVersion::Modified);
+        translate_brk_exit(&mut t);
+        assert_eq!(
+            peek_reg(&t, RegVersion::Current, Reg::SysargResult),
+            0x8000 + 0x600
+        );
+    }
+
+    #[test]
+    fn brk_exit_real_brk_disables_emulation() {
+        let mut t = t();
+        let n = detranslate_sysnum(get_abi(&t), Sysnum::brk);
+        poke_reg(&mut t, Reg::SysargNum, n);
+        crate::tracee::reg::save_current_regs(&mut t, RegVersion::Modified);
+        // Result equals the originally requested brk -> legit, stop emulating.
+        t.regs[RegVersion::Original.idx()].rdi = 0xDEAD;
+        poke_reg(&mut t, Reg::SysargResult, 0xDEAD);
+        translate_brk_exit(&mut t);
+        assert!(t.heap.borrow().disabled);
+    }
+
+    #[test]
+    fn clone_heap_copies_state() {
+        let h = Heap {
+            base: 0x1111,
+            size: 0x222,
+            disabled: true,
+        };
+        let c = h.clone_heap();
+        assert_eq!(c.base, 0x1111);
+        assert_eq!(c.size, 0x222);
+        assert!(c.disabled);
+    }
+}

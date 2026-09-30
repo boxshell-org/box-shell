@@ -1257,3 +1257,255 @@ pub fn mark_netlink_route_fd(tracee: &mut Tracee, fd: i32) {
 pub fn sock_of<'a>(t: &'a mut RefMut<'a, Tracee>, _idx: usize) -> &'a mut FakeNetlinkSocket {
     &mut t.fake_netlink_fds[_idx]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{Arena, fork_child, test_tracee};
+
+    fn hdr_fields(buf: &[u8], at: usize) -> (u32, u16, u16, u32, u32) {
+        (
+            u32::from_ne_bytes(buf[at..at + 4].try_into().unwrap()),
+            u16::from_ne_bytes(buf[at + 4..at + 6].try_into().unwrap()),
+            u16::from_ne_bytes(buf[at + 6..at + 8].try_into().unwrap()),
+            u32::from_ne_bytes(buf[at + 8..at + 12].try_into().unwrap()),
+            u32::from_ne_bytes(buf[at + 12..at + 16].try_into().unwrap()),
+        )
+    }
+
+    #[test]
+    fn alignment_helpers() {
+        assert_eq!(nlmsg_align(1), 4);
+        assert_eq!(nlmsg_align(4), 4);
+        assert_eq!(nlmsg_align(5), 8);
+        assert_eq!(rta_length(4), 8);
+        assert_eq!(rta_space(4), 8);
+        assert_eq!(rta_space(5), 12); // pad to 4
+    }
+
+    #[test]
+    fn add_attr_layout() {
+        let mut buf = [0u8; 64];
+        let off = nl_add_attr(&mut buf, 0, 64, IFLA_IFNAME, b"lo\0");
+        assert_eq!(off, 8); // rta_length(3)=7 -> align 8
+        assert_eq!(u16::from_ne_bytes(buf[0..2].try_into().unwrap()), 7);
+        assert_eq!(
+            u16::from_ne_bytes(buf[2..4].try_into().unwrap()),
+            IFLA_IFNAME
+        );
+        assert_eq!(&buf[4..7], b"lo\0");
+        // Overflow: returns off unchanged.
+        assert_eq!(nl_add_attr(&mut buf, 60, 64, IFLA_MTU, &[1, 2, 3, 4]), 60);
+    }
+
+    #[test]
+    fn build_done_and_error() {
+        let mut buf = [0u8; 128];
+        let end = nl_build_done(&mut buf, 0, 128, 7, 42);
+        let (len, ty, flags, seq, pid) = hdr_fields(&buf, 0);
+        assert_eq!((len, ty, seq, pid), (20, NLMSG_DONE, 7, 42));
+        assert_eq!(flags & NLM_F_MULTI, NLM_F_MULTI);
+        assert_eq!(end, nlmsg_align(20));
+        // Error carries the code at hdr+4.
+        let end = nl_build_error(&mut buf, 40, 128, 9, 1, -libc::EPERM);
+        let (len, ty, _f, seq, pid) = hdr_fields(&buf, 40);
+        assert_eq!((len, ty, seq, pid), (36, NLMSG_ERROR, 9, 1));
+        assert_eq!(
+            i32::from_ne_bytes(buf[56..60].try_into().unwrap()),
+            -libc::EPERM
+        );
+        assert_eq!(end, 40 + nlmsg_align(36));
+        // No room -> unchanged offset.
+        assert_eq!(nl_build_done(&mut buf, 120, 128, 1, 1), 120);
+        assert_eq!(nl_build_error(&mut buf, 120, 128, 1, 1, 0), 120);
+    }
+
+    #[test]
+    fn build_link_lo_structure() {
+        let mut buf = [0u8; 512];
+        let end = nl_build_loopback_link(&mut buf, 0, 512, 3, 9, NLM_F_MULTI);
+        let (len, ty, flags, seq, pid) = hdr_fields(&buf, 0);
+        assert_eq!((ty, seq, pid), (RTM_NEWLINK, 3, 9));
+        assert_eq!(flags & NLM_F_MULTI, NLM_F_MULTI);
+        assert_eq!(end, nlmsg_align(len as usize));
+        // ifinfomsg at +16: type=ARPHRD_LOOPBACK, index=1, flags include UP|RUNNING|LOWER_UP.
+        let ifi = &buf[16..32];
+        assert_eq!(
+            u16::from_ne_bytes(ifi[2..4].try_into().unwrap()),
+            ARPHRD_LOOPBACK
+        );
+        assert_eq!(i32::from_ne_bytes(ifi[4..8].try_into().unwrap()), 1);
+        let f = u32::from_ne_bytes(ifi[8..12].try_into().unwrap());
+        assert!(f & IFF_UP != 0 && f & IFF_LOOPBACK != 0);
+        assert!(f & IFF_LOWER_UP != 0); // RUNNING -> LOWER_UP added
+        // First attr should be IFLA_IFNAME "lo".
+        assert_eq!(
+            u16::from_ne_bytes(buf[32..34].try_into().unwrap()),
+            rta_length(3) as u16
+        );
+        assert_eq!(
+            u16::from_ne_bytes(buf[34..36].try_into().unwrap()),
+            IFLA_IFNAME
+        );
+        assert_eq!(&buf[36..39], b"lo\0");
+    }
+
+    #[test]
+    fn build_addr_lo_v4_and_v6() {
+        let mut buf = [0u8; 256];
+        let end = nl_build_loopback_addr(&mut buf, 0, 256, 1, 1, libc::AF_INET, NLM_F_MULTI);
+        let (_len, ty, _f, _s, _p) = hdr_fields(&buf, 0);
+        assert_eq!(ty, RTM_NEWADDR);
+        // ifaddrmsg: family=AF_INET, prefixlen=8, scope=host.
+        assert_eq!(buf[16], libc::AF_INET as u8);
+        assert_eq!(buf[17], 8);
+        assert_eq!(buf[19], RT_SCOPE_HOST);
+        assert!(end > 0);
+        // v6: family AF_INET6, prefix 128.
+        let end2 = nl_build_loopback_addr(&mut buf, 128, 256, 1, 1, libc::AF_INET6, NLM_F_MULTI);
+        assert_eq!(buf[128 + 16], libc::AF_INET6 as u8);
+        assert_eq!(buf[128 + 17], 128);
+        assert!(end2 > 128);
+    }
+
+    #[test]
+    fn request_is_loopback_detection() {
+        // Empty request -> loopback.
+        assert!(nl_request_is_loopback(&[]));
+        // ifindex=1 -> loopback.
+        let mut req = vec![0u8; NLMSG_HDR_LEN + 16];
+        req[NLMSG_HDR_LEN + 4..NLMSG_HDR_LEN + 8].copy_from_slice(&1i32.to_ne_bytes());
+        assert!(nl_request_is_loopback(&req));
+        // ifindex=7 -> not loopback.
+        req[NLMSG_HDR_LEN + 4..NLMSG_HDR_LEN + 8].copy_from_slice(&7i32.to_ne_bytes());
+        assert!(!nl_request_is_loopback(&req));
+        // IFLA_IFNAME "lo" overrides ifindex.
+        let mut req = vec![0u8; NLMSG_HDR_LEN + 16 + 8];
+        req[NLMSG_HDR_LEN + 4..NLMSG_HDR_LEN + 8].copy_from_slice(&7i32.to_ne_bytes());
+        let aoff = NLMSG_HDR_LEN + 16;
+        req[aoff..aoff + 2].copy_from_slice(&(rta_length(3) as u16).to_ne_bytes());
+        req[aoff + 2..aoff + 4].copy_from_slice(&IFLA_IFNAME.to_ne_bytes());
+        req[aoff + 4..aoff + 7].copy_from_slice(b"lo\0");
+        assert!(nl_request_is_loopback(&req));
+    }
+
+    #[test]
+    fn request_link_target_parses_name() {
+        let mut req = vec![0u8; NLMSG_HDR_LEN + 16 + 12];
+        req[NLMSG_HDR_LEN + 4..NLMSG_HDR_LEN + 8].copy_from_slice(&5i32.to_ne_bytes());
+        let aoff = NLMSG_HDR_LEN + 16;
+        req[aoff..aoff + 2].copy_from_slice(&(rta_length(5) as u16).to_ne_bytes());
+        req[aoff + 2..aoff + 4].copy_from_slice(&IFLA_IFNAME.to_ne_bytes());
+        req[aoff + 4..aoff + 9].copy_from_slice(b"eth0\0");
+        let (idx, name) = nl_request_link_target(&req);
+        assert_eq!(idx, 5);
+        assert_eq!(&name[..5], b"eth0\0");
+        // Truncated request -> zeros.
+        assert_eq!(nl_request_link_target(&[]), (0, [0; 16]));
+    }
+
+    #[test]
+    fn prefixlen_and_scope() {
+        assert_eq!(nl_prefixlen(&[255, 255, 255, 0]), 24);
+        assert_eq!(nl_prefixlen(&[255, 128, 0, 0]), 9);
+        assert_eq!(nl_prefixlen(&[0, 0, 0, 0]), 0);
+        assert_eq!(nl_prefixlen(&[255; 4]), 32);
+        assert_eq!(nl_addr_scope(libc::AF_INET, &[127, 0, 0, 1]), RT_SCOPE_HOST);
+        assert_eq!(
+            nl_addr_scope(libc::AF_INET, &[169, 254, 1, 1]),
+            RT_SCOPE_LINK
+        );
+        assert_eq!(
+            nl_addr_scope(libc::AF_INET, &[8, 8, 8, 8]),
+            RT_SCOPE_UNIVERSE
+        );
+        let lo6 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1u8];
+        assert_eq!(nl_addr_scope(libc::AF_INET6, &lo6), RT_SCOPE_HOST);
+        let fe80 = [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1u8];
+        assert_eq!(nl_addr_scope(libc::AF_INET6, &fe80), RT_SCOPE_LINK);
+    }
+
+    #[test]
+    fn fake_fd_bookkeeping() {
+        let mut t = test_tracee("/", &[]);
+        t.fake_netlink_fds.push(FakeNetlinkSocket {
+            fd: 7,
+            reply: vec![0; MAX_FAKE_NETLINK_REPLY],
+            reply_off: 0,
+        });
+        assert!(is_fake_netlink_fd(&t, 7));
+        assert!(!is_fake_netlink_fd(&t, 8));
+        assert!(!is_fake_netlink_fd(&t, -1));
+        assert_eq!(fake_netlink_idx(&t, 7), Some(0));
+        unmark_fake_netlink_fd(&mut t, 7);
+        assert!(!is_fake_netlink_fd(&t, 7));
+        // Route-fd bookkeeping + ack-pending reset.
+        let mut t = test_tracee("/", &[]);
+        t.netlink_route_fds.push(4);
+        t.netlink_ack_pending = true;
+        t.netlink_ack_fd = 4;
+        assert!(is_netlink_route_fd(&t, 4));
+        unmark_netlink_route_fd(&mut t, 4);
+        assert!(!is_netlink_route_fd(&t, 4));
+        assert!(!t.netlink_ack_pending);
+    }
+
+    #[test]
+    fn fake_netlink_sockname_writes_nl() {
+        let arena = Arena::new(1);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = test_tracee("/", &[]);
+        t.pid = child.pid;
+        // size_ptr at 0x900 (input capacity 16), addr at 0x800.
+        let in_size = 16u32;
+        arena.local()[0x900..0x904].copy_from_slice(&in_size.to_ne_bytes());
+        assert_eq!(
+            write_fake_netlink_sockname(&t, arena.addr() + 0x800, arena.addr() + 0x900, 77),
+            0
+        );
+        // sockaddr_nl: family AF_NETLINK, pid 77, size out = 12.
+        assert_eq!(
+            u16::from_ne_bytes(arena.local()[0x800..0x802].try_into().unwrap()),
+            libc::AF_NETLINK as u16
+        );
+        assert_eq!(
+            u32::from_ne_bytes(arena.local()[0x804..0x808].try_into().unwrap()),
+            77
+        );
+        assert_eq!(
+            u32::from_ne_bytes(arena.local()[0x900..0x904].try_into().unwrap()),
+            12
+        );
+        // size_ptr NULL -> EINVAL.
+        assert_eq!(
+            write_fake_netlink_sockname(&t, arena.addr() + 0x800, 0, 1),
+            -libc::EINVAL
+        );
+    }
+
+    #[test]
+    fn msghdr_first_iovec_walks() {
+        let arena = Arena::new(1);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = test_tracee("/", &[]);
+        t.pid = child.pid;
+        let w = crate::tracee::reg::sizeof_word(&t); // 8
+        // iov at 0x500: {base=0x600, len=64}; msghdr at 0x700.
+        arena.local()[0x500..0x508].copy_from_slice(&(arena.addr() + 0x600).to_ne_bytes());
+        arena.local()[0x508..0x510].copy_from_slice(&64u64.to_ne_bytes());
+        arena.local()[0x700 + 2 * w..0x700 + 2 * w + 8]
+            .copy_from_slice(&(arena.addr() + 0x500).to_ne_bytes());
+        arena.local()[0x700 + 3 * w..0x700 + 3 * w + 8].copy_from_slice(&1u64.to_ne_bytes());
+        let (base, len) = msghdr_first_iovec(&t, arena.addr() + 0x700).unwrap();
+        assert_eq!(base, arena.addr() + 0x600);
+        assert_eq!(len, 64);
+        // NULL msghdr / NULL iov -> None.
+        assert!(msghdr_first_iovec(&t, 0).is_none());
+        arena.local()[0x700 + 2 * w..0x700 + 2 * w + 8].copy_from_slice(&0u64.to_ne_bytes());
+        assert!(msghdr_first_iovec(&t, arena.addr() + 0x700).is_none());
+    }
+}

@@ -95,3 +95,86 @@ static FILTERED_SYSNUMS: &[(Sysnum, Word)] = &[
     (Sysnum::lstat, FILTER_SYSEXIT),
     (Sysnum::lstat64, FILTER_SYSEXIT),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{Arena, TempDir, fork_child, test_tracee, use_arena_stack};
+    use crate::tracee::reg::{poke_reg, save_current_regs, set_sysnum};
+
+    /// Arm a synthetic successful lstat: path ptr + stat buffer in arena.
+    fn setup(t: &mut Tracee, arena: &mut Arena, host_path: &[u8], sysnum: Sysnum) -> usize {
+        use_arena_stack(t, arena);
+        let poff = 0x800usize;
+        arena.local()[poff..poff + host_path.len()].copy_from_slice(host_path);
+        arena.local()[poff + host_path.len()] = 0;
+        let soff = 0x1000usize;
+        // Current bank holds result=0 + args; snapshot into the banks the
+        // handler reads: Modified.Sysarg1 (path), Original (sysnum, buf).
+        poke_reg(t, Reg::Sysarg1, arena.addr() + poff as u64);
+        poke_reg(t, Reg::Sysarg2, arena.addr() + soff as u64);
+        set_sysnum(t, sysnum);
+        poke_reg(t, Reg::SysargResult, 0);
+        save_current_regs(t, RegVersion::Modified);
+        save_current_regs(t, RegVersion::Original);
+        soff
+    }
+
+    #[test]
+    fn lstat_symlink_size_becomes_target_len() {
+        let td = TempDir::new("fixss");
+        td.file("target_file", b"");
+        td.symlink("target_file", "lnk");
+        // Literal path — td.abs() would canonicalize the symlink away.
+        let link = format!("{}/lnk", td.path().display()).into_bytes();
+        let mut arena = Arena::new(2);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.pid = child.pid;
+        // Fake a successful lstat with st_size=9999.
+        let soff = setup(&mut t, &mut arena, &link, Sysnum::lstat);
+        let mut st: libc::stat = crate::sys::zeroed();
+        st.st_size = 9999;
+        arena.local()[soff..soff + size_of::<libc::stat>()]
+            .copy_from_slice(crate::sys::as_bytes(&st));
+        assert_eq!(handle_sysexit_end(&mut t), 0);
+        // st_size now equals strlen("target_file").
+        let mut st2: libc::stat = crate::sys::zeroed();
+        crate::sys::as_bytes_mut(&mut st2)
+            .copy_from_slice(&arena.local()[soff..soff + size_of::<libc::stat>()]);
+        assert_eq!(st2.st_size, "target_file".len() as i64);
+    }
+
+    #[test]
+    fn non_link_and_failure_untouched() {
+        let td = TempDir::new("fixss");
+        td.file("real", b"");
+        let real = td.abs("real");
+        let mut arena = Arena::new(2);
+        let Some(child) = fork_child(&arena) else {
+            return;
+        };
+        let mut t = test_tracee(td.path().to_str().unwrap(), &[]);
+        t.pid = child.pid;
+        let soff = setup(&mut t, &mut arena, &real, Sysnum::lstat);
+        let mut st: libc::stat = crate::sys::zeroed();
+        st.st_size = 4242;
+        arena.local()[soff..soff + size_of::<libc::stat>()]
+            .copy_from_slice(crate::sys::as_bytes(&st));
+        // Regular file -> st_size preserved.
+        assert_eq!(handle_sysexit_end(&mut t), 0);
+        let mut st2: libc::stat = crate::sys::zeroed();
+        crate::sys::as_bytes_mut(&mut st2)
+            .copy_from_slice(&arena.local()[soff..soff + size_of::<libc::stat>()]);
+        assert_eq!(st2.st_size, 4242);
+        // Failed syscall (result != 0) -> untouched.
+        poke_reg(&mut t, Reg::SysargResult, (-1i64) as Word);
+        assert_eq!(handle_sysexit_end(&mut t), 0);
+        // Wrong syscall -> untouched.
+        set_sysnum(&mut t, Sysnum::open);
+        save_current_regs(&mut t, RegVersion::Original);
+        assert_eq!(handle_sysexit_end(&mut t), 0);
+    }
+}

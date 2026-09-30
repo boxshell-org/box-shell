@@ -1206,3 +1206,244 @@ pub fn run(tracee_rc: &TraceeRef, args: &[String]) -> i32 {
 
     tracee::event::event_loop()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{TempDir, env_lock};
+
+    #[test]
+    fn parse_integer_option_values() {
+        assert_eq!(parse_integer_option(Some("3"), "-v"), Ok(3));
+        assert_eq!(parse_integer_option(Some("-1"), "-v"), Ok(-1));
+        assert_eq!(parse_integer_option(Some("abc"), "-v"), Err(-1));
+        assert_eq!(parse_integer_option(None, "-v"), Err(-1));
+    }
+
+    #[test]
+    fn expand_front_variable_cases() {
+        let _g = env_lock();
+        crate::testutil::with_env("PROOT_TEST_EFV", Some("/BASE"), || {
+            assert_eq!(expand_front_variable("$PROOT_TEST_EFV/sub"), "/BASE/sub");
+            assert_eq!(expand_front_variable("$PROOT_TEST_EFV"), "/BASE");
+        });
+        crate::testutil::with_env("PROOT_TEST_EFV", Option::<&str>::None, || {
+            // Unset -> literal passthrough.
+            assert_eq!(
+                expand_front_variable("$PROOT_TEST_EFV/x"),
+                "$PROOT_TEST_EFV/x"
+            );
+            assert_eq!(expand_front_variable("$PROOT_TEST_EFV"), "$PROOT_TEST_EFV");
+        });
+        // No '$' -> unchanged.
+        assert_eq!(expand_front_variable("/plain/path"), "/plain/path");
+        // "$" alone -> unchanged (pos<=1 guard).
+        assert_eq!(expand_front_variable("$/x"), "$/x");
+        assert_eq!(expand_front_variable("$"), "$");
+    }
+
+    #[test]
+    fn handle_option_b_splits_host_guest() {
+        let td = TempDir::new("cli");
+        td.dir("h");
+        let mut t = Tracee::default();
+        let host = td.abs("h");
+        let v = format!("{}:/g", String::from_utf8_lossy(&host));
+        assert_eq!(handle_option_b(&mut t, Some(&v)), 0);
+        // The binding lands in the pending list with the right endpoints.
+        let p = t.fs.borrow().pending.clone();
+        assert!(
+            p.iter()
+                .any(|b| b.guest.as_bytes() == b"/g" && b.host.as_bytes() == host.as_slice())
+        );
+        // "host:" with empty guest part.
+        let v = format!("{}:", String::from_utf8_lossy(&host));
+        assert_eq!(handle_option_b(&mut t, Some(&v)), 0);
+    }
+
+    #[test]
+    fn handle_option_w_sets_cwd() {
+        let mut t = Tracee::default();
+        assert_eq!(handle_option_w(&mut t, Some("/work")), 0);
+        assert_eq!(t.fs.borrow().cwd.as_bytes(), b"/work");
+    }
+
+    #[test]
+    fn handle_option_q_sets_qemu_and_rootfs_binding() {
+        let mut t = Tracee::default();
+        assert_eq!(handle_option_q(&mut t, Some("qemu-arm -0")), 0);
+        let q = t.qemu.as_ref().unwrap();
+        assert_eq!(&**q, &["qemu-arm".to_string(), "-0".to_string()]);
+        // /host-rootfs + ld.so.preload bindings are queued.
+        let p = t.fs.borrow().pending.clone();
+        assert!(
+            p.iter()
+                .any(|b| b.guest.as_bytes() == HOST_ROOTFS.as_bytes())
+        );
+        assert!(
+            p.iter()
+                .any(|b| b.guest.as_bytes() == b"/etc/ld.so.preload")
+        );
+    }
+
+    #[test]
+    fn handle_option_i_registers_fake_id0() {
+        let mut t = Tracee::default();
+        assert_eq!(handle_option_i(&mut t, Some("1000:1000")), 0);
+        assert!(extension::has_extension(&t, |e| matches!(
+            e,
+            AnyExtension::FakeId0(_)
+        )));
+        // Second -i replaces rather than stacks.
+        assert_eq!(handle_option_i(&mut t, Some("0:0")), 0);
+        let n = t
+            .extensions
+            .iter()
+            .filter(|e| matches!(e, Some(AnyExtension::FakeId0(_))))
+            .count();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn handle_option_0_implies_root() {
+        let mut t = Tracee::default();
+        assert_eq!(handle_option_0(&mut t, None), 0);
+        assert!(extension::has_extension(&t, |e| matches!(
+            e,
+            AnyExtension::FakeId0(_)
+        )));
+    }
+
+    #[test]
+    fn flag_options_register_extensions() {
+        let mut t = Tracee::default();
+        assert_eq!(handle_option_link2symlink(&mut t, None), 0);
+        assert!(extension::has_extension(&t, |e| matches!(
+            e,
+            AnyExtension::Link2Symlink(_)
+        )));
+        assert_eq!(handle_option_l_upper(&mut t, None), 0);
+        assert!(extension::has_extension(&t, |e| matches!(
+            e,
+            AnyExtension::FixSymlinkSize(_)
+        )));
+        assert_eq!(handle_option_h_upper(&mut t, None), 0);
+        assert!(extension::has_extension(&t, |e| matches!(
+            e,
+            AnyExtension::HiddenFiles(_)
+        )));
+        assert_eq!(handle_option_p(&mut t, None), 0);
+        assert!(extension::has_extension(&t, |e| matches!(
+            e,
+            AnyExtension::PortSwitch(_)
+        )));
+        assert_eq!(handle_option_sysvipc(&mut t, None), 0);
+        assert!(extension::has_extension(&t, |e| matches!(
+            e,
+            AnyExtension::Sysvipc(_)
+        )));
+    }
+
+    /// A parse_config-ready args vector: proot + given args + cmd.
+    fn args(tail: &[&str]) -> Vec<String> {
+        let mut v = vec!["proot".to_string()];
+        v.extend(tail.iter().map(|s| s.to_string()));
+        v
+    }
+
+    #[test]
+    fn parse_config_finds_command_index() {
+        let _g = env_lock();
+        let td = TempDir::new("cli");
+        td.dir("bin");
+        td.file_mode("bin/echo", b"#!/bin/sh\n", 0o755);
+        let root = td.path().to_str().unwrap().to_string();
+        let mut t = Tracee::default();
+        let v = args(&["-r", &root, "/bin/echo", "hello"]);
+        let idx = parse_config(&mut t, &v).unwrap();
+        assert_eq!(idx, 3); // "/bin/echo"
+        assert_eq!(t.exe.as_deref(), Some("/bin/echo"));
+    }
+
+    #[test]
+    fn parse_config_missing_value_fails() {
+        let _g = env_lock();
+        let mut t = Tracee::default();
+        // "-r" as the last arg: value expected.
+        let v = args(&["-r"]);
+        assert!(parse_config(&mut t, &v).is_err());
+        let mut t = Tracee::default();
+        let v = args(&["-v"]);
+        assert!(parse_config(&mut t, &v).is_err());
+    }
+
+    #[test]
+    fn parse_config_unknown_option_fails() {
+        let _g = env_lock();
+        let mut t = Tracee::default();
+        let v = args(&["--frobnicate-x", "cmd"]);
+        assert!(parse_config(&mut t, &v).is_err());
+    }
+
+    #[test]
+    fn parse_config_bad_separator_fails() {
+        let _g = env_lock();
+        let mut t = Tracee::default();
+        // -b uses ':' separator semantics: "-bX" (no space sep allowed
+        // after prefix match rules) — "-bx" parses as flag with junk.
+        let v = args(&["-vx", "cmd"]);
+        assert!(parse_config(&mut t, &v).is_err());
+    }
+
+    #[test]
+    fn parse_config_combined_flags() {
+        let _g = env_lock();
+        let td = TempDir::new("cli");
+        td.dir("bin");
+        td.dir("work");
+        td.file_mode("bin/echo", b"#!/bin/sh\n", 0o755);
+        let root = td.path().to_str().unwrap().to_string();
+        let mut t = Tracee::default();
+        let v = args(&["-r", &root, "-0", "-w", "/work", "-v", "0", "/bin/echo"]);
+        let idx = parse_config(&mut t, &v).unwrap();
+        assert_eq!(idx, 8); // "-v" consumes "0" as its value arg.
+        assert_eq!(t.fs.borrow().cwd.as_bytes(), b"/work");
+        assert!(extension::has_extension(&t, |e| matches!(
+            e,
+            AnyExtension::FakeId0(_)
+        )));
+        assert_eq!(t.verbose, 0);
+    }
+
+    #[test]
+    fn parse_config_single_arg_prints_usage() {
+        // Just "proot" -> usage + error.
+        let mut t = Tracee::default();
+        assert!(parse_config(&mut t, &args(&[])).is_err());
+    }
+
+    #[test]
+    fn parse_config_inline_separator() {
+        let _g = env_lock();
+        let td = TempDir::new("cli");
+        td.dir("bin");
+        td.file_mode("bin/echo", b"#!/bin/sh\n", 0o755);
+        let root = td.path().to_str().unwrap().to_string();
+        // -b host:guest (':'-separated value after space).
+        let host = td.abs("bin");
+        let bind = format!("{}:/b", String::from_utf8_lossy(&host));
+        let mut t = Tracee::default();
+        let v = args(&["-r", &root, "-b", &bind, "/bin/echo"]);
+        assert_eq!(parse_config(&mut t, &v).unwrap(), 5);
+        // /b bound into the guest namespace after initialization.
+        let b = binding::get_binding(&t, crate::path::Side::Guest, b"/b");
+        assert!(
+            b.is_some()
+                || t.fs
+                    .borrow()
+                    .pending
+                    .iter()
+                    .any(|b| b.guest.as_bytes() == b"/b")
+        );
+    }
+}
