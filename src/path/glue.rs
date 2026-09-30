@@ -89,3 +89,49 @@ pub fn build_glue(
 
     typ
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::path::Side;
+    use crate::testutil::{TempDir, test_tracee};
+
+    /// A tracee whose rootfs is `root` and whose glue_type is preset (set
+    /// by initialize_binding in production).
+    fn glue_tracee(root: &str) -> Tracee {
+        let mut t = test_tracee(root, &[]);
+        t.glue_type = libc::S_IFREG;
+        t
+    }
+
+    #[test]
+    fn build_glue_creates_missing_dir_and_binding() {
+        let td = TempDir::new("glue");
+        let root = String::from_utf8(td.abs(".")).unwrap();
+        let mut t = glue_tracee(&root);
+        // guest "/a/b" — "a" missing in the rootfs.
+        let guest = FixedPath::from_bytes(b"/a");
+        let mut host = FixedPath::from_bytes(format!("{root}/a").as_bytes());
+        let typ = build_glue(&mut t, &guest, &mut host, Finality::NotFinal);
+        assert_eq!(typ, libc::S_IFDIR);
+        assert!(std::path::Path::new(&format!("{root}/a")).is_dir());
+        // A glue temp dir was created and a covering binding registered.
+        assert!(t.glue.is_some());
+        let b = binding::get_path_binding(&t, Side::Guest, b"/a");
+        assert!(b.is_some());
+    }
+
+    #[test]
+    fn build_glue_final_component_uses_glue_type() {
+        let td = TempDir::new("glue-fin");
+        let root = String::from_utf8(td.abs(".")).unwrap();
+        let mut t = glue_tracee(&root);
+        t.glue_type = libc::S_IFREG;
+        let guest = FixedPath::from_bytes(b"/leaf");
+        let mut host = FixedPath::from_bytes(format!("{root}/leaf").as_bytes());
+        let typ = build_glue(&mut t, &guest, &mut host, Finality::Normal);
+        // Final component: S_IFREG created (mknod).
+        assert_eq!(typ, libc::S_IFREG);
+        assert!(std::path::Path::new(&format!("{root}/leaf")).is_file());
+    }
+}

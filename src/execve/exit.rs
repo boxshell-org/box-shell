@@ -288,3 +288,43 @@ pub fn translate_execve_exit(tracee: &mut Tracee) {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::execve::Mapping;
+
+    #[test]
+    fn transcript_mappings_serializes_six_words_each() {
+        let mappings = vec![
+            Mapping {
+                fd: 7,
+                offset: 0x1000,
+                addr: 0x400000,
+                length: 0x2000,
+                flags: (libc::MAP_PRIVATE | libc::MAP_FIXED) as Word,
+                prot: (libc::PROT_READ | libc::PROT_EXEC) as Word,
+                clear_length: 0x100,
+            },
+            Mapping {
+                fd: Word::MAX,
+                offset: 0,
+                addr: 0x500000,
+                length: 0x1000,
+                flags: (libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED) as Word,
+                prot: libc::PROT_WRITE as Word,
+                clear_length: 0,
+            },
+        ];
+        let mut script = Vec::new();
+        transcript_mappings(&mut script, &mappings);
+        assert_eq!(script.len(), 12);
+        assert_eq!(script[0], LOAD_ACTION_MMAP_FILE);
+        assert_eq!(script[1], 0x400000);
+        assert_eq!(script[2], 0x2000);
+        assert_eq!(script[4], 0x1000); // offset
+        assert_eq!(script[5], 0x100); // clear_length
+        assert_eq!(script[6], LOAD_ACTION_MMAP_ANON);
+        assert_eq!(script[7], 0x500000);
+    }
+}

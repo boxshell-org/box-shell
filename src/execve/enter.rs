@@ -463,3 +463,146 @@ pub fn translate_execve_enter(tracee: &mut Tracee) -> i32 {
     tracee.as_ptracee.ignore_loader_syscalls = true;
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::execve::LoadInfo;
+    use crate::execve::elf::{
+        ET_DYN, ET_EXEC, ElfHeader, ElfHeader64, ProgramHeader, ProgramHeader64,
+    };
+    use crate::testutil::test_tracee;
+
+    fn ehdr64(e_type: u16) -> ElfHeader {
+        let mut h: ElfHeader64 = crate::sys::zeroed();
+        h.e_ident[..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        h.e_ident[4] = 2; // 64-bit class
+        h.e_type = e_type;
+        ElfHeader { class64: h }
+    }
+
+    fn ph64(vaddr: u64, filesz: u64, memsz: u64, flags: u32) -> ProgramHeader {
+        ProgramHeader {
+            class64: ProgramHeader64 {
+                p_type: PT_LOAD,
+                p_flags: flags,
+                p_offset: 0x1000,
+                p_vaddr: vaddr,
+                p_paddr: 0,
+                p_filesz: filesz,
+                p_memsz: memsz,
+                p_align: 0x1000,
+            },
+        }
+    }
+
+    fn empty_li() -> LoadInfo {
+        LoadInfo {
+            host_path: String::new(),
+            user_path: String::new(),
+            raw_path: String::new(),
+            mappings: Vec::new(),
+            elf_header: crate::sys::zeroed(),
+            needs_executable_stack: false,
+            interp: None,
+        }
+    }
+
+    #[test]
+    fn add_mapping_file_only() {
+        let mut li = empty_li();
+        let e = ehdr64(ET_EXEC);
+        // memsz == filesz -> single mapping, no BSS tail.
+        assert_eq!(
+            add_mapping(&mut li, &e, &ph64(0x400000, 0x1000, 0x1000, PF_R | PF_X)),
+            0
+        );
+        assert_eq!(li.mappings.len(), 1);
+        let m = &li.mappings[0];
+        assert_eq!(m.addr, 0x400000);
+        assert_eq!(m.prot, (libc::PROT_READ | libc::PROT_EXEC) as Word);
+        assert_eq!(m.clear_length, 0);
+        assert_eq!(m.flags as i32 & libc::MAP_ANONYMOUS, 0);
+    }
+
+    #[test]
+    fn add_mapping_bss_tail_splits_anon() {
+        let mut li = empty_li();
+        let e = ehdr64(ET_EXEC);
+        // memsz > filesz -> file part + anonymous BSS segment.
+        assert_eq!(
+            add_mapping(&mut li, &e, &ph64(0x400000, 0x800, 0x2000, PF_R | PF_W)),
+            0
+        );
+        assert_eq!(li.mappings.len(), 2);
+        let (file, anon) = (&li.mappings[0], &li.mappings[1]);
+        assert_eq!(anon.flags as i32 & libc::MAP_ANONYMOUS, libc::MAP_ANONYMOUS);
+        assert!(anon.addr >= file.addr + file.length - 1);
+        assert_eq!(anon.prot, (libc::PROT_READ | libc::PROT_WRITE) as Word);
+        // clear_length zeroes filesz..end-of-page tail.
+        assert!(file.clear_length > 0);
+    }
+
+    #[test]
+    fn add_mapping_unaligned_vaddr_rounds_down() {
+        let mut li = empty_li();
+        let e = ehdr64(ET_EXEC);
+        let page = crate::sys::page_size();
+        assert_eq!(
+            add_mapping(&mut li, &e, &ph64(0x400123, 0x100, 0x100, PF_R)),
+            0
+        );
+        let m = &li.mappings[0];
+        assert_eq!(m.addr, 0x400123 & !(page - 1));
+        assert_eq!(m.offset, 0x1000 & !(page - 1));
+    }
+
+    #[test]
+    fn add_load_base_shifts_mappings_and_entry() {
+        let mut li = empty_li();
+        let e = ehdr64(ET_DYN);
+        assert_eq!(
+            add_mapping(&mut li, &e, &ph64(0x1000, 0x1000, 0x1000, PF_R)),
+            0
+        );
+        add_load_base(&mut li, 0x5555_0000);
+        assert_eq!(li.mappings[0].addr, 0x5555_1000);
+    }
+
+    #[test]
+    fn compute_load_addresses_pic_only() {
+        let mut t = test_tracee("/", &[]);
+        // ET_DYN with mapping at vaddr 0 -> relocated to EXEC_PIC_ADDRESS.
+        let mut li = empty_li();
+        li.elf_header = ehdr64(ET_DYN);
+        {
+            let e = li.elf_header;
+            add_mapping(&mut li, &e, &ph64(0x0, 0x1000, 0x1000, PF_R));
+        }
+        t.load_info = Some(Box::new(li));
+        compute_load_addresses(&mut t);
+        let li = t.load_info.as_ref().unwrap();
+        assert_eq!(li.mappings[0].addr, crate::arch::EXEC_PIC_ADDRESS);
+
+        // ET_EXEC is never relocated.
+        let mut t2 = test_tracee("/", &[]);
+        let mut li2 = empty_li();
+        li2.elf_header = ehdr64(ET_EXEC);
+        {
+            let e = li2.elf_header;
+            add_mapping(&mut li2, &e, &ph64(0x400000, 0x1000, 0x1000, PF_R));
+        }
+        t2.load_info = Some(Box::new(li2));
+        compute_load_addresses(&mut t2);
+        assert_eq!(t2.load_info.as_ref().unwrap().mappings[0].addr, 0x400000);
+    }
+
+    #[test]
+    fn extract_loader_writes_embedded_elf() {
+        let t = test_tracee("/", &[]);
+        let path = extract_loader(&t).expect("extract_loader");
+        // Path goes through /proc/self/fd — the underlying file must be an ELF.
+        let data = std::fs::read(&path).unwrap();
+        assert_eq!(&data[..4], &[0x7f, b'E', b'L', b'F']);
+    }
+}

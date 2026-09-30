@@ -197,3 +197,81 @@ pub fn cleanup() {
         remove_placeholder(&p);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::TempDir;
+
+    #[test]
+    fn temp_names_are_unique_and_prefixed() {
+        let a = create_temp_name("pfx").unwrap();
+        let b = create_temp_name("pfx").unwrap();
+        assert_ne!(a, b);
+        let base = std::path::Path::new(&a)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(base.starts_with("pfx-"));
+        assert!(a.starts_with(&get_temp_directory()));
+    }
+
+    /// TEMP_PATHS/PLACEHOLDERS are process-global — cleanup() touches
+    /// every registered path, so all cleanup-dependent assertions live in
+    /// this one test to avoid racing sibling tests.
+    #[test]
+    fn cleanup_lifecycle() {
+        // Creation basics.
+        let d0 = create_temp_directory(None, "ptd").unwrap();
+        assert!(std::path::Path::new(&d0).is_dir());
+        let f0 = create_temp_file("ptf").unwrap();
+        assert!(std::path::Path::new(&f0).is_file());
+
+        // Writable temp file.
+        let (mut f, name) = open_temp_file("ptw").unwrap();
+        use std::io::Write;
+        f.write_all(b"hi").unwrap();
+        drop(f);
+        assert_eq!(std::fs::read(&name).unwrap(), b"hi");
+        std::fs::remove_file(&name).unwrap();
+
+        // Registered temp dir+file are removed by cleanup().
+        let d = create_temp_directory(None, "ptcd").unwrap();
+        let tf = create_temp_file("ptcf").unwrap();
+        cleanup();
+        assert!(!std::path::Path::new(&d).exists());
+        assert!(!std::path::Path::new(&tf).exists());
+        let td = TempDir::new("phold");
+        // Empty file placeholder → removed by cleanup.
+        let root = String::from_utf8(td.abs(".")).unwrap();
+        let empty = std::path::PathBuf::from(format!("{root}/empty"));
+        std::fs::write(&empty, b"").unwrap();
+        let e = FixedPath::from_bytes(empty.to_str().unwrap().as_bytes());
+        set_placeholder_destructor(&e);
+        cleanup();
+        assert!(!empty.exists());
+        // Non-empty file placeholder → kept.
+        let full = std::path::PathBuf::from(format!("{root}/full"));
+        std::fs::write(&full, b"data").unwrap();
+        let fp = FixedPath::from_bytes(full.to_str().unwrap().as_bytes());
+        set_placeholder_destructor(&fp);
+        cleanup();
+        assert!(full.exists());
+    }
+
+    #[test]
+    fn get_temp_directory_honors_env() {
+        let _g = crate::testutil::env_lock();
+        // Point PROOT_TMP_DIR at a persistent dir — other tests' temp
+        // creations must keep working if they land inside it.
+        let v = format!("/tmp/proot-envtest-{}", std::process::id());
+        let _ = std::fs::create_dir(&v);
+        unsafe { std::env::set_var("PROOT_TMP_DIR", &v) };
+        // thread-local cache may already hold a value; force fresh thread.
+        let h = std::thread::spawn(get_temp_directory).join().unwrap();
+        assert_eq!(h, v);
+        unsafe { std::env::remove_var("PROOT_TMP_DIR") };
+        let _ = std::fs::remove_dir(&v);
+    }
+}

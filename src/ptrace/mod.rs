@@ -620,3 +620,23 @@ fn stringify_ptrace(request: Word) -> &'static str {
         _ => "PTRACE_???",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stringify_ptrace_names() {
+        use crate::ptrace::ptc::*;
+        assert_eq!(stringify_ptrace(PTRACE_TRACEME as Word), "PTRACE_TRACEME");
+        assert_eq!(stringify_ptrace(PTRACE_SYSCALL as Word), "PTRACE_SYSCALL");
+        assert_eq!(stringify_ptrace(PTRACE_ATTACH as Word), "PTRACE_ATTACH");
+        assert_eq!(stringify_ptrace(PTRACE_DETACH as Word), "PTRACE_DETACH");
+        assert_eq!(stringify_ptrace(PTRACE_SEIZE as Word), "PTRACE_SEIZE");
+        assert_eq!(
+            stringify_ptrace(PTRACE_SETOPTIONS as Word),
+            "PTRACE_SETOPTIONS"
+        );
+        assert_eq!(stringify_ptrace(0x7FFF as Word), "PTRACE_???");
+    }
+}

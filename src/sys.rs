@@ -849,3 +849,102 @@ pub unsafe fn siginfo_si_pid(si: *const libc::siginfo_t) -> libc::pid_t {
     // SAFETY: caller guarantees `si` is valid.
     unsafe { (*si).si_pid() }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Word;
+
+    #[test]
+    fn errno_roundtrip() {
+        set_errno(42);
+        assert_eq!(errno(), 42);
+        clear_errno();
+        assert_eq!(errno(), 0);
+    }
+
+    #[test]
+    fn zeroed_and_as_bytes() {
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct S {
+            a: u32,
+            b: [u8; 8],
+        }
+        let mut s: S = zeroed();
+        assert_eq!(s.a, 0);
+        assert_eq!(as_bytes(&s).len(), 12);
+        let m = as_bytes_mut(&mut s);
+        m[0] = 0xAA;
+        assert_eq!(s.a, 0xAA);
+    }
+
+    #[test]
+    fn identity_calls_match_libc() {
+        assert_eq!(getpid(), unsafe { libc::getpid() });
+        assert_eq!(getuid(), unsafe { libc::getuid() });
+        assert_eq!(getgid(), unsafe { libc::getgid() });
+        assert!(getpgid(0) > 0);
+    }
+
+    #[test]
+    fn getresuid_three_ids() {
+        let (r, e, s) = getresuid().unwrap();
+        assert_eq!(r, unsafe { libc::getuid() });
+        assert_eq!(e, unsafe { libc::geteuid() });
+        assert_eq!(s, unsafe { libc::getuid() }); // typical non-setuid
+    }
+
+    #[test]
+    fn pipe_cloexec_and_rw() {
+        let (r, w) = pipe_cloexec().unwrap();
+        assert_ne!(r, w);
+        // FD_CLOEXEC set on both ends.
+        assert!(fcntl_getfd(r) & libc::FD_CLOEXEC != 0);
+        assert!(fcntl_getfd(w) & libc::FD_CLOEXEC != 0);
+        write(w, b"xy");
+        let mut b = [0u8; 2];
+        assert_eq!(read(r, &mut b), 2);
+        assert_eq!(&b, b"xy");
+        close(r);
+        close(w);
+    }
+
+    fn fcntl_getfd(fd: RawFd) -> i32 {
+        unsafe { libc::fcntl(fd, libc::F_GETFD) }
+    }
+
+    #[test]
+    fn tmpfile_fd_is_readwrite() {
+        let fd = tmpfile_fd();
+        assert!(fd >= 0);
+        assert_eq!(write(fd, b"abc"), 3);
+        let mut b = [0u8; 3];
+        assert_eq!(pread(fd, &mut b, 0), 3);
+        assert_eq!(&b, b"abc");
+        close(fd);
+    }
+
+    #[test]
+    fn strerror_and_page_size() {
+        assert!(strerror(libc::ENOENT).len() > 3);
+        let p = page_size();
+        assert!(p >= 4096 && p.is_power_of_two());
+        assert_eq!(sysconf(libc::_SC_PAGESIZE) as Word, p);
+    }
+
+    #[test]
+    fn uname_and_clock() {
+        let u = uname().unwrap();
+        let sysname: String = u
+            .sysname
+            .iter()
+            .take_while(|c| **c != 0)
+            .map(|c| *c as u8 as char)
+            .collect();
+        assert_eq!(sysname, "Linux");
+        let ts = clock_gettime(libc::CLOCK_REALTIME).unwrap();
+        assert!(ts.tv_sec > 1_600_000_000);
+        assert!(time() > 0);
+    }
+}

@@ -260,3 +260,63 @@ pub fn inherit_extensions(child: &mut Tracee, parent: &mut Tracee, clone_flags: 
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::test_tracee;
+
+    fn fake() -> AnyExtension {
+        AnyExtension::FakeId0(fake_id0::FakeId0::default())
+    }
+
+    #[test]
+    fn initialize_has_remove_cycle() {
+        let mut t = test_tracee("/", &[]);
+        assert!(!has_extension(&t, |e| matches!(
+            e,
+            AnyExtension::FakeId0(_)
+        )));
+        assert_eq!(initialize_extension(&mut t, fake(), ""), 0);
+        assert!(has_extension(&t, |e| matches!(e, AnyExtension::FakeId0(_))));
+        remove_extension(&mut t, |e| matches!(e, AnyExtension::FakeId0(_)));
+        assert!(!has_extension(&t, |e| matches!(
+            e,
+            AnyExtension::FakeId0(_)
+        )));
+    }
+
+    #[test]
+    fn inherit_clones_to_child() {
+        let mut parent = test_tracee("/", &[]);
+        let mut child = test_tracee("/", &[]);
+        child.pid = 4242;
+        assert_eq!(initialize_extension(&mut parent, fake(), ""), 0);
+        inherit_extensions(&mut child, &mut parent, 0);
+        assert!(has_extension(&child, |e| matches!(
+            e,
+            AnyExtension::FakeId0(_)
+        )));
+        // Parent keeps its extension.
+        assert!(has_extension(&parent, |e| matches!(
+            e,
+            AnyExtension::FakeId0(_)
+        )));
+    }
+
+    #[test]
+    fn notify_sysexit_reaches_extensions() {
+        let mut t = test_tracee("/", &[]);
+        assert_eq!(initialize_extension(&mut t, fake(), ""), 0);
+        // FakeId0 on SysExitStart may rewrite regs; we only assert the
+        // dispatch itself doesn't error.
+        let mut ev = Event::SysExitStart;
+        assert!(notify(&mut t, &mut ev) >= 0);
+    }
+
+    #[test]
+    fn notify_on_empty_extension_list() {
+        let mut t = test_tracee("/", &[]);
+        assert_eq!(notify(&mut t, &mut Event::SysEnterStart), 0);
+    }
+}

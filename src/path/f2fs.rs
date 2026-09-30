@@ -118,3 +118,22 @@ pub fn should_skip_file_access_due_to_f2fs_bug(tracee: &Tracee, path: &[u8]) -> 
     );
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{TempDir, env_lock, test_tracee};
+
+    #[test]
+    fn workaround_disabled_never_skips() {
+        let _g = env_lock();
+        unsafe { std::env::set_var("PROOT_F2FS_WORKAROUND", "0") };
+        let t = test_tracee("/", &[]);
+        let td = TempDir::new("f2fs");
+        // Literal path (abs() canonicalizes; file must not exist).
+        let mut missing = td.abs(".");
+        missing.extend_from_slice(b"/nope");
+        assert!(!should_skip_file_access_due_to_f2fs_bug(&t, &missing));
+        unsafe { std::env::remove_var("PROOT_F2FS_WORKAROUND") };
+    }
+}

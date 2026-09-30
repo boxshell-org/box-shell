@@ -316,3 +316,76 @@ pub fn semctl(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
         _ => -libc::EINVAL,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_with_sops(ops: &[(u16, i16, i16)]) -> Sysvipc {
+        Sysvipc {
+            wait_reason: crate::extension::sysvipc::WaitReason::Semop,
+            semop_sops: Some(
+                ops.iter()
+                    .map(|&(sem_num, sem_op, sem_flg)| Sembuf {
+                        sem_num,
+                        sem_op,
+                        sem_flg,
+                    })
+                    .collect(),
+            ),
+            ..Sysvipc::default()
+        }
+    }
+
+    #[test]
+    fn sem_check_applies_ops() {
+        let mut sem = Semaphore {
+            sems: vec![1, 0],
+            ..Default::default()
+        };
+        // sem0: -1 → 0; sem1: +1 → 1. All fit → returns 0 and commits.
+        let c = cfg_with_sops(&[(0, -1, 0), (1, 1, 0)]);
+        assert_eq!(sem_check(&c, &mut sem, None), 0);
+        assert_eq!(sem.sems, vec![0, 1]);
+    }
+
+    #[test]
+    fn sem_check_blocks_on_negative() {
+        let mut sem = Semaphore {
+            sems: vec![0],
+            ..Default::default()
+        };
+        let c = cfg_with_sops(&[(0, -1, 0)]);
+        let mut wt = 0u8;
+        assert_eq!(sem_check(&c, &mut sem, Some(&mut wt)), 1); // keep waiting
+        assert_eq!(wt, b'n');
+        // With IPC_NOWAIT → EAGAIN instead.
+        let c2 = cfg_with_sops(&[(0, -1, libc::IPC_NOWAIT as i16)]);
+        assert_eq!(sem_check(&c2, &mut sem, None), -libc::EAGAIN);
+    }
+
+    #[test]
+    fn sem_check_wait_for_zero() {
+        let mut sem = Semaphore {
+            sems: vec![5],
+            ..Default::default()
+        };
+        let c = cfg_with_sops(&[(0, 0, 0)]); // wait-for-zero
+        let mut wt = 0u8;
+        assert_eq!(sem_check(&c, &mut sem, Some(&mut wt)), 1);
+        assert_eq!(wt, b'z');
+        // Zero sem: wait-for-zero passes.
+        sem.sems[0] = 0;
+        assert_eq!(sem_check(&c, &mut sem, None), 0);
+    }
+
+    #[test]
+    fn sem_check_erange_on_overflow() {
+        let mut sem = Semaphore {
+            sems: vec![SYSVIPC_MAX_SEMVAL as u16],
+            ..Default::default()
+        };
+        let c = cfg_with_sops(&[(0, 1, 0)]);
+        assert_eq!(sem_check(&c, &mut sem, None), -libc::ERANGE);
+    }
+}

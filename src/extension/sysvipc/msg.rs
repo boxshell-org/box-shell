@@ -342,3 +342,25 @@ pub fn msgctl(tracee: &mut Tracee, config: &mut Sysvipc) -> i32 {
         _ => -libc::EINVAL,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn msg_match_type_filters() {
+        // filter 0 → any.
+        assert!(msg_match(5, 0, 0));
+        // positive → exact match.
+        assert!(msg_match(3, 3, 0));
+        assert!(!msg_match(3, 4, 0));
+        // negative → sender_type <= |filter|.
+        assert!(msg_match(2, -5, 0));
+        assert!(msg_match(5, -5, 0));
+        assert!(!msg_match(6, -5, 0));
+        // MSG_EXCEPT inverts.
+        assert!(!msg_match(3, 3, MSG_EXCEPT));
+        assert!(msg_match(3, 4, MSG_EXCEPT));
+        assert!(!msg_match(5, 0, MSG_EXCEPT));
+    }
+}
