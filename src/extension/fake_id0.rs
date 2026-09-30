@@ -246,7 +246,8 @@ fn get_permissions(meta_path: &FixedPath, config: &Config, uses_real: bool) -> R
         2
     };
     let mut omode = dtoo(mode as i32);
-    for _ in 0..perms_class {
+    // C switch fallthrough: OWNER shifts twice, GROUP once, OTHER never.
+    for _ in 0..(2 - perms_class) {
         omode /= 10;
     }
     omode %= 10;

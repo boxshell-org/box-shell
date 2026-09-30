@@ -40,7 +40,10 @@ pub fn readlink_proc(
     // Normalize /proc/self/... to /proc/<pid>/... so bound paths like
     // "-b /proc/self/fd:/dev/fd" reach the fd handling below.
 
-    let tail = &base.as_bytes()[b"/proc/".len()..];
+    // `base` may be "/proc" itself (e.g. referer "/proc/self"); the C code
+    // reads past the NUL there, which always yields an empty tail.
+    let base_len = base.len();
+    let tail = &base.as_bytes()[b"/proc/".len().min(base_len)..];
     let normalized: Vec<u8>;
     let base: &[u8] = if tail.starts_with(b"self") && (tail.len() == 4 || tail[4] == b'/') {
         normalized = format!(
@@ -54,7 +57,11 @@ pub fn readlink_proc(
         base.as_bytes()
     };
 
-    let pid: i32 = atoi(&base[b"/proc/".len()..]);
+    let pid: i32 = atoi(if tail.is_empty() {
+        tail
+    } else {
+        &base[b"/proc/".len()..]
+    });
     if pid == 0 {
         return Ok(Action::Default);
     }
